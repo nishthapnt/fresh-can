@@ -4,10 +4,11 @@
 
 ## 🎯 CURRENT SPRINT
 
-- [ ] Add Supabase anon key to `.env.local` and verify DB connection
-- [ ] Verify all 5 Supabase tables exist with correct columns
-- [ ] End-to-end test: submit form → n8n webhook fires → callback received → draft appears
-- [ ] Test social posting flow with real platform credentials
+- [ ] Investigate KIE.ai negative-prompt support to more reliably stop text baking into generated photos
+- [ ] Stabilize `worker/src/steps/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness)
+- [ ] Backport permanent Supabase Storage upload (`fc-image-posts` pattern) to blog's hero/inline images
+- [ ] Surface "stale" track state in the job detail UI after a visual regenerate (currently silent — user must know to re-click Approve)
+- [ ] Video migration off n8n (Phase 9 — largest remaining piece, not started)
 - [ ] Deploy to Vercel (or chosen host)
 
 ---
@@ -20,8 +21,8 @@
 - [x] Install ShadCN UI + required components
 - [x] Set up Supabase client with realtime config
 - [x] Create `.env.local` with all required keys
-- [ ] Add Supabase anon key (BLOCKED: waiting from user)
-- [ ] Create Supabase tables (run SQL migration)
+- [x] Add Supabase anon key
+- [x] Create Supabase tables (run SQL migration) — extended further in `supabase/migrations/` for the blog/image pipeline (Session 5, 2026-09-09)
 
 ### 🎨 Frontend — Pages
 - [x] /dashboard — KPI cards + recent jobs grid
@@ -52,15 +53,17 @@
 ### 🗄️ Database
 - [x] TypeScript types match Supabase schema
 - [x] All CRUD service functions written
-- [ ] Confirm tables created in Supabase project jbrktjnscnzmhwupojiu
+- [x] Confirm tables created in Supabase project jbrktjnscnzmhwupojiu
 - [ ] Add DB indexes for performance (job_id, status, created_at)
 - [ ] Seed dev data for testing
 
 ### 🔗 Integrations
-- [x] n8n webhooks fire on form submit
-- [x] n8n callback API receives events and updates DB
+- [x] n8n webhooks fire on form submit — now video/social only; blog/image_post moved to `worker/` (Session 5, 2026-09-09)
+- [x] n8n callback API receives events and updates DB (video/social)
 - [x] Supabase Realtime subscribed on job detail page
-- [ ] Verify n8n webhook URLs are live and responding
+- [x] Blog pipeline fully migrated off n8n onto `worker/` (Session 5, 2026-09-09)
+- [x] Image_post pipeline fully migrated off n8n onto `worker/` (Session 5, 2026-09-09)
+- [ ] Verify n8n webhook URLs are live and responding (video/social)
 - [ ] Test social platform posting via n8n
 
 ### 🧪 Testing
@@ -86,15 +89,16 @@
 - [x] All reusable components (Session 1, 2026-06-15)
 - [x] Project docs filled in (Session 2, 2026-06-15)
 - [x] UI upgrade with skeletons, TopBar, improved empty/error states (Session 2, 2026-06-15)
+- [x] Dashboard login (ID/password + HMAC session cookie) (Session 4, 2026-07-17)
+- [x] Blog pipeline rebuilt on `worker/` architecture, off n8n — routes, worker steps, copy-only regeneration, live-verified EN/FR/BOTH (Session 5, 2026-09-09)
+- [x] Image_post pipeline built on the same architecture from scratch — routes, worker steps, permanent storage, context (location/scene notes/Q&A) wiring, live-verified (Session 5, 2026-09-09)
+- [x] Full n8n cutover for blog + image_post — old webhook paths structurally removed, not just unused (Session 5, 2026-09-09)
 
 ---
 
 ## 🔴 BLOCKED
 
-| Task | Blocked By | Who Resolves |
-|------|-----------|--------------|
-| DB connection | Need Supabase anon key | Pri |
-| Social posting test | Need platform API credentials in n8n | Pri |
+_None currently._
 
 ---
 

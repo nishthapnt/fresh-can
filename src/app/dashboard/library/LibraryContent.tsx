@@ -989,7 +989,8 @@ function BlogCard({
 
   const od = item.output_data
 
-  // Support both old and new n8n format
+  // Support both the legacy plain-text format and the current blog worker
+  // format (worker/src/prompts/core/composeText.ts's composeCopySystemPrompt schema)
   const title      = od?.post_title    ?? od?.title    ?? item.topic
   const excerpt    = od?.post_excerpt  ?? od?.excerpt  ?? (typeof od?.content === 'string' ? od.content.slice(0, 180) : null)
   const htmlFinal  = od?.html_final    ?? od?.post_content ?? draftHtml ?? null
@@ -1034,6 +1035,7 @@ function BlogCard({
       .select('draft_data')
       .eq('job_id', item.job_id)
       .eq('content_type', 'blog')
+      .eq('language', item.language)
       .maybeSingle()
       .then(({ data }) => {
         if (data?.draft_data) {
@@ -1052,7 +1054,7 @@ function BlogCard({
         }
         setDraftFetching(false)
       })
-  }, [readOpen, item.job_id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [readOpen, item.job_id, item.language]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setHeroLoaded(false); setHeroError(false) }, [validHero])
 

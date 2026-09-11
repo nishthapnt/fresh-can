@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
       await upsertGeneratedContent(
         vc.job_id,
         'video',
+        vc.video.language,
         vc.video.url,
         undefined,
         {
@@ -142,7 +143,12 @@ export async function POST(req: NextRequest) {
         )
       }
       const { draft_data } = data as { draft_data: Record<string, unknown> }
-      await upsertDraftFromCallback(job_id, content_type, draft_data)
+      // NOTE: the legacy draft_ready payload has no language field — n8n's
+      // video/image script-draft callback doesn't carry one today. Defaulting
+      // to 'EN' preserves current single-language behavior; a FR draft_ready
+      // call would need n8n's payload extended with a language field before
+      // it could be threaded through here instead of assumed.
+      await upsertDraftFromCallback(job_id, content_type, 'EN', draft_data)
       await updateJobStatus(job_id, 'draft_ready')
 
     } else if (event === 'generation_complete') {
@@ -155,9 +161,12 @@ export async function POST(req: NextRequest) {
         )
       }
 
+      // NOTE: same gap as draft_ready above — the legacy generation_complete
+      // payload has no language field either. Defaulting to 'EN' here too.
       await upsertGeneratedContent(
         job_id,
         content_type,
+        'EN',
         genData.file_url as string,
         typeof genData.thumbnail_url === 'string' ? genData.thumbnail_url : undefined,
         (genData.output_data as Record<string, unknown>) ?? {},

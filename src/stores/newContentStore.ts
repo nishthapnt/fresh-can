@@ -3,6 +3,17 @@ import { create } from 'zustand'
 export type ContentType = 'video' | 'image_post' | 'blog'
 export type ScriptType  = 'SOLUTION' | 'COMMUNITY'
 export type Language    = 'EN' | 'FR' | 'BOTH'
+// 'photo': strictly no text baked into the image (default). 'infographic':
+// headline/subtitle/logo/CTA text rendered onto the image via a
+// text-capable model. User-selected, never an automatic per-category guess.
+export type ImageStyle  = 'photo' | 'infographic'
+// image_post only. A fixed dropdown (never free text) so the caption — and,
+// for image_style: 'infographic', the on-image headline/subtitle — draw
+// from one of a known set of creative briefs instead of two independent,
+// unrelated guesses at the same topic. 'auto' ('let AI decide', the
+// default) is converted to null before persisting, same convention as
+// province's 'auto' sentinel.
+export type ContentAngle = 'auto' | 'community_story' | 'behind_scenes' | 'fresh_produce' | 'stat_fact' | 'call_to_action'
 
 const SESSION_KEY = 'fc_new_content'
 
@@ -18,6 +29,8 @@ interface FormFields {
   province:        string   // 'auto' or one of the 10 provinces
   city:            string   // free-text, empty = omit
   scene_notes:     string   // optional custom scene/story idea from user
+  image_style:     ImageStyle
+  content_angle:   ContentAngle
 }
 
 interface GenState {
@@ -47,6 +60,8 @@ const FORM_DEFAULTS: FormFields = {
   province:        'auto',
   city:            '',
   scene_notes:     '',
+  image_style:     'photo',
+  content_angle:   'auto',
 }
 
 const GEN_DEFAULTS: GenState = {
@@ -61,7 +76,7 @@ function pickPersisted(s: NewContentStore): FormFields & GenState {
     target_audience: s.target_audience, script_type: s.script_type,
     video_duration: s.video_duration, language: s.language,
     content_types: s.content_types, province: s.province, city: s.city,
-    scene_notes: s.scene_notes,
+    scene_notes: s.scene_notes, image_style: s.image_style, content_angle: s.content_angle,
     status: s.status, pendingJobId: s.pendingJobId, generatedAt: s.generatedAt,
   }
 }

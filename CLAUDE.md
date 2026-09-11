@@ -7,7 +7,7 @@
 | Field | Value |
 |---|---|
 | **Project Name** | Fresh-CAN Content Automation Dashboard |
-| **Description** | AI-powered dashboard: one form triggers Image Post, Video, and Blog via n8n + AI pipelines |
+| **Description** | AI-powered dashboard: one form triggers Image Post, Video, and Blog content generation. Video still runs via n8n; Image Post and Blog run on an in-repo worker/pipeline architecture (`worker/`, `src/app/api/jobs/[jobId]/{blog,image}/`) — see `docs/IMPLEMENTATION_PLAN.md`. |
 | **Type** | ✅ Dashboard  ✅ Full-Stack |
 | **Start Date** | 2026-06-15 |
 | **Status** | ✅ In Progress |
@@ -31,7 +31,7 @@
 | **State** | React hooks + Supabase Realtime | realtime on job detail page |
 | **Database** | Supabase (PostgreSQL) | project: `jbrktjnscnzmhwupojiu` |
 | **API** | Next.js API Routes (REST) | |
-| **Automation** | n8n webhooks | 3 webhook URLs |
+| **Automation** | n8n webhooks (video/social only) + in-repo worker (blog/image_post) | `worker/` polls Supabase directly, no queue |
 | **Auth** | Fixed ID/password, HMAC-signed session cookie | `src/proxy.ts` gates all routes; login at `/login` |
 
 ---
@@ -78,9 +78,13 @@ src/
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://jbrktjnscnzmhwupojiu.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase → Settings → API>
+SUPABASE_SERVICE_ROLE_KEY=<from Supabase → Settings → API>
 N8N_VIDEO_WEBHOOK=https://n8n.srv1712072.hstgr.cloud/webhook/video-genration
-N8N_BLOG_WEBHOOK=https://n8n.srv1712072.hstgr.cloud/webhook/blog-post
-N8N_IMAGE_WEBHOOK=https://n8n.srv1712072.hstgr.cloud/webhook/image-post
+N8N_SOCIAL_WEBHOOK=<n8n social webhook>
+N8N_IMAGE_QUESTIONS_WEBHOOK=<n8n image_questions webhook — still used, see below>
+# Blog + image_post generation — no n8n webhook, these run on worker/ instead
+OPENAI_API_KEY=<from platform.openai.com>
+KIE_API_KEY=<from kie.ai>
 ```
 
 ---
@@ -107,14 +111,21 @@ N8N_IMAGE_WEBHOOK=https://n8n.srv1712072.hstgr.cloud/webhook/image-post
 
 ---
 
-## 🌐 N8N WEBHOOK URLS
+## 🌐 N8N WEBHOOK URLS (video/social only — blog and image_post generation moved off n8n)
 
 | Type | URL |
 |------|-----|
-| Image Post | `https://n8n.srv1712072.hstgr.cloud/webhook/image-post` |
 | Video | `https://n8n.srv1712072.hstgr.cloud/webhook/video-genration` *(typo intentional)* |
-| Blog | `https://n8n.srv1712072.hstgr.cloud/webhook/blog-post` |
-| Callback (inbound) | `POST /api/webhooks/n8n-callback` |
+| Image clarifying questions (`image_questions`) | still via n8n — no worker equivalent, unrelated to generation |
+| Callback (inbound, video/social) | `POST /api/webhooks/n8n-callback` |
+
+## 🤖 BLOG + IMAGE_POST PIPELINE (no n8n)
+
+Both run on `worker/` (an always-on Node process polling `content_pipelines`/
+`content_language_tracks` in Supabase directly — no queue) plus API routes
+under `src/app/api/jobs/[jobId]/{blog,image}/`. See `docs/IMPLEMENTATION_PLAN.md`
+and `ARCHITECTURE.MD` for the full design. Start the worker with `npm run dev`
+inside `worker/` — nothing else runs it automatically.
 
 ---
 

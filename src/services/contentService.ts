@@ -149,18 +149,20 @@ export async function approveDraft(draftId: string): Promise<void> {
 export async function upsertDraftFromCallback(
   jobId: string,
   contentType: ContentType,
+  language: string,
   draftData: Record<string, unknown>,
 ): Promise<void> {
   const { error } = await supabase.from('content_drafts').upsert(
     {
       job_id: jobId,
       content_type: contentType,
+      language,
       draft_data: draftData,
       is_approved: false,
       status: 'draft_ready',
       updated_at: new Date().toISOString(),
     },
-    { onConflict: 'job_id,content_type' },
+    { onConflict: 'job_id,content_type,language' },
   )
 
   if (error) throw new Error(error.message)
@@ -171,6 +173,7 @@ export async function upsertDraftFromCallback(
 export async function upsertGeneratedContent(
   jobId: string,
   contentType: ContentType,
+  language: string,
   fileUrl: string,
   thumbnailUrl: string | undefined,
   outputData: Record<string, unknown>,
@@ -179,11 +182,12 @@ export async function upsertGeneratedContent(
     {
       job_id: jobId,
       content_type: contentType,
+      language,
       file_url: fileUrl,
       thumbnail_url: thumbnailUrl ?? null,
       output_data: outputData,
     },
-    { onConflict: 'job_id,content_type' },
+    { onConflict: 'job_id,content_type,language' },
   )
 
   if (error) throw new Error(error.message)
@@ -253,7 +257,8 @@ function resolveHashtags(row: Record<string, unknown>): string[] {
 }
 
 export async function getImageLibrary(): Promise<ImageLibraryItem[]> {
-  // Select all columns — n8n may save image_url / caption / hashtags as direct columns
+  // Select all columns — the worker (worker/src/db.ts upsertImageGeneratedContent) writes
+  // image_url / caption / hashtags as both direct columns and inside output_data
   const { data, error } = await supabase
     .from('generated_content')
     .select(`
@@ -276,10 +281,10 @@ export async function getImageLibrary(): Promise<ImageLibraryItem[]> {
     const r = row as Record<string, unknown>
     const od = (r.output_data ?? {}) as Record<string, unknown>
 
-    // image_url is a direct column from n8n; fall back to file_url if missing
+    // image_url is a direct column written by the worker; fall back to file_url if missing
     const imageUrl = resolveStr(r, 'image_url') || resolveStr(od, 'image_url') || resolveStr(r, 'file_url')
 
-    // hashtags is a plain string "#tag1 #tag2 ..." from n8n
+    // hashtags is a plain string "#tag1 #tag2 ..." as written by the worker
     const rawHashtags = r.hashtags ?? od.hashtags
     const hashtags = typeof rawHashtags === 'string' && rawHashtags
       ? rawHashtags.split(/[\s,]+/).filter(Boolean)
@@ -312,11 +317,11 @@ export async function getBlogLibrary(): Promise<BlogLibraryItem[]> {
       job_id,
       file_url,
       output_data,
+      language,
       created_at,
       content_jobs!inner (
         topic,
         category,
-        language,
         status
       )
     `)
@@ -334,7 +339,11 @@ export async function getBlogLibrary(): Promise<BlogLibraryItem[]> {
     completed_at: row.created_at as string,
     topic:        (row.content_jobs as { topic: string })?.topic ?? 'Untitled',
     category:     (row.content_jobs as { category: string })?.category ?? '',
-    language:     (row.content_jobs as { language: string })?.language ?? '',
+    // The row's own actual language (EN/FR) — a BOTH job produces two real
+    // generated_content rows now, each with its own language; the job's
+    // language field ('BOTH') would misreport BOTH rows identically and
+    // give the html_final fallback fetch below nothing to filter on.
+    language:     (row.language as string) ?? '',
     status:       (row.content_jobs as { status: string })?.status ?? '',
   }))
 }

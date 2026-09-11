@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useNewContentStore } from '@/stores/newContentStore'
-import type { ContentType, ScriptType, Language } from '@/stores/newContentStore'
+import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle } from '@/stores/newContentStore'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -42,6 +42,8 @@ interface FormData {
   province:        string
   city:            string
   scene_notes:     string
+  image_style:     ImageStyle
+  content_angle:   ContentAngle
 }
 
 type Phase = 'idle' | 'creating' | 'awaiting_questions' | 'triggering'
@@ -93,6 +95,20 @@ const CATEGORIES = [
   'How FreshCAN Works',
   'Fresh Produce & Local Farms',
 ] as const
+
+// image_post only — see worker/src/prompts/brand/fresh-can.ts's
+// adAngleBriefs, keyed by these exact same values. A fixed dropdown, never
+// free text, so the caption and (for Infographic style) the on-image
+// headline/subtitle share one known creative brief instead of being two
+// independent, unrelated guesses at the same topic.
+const CONTENT_ANGLES: { value: ContentAngle; label: string }[] = [
+  { value: 'auto',             label: 'Auto (Let AI Decide)' },
+  { value: 'community_story',  label: 'A real community story' },
+  { value: 'behind_scenes',    label: 'Behind-the-scenes / how it works' },
+  { value: 'fresh_produce',    label: 'Fresh produce & health' },
+  { value: 'stat_fact',        label: 'Lead with a stat or fact' },
+  { value: 'call_to_action',   label: 'Call-to-action — find a unit' },
+]
 
 const TARGET_AUDIENCES = [
   'Food-insecure families',
@@ -193,7 +209,7 @@ export default function NewContentPage() {
 
   const {
     topic, keywords, category, target_audience, script_type, video_duration,
-    language, content_types, province, city, scene_notes, status, pendingJobId,
+    language, content_types, province, city, scene_notes, image_style, content_angle, status, pendingJobId,
     restoreSession, setField, toggleType, startGeneration, clearOnCancel,
   } = useNewContentStore()
 
@@ -219,6 +235,34 @@ export default function NewContentPage() {
 
     const results = await Promise.allSettled(
       otherTypes.map(async (type) => {
+        // Blog runs on the new pipeline/worker (docs/IMPLEMENTATION_PLAN.md M5):
+        // this creates a content_pipelines + content_language_tracks row and
+        // returns immediately — the worker does the actual generation, and
+        // finalize_draft writes the result to content_drafts, which this page
+        // already displays via realtime. No n8n involved for blog anymore.
+        if (type === 'blog') {
+          const res = await fetch(`/api/jobs/${jobId}/blog/generate`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({}),
+          })
+          // src/proxy.ts gates every /api/jobs/* route behind the session
+          // cookie — an expired/missing session makes this request redirect
+          // to /login instead of running. fetch() follows redirects by
+          // default, so res.ok is still true for the resulting login-page
+          // response: confirmed live, this silently "succeeded" while never
+          // creating the content_pipelines row, leaving the job stuck
+          // forever with no error shown and nothing for the worker to poll.
+          if (res.redirected && res.url.includes('/login')) {
+            throw new Error('[blog] Your session has expired — please log in again and resubmit.')
+          }
+          if (!res.ok) {
+            const b = await res.json().catch(() => ({}))
+            throw new Error(`[blog] ${b.error ?? `HTTP ${res.status}`}`)
+          }
+          return type
+        }
+
         const res = await fetch('/api/n8n/trigger', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -227,6 +271,10 @@ export default function NewContentPage() {
             payload: buildPayload(jobId, formSnapshot, type),
           }),
         })
+        // Same auth-redirect gap as the blog branch above.
+        if (res.redirected && res.url.includes('/login')) {
+          throw new Error(`[${type}] Your session has expired — please log in again and resubmit.`)
+        }
         if (!res.ok) {
           const b = await res.json().catch(() => ({}))
           throw new Error(`[${type}] ${b.error ?? `HTTP ${res.status}`}`)
@@ -260,6 +308,28 @@ export default function NewContentPage() {
         language,
         content_types,
         status:          'pending',
+        // Persisted so the image_post worker pipeline can read them (it has
+        // no access to this browser's transient form state the way the old
+        // n8n webhook payload did) — supabase/migrations/20260909120000.
+        // 'auto' is the province dropdown's "let AI decide" sentinel value
+        // (newContentStore's default), not a real place name — must be
+        // treated as "no manual location" the same way buildLocationTargeting()
+        // already does for the n8n payload, or it gets fed to the caption
+        // prompt as if "auto" were an actual location (confirmed live: the
+        // word "auto" showing up baked into captions/hashtags).
+        province:        (province && province !== 'auto') ? province : null,
+        city:            city || null,
+        scene_notes:     scene_notes || null,
+        // Read directly by the worker (worker/src/prompts) when building
+        // image prompts for whatever this job generates (blog hero/inline
+        // and/or image_post photo) — supabase/migrations/20260910000000.
+        image_style:     image_style,
+        // image_post only — read by generate_caption and (for infographic
+        // style) generate_ad_copy so both stay cohesive — supabase/
+        // migrations/20260911000000. 'auto' is this dropdown's own "let AI
+        // decide" sentinel, same convention as province above — never
+        // persisted as a literal value.
+        content_angle:   (content_angle && content_angle !== 'auto') ? content_angle : null,
       })
       .select()
       .single()
@@ -273,7 +343,7 @@ export default function NewContentPage() {
     const formSnapshot: FormData = {
       topic, keywords, category, target_audience,
       script_type, video_duration, language, content_types,
-      province, city, scene_notes,
+      province, city, scene_notes, image_style, content_angle,
     }
 
     // ── If image_post wasn't selected, nothing changes — same flow as before ──
@@ -285,7 +355,7 @@ export default function NewContentPage() {
         .eq('id', job.id).then(() => {})
 
       if (failed.length > 0) {
-        setError(`n8n webhook error: ${failed.join(' · ')}`)
+        setError(`Generation error: ${failed.join(' · ')}`)
         setPhase('idle')
         return
       }
@@ -299,7 +369,7 @@ export default function NewContentPage() {
     // Fire video/blog immediately if also selected — they don't need a brief
     const { failed } = await triggerNonImageTypes(job.id, formSnapshot)
     if (failed.length > 0) {
-      setError(`n8n webhook error: ${failed.join(' · ')}`)
+      setError(`Generation error: ${failed.join(' · ')}`)
       setPhase('idle')
       return
     }
@@ -313,6 +383,11 @@ export default function NewContentPage() {
       }),
     })
 
+    if (qRes.redirected && qRes.url.includes('/login')) {
+      setError('Your session has expired — please log in again and resubmit.')
+      setPhase('idle')
+      return
+    }
     if (!qRes.ok) {
       const b = await qRes.json().catch(() => ({}))
       setError(b.error ?? 'Failed to get clarifying questions from n8n')
@@ -324,15 +399,20 @@ export default function NewContentPage() {
     const questions: QuestionItem[] = qData.questions ?? []
 
     if (questions.length === 0) {
-      // Fallback: no questions came back — just generate straight away
-      const res = await fetch('/api/n8n/trigger', {
+      // Fallback: no questions came back — just generate straight away.
+      // image_post runs on the new pipeline/worker now (province/city/
+      // scene_notes were already persisted above; no answers to store since
+      // there were no questions).
+      const res = await fetch(`/api/jobs/${job.id}/image/generate`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'image_post',
-          payload: buildPayload(job.id, formSnapshot, 'image_post'),
-        }),
+        body:    JSON.stringify({}),
       })
+      if (res.redirected && res.url.includes('/login')) {
+        setError('Your session has expired — please log in again and resubmit.')
+        setPhase('idle')
+        return
+      }
       if (!res.ok) {
         const b = await res.json().catch(() => ({}))
         setError(b.error ?? 'Failed to trigger image generation')
@@ -358,20 +438,30 @@ export default function NewContentPage() {
       answer:   answers[q.id] || '',
     }))
 
-    const res = await fetch('/api/n8n/trigger', {
+    // Persist the answers before triggering — the worker pipeline reads
+    // content_jobs.image_answers the way it already reads topic/category,
+    // it has no access to this in-memory answersArray otherwise.
+    const { error: answersErr } = await supabase
+      .from('content_jobs')
+      .update({ image_answers: answersArray })
+      .eq('id', pendingImageJob.jobId)
+    if (answersErr) {
+      setError(answersErr.message)
+      setPhase('awaiting_questions')
+      return
+    }
+
+    const res = await fetch(`/api/jobs/${pendingImageJob.jobId}/image/generate`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'image_post',
-        payload: buildPayload(
-          pendingImageJob.jobId,
-          pendingImageJob.formSnapshot,
-          'image_post',
-          answersArray,
-        ),
-      }),
+      body:    JSON.stringify({}),
     })
 
+    if (res.redirected && res.url.includes('/login')) {
+      setError('Your session has expired — please log in again and resubmit.')
+      setPhase('awaiting_questions')
+      return
+    }
     if (!res.ok) {
       const b = await res.json().catch(() => ({}))
       setError(b.error ?? 'Failed to trigger image generation')
@@ -633,6 +723,44 @@ export default function NewContentPage() {
               </Select>
             </div>
 
+            <div className="space-y-1.5">
+              <FL>Image Style <span className="text-red-500">*</span></FL>
+              <Select
+                value={image_style}
+                onValueChange={(v) => { if (v) setField('image_style', v as ImageStyle) }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="photo">Photo — no text on the image</SelectItem>
+                  <SelectItem value="infographic">Infographic — headline &amp; text on the image</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-400">
+                Applies to every image this job generates (blog hero/inline and/or the social photo).
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <FL>Content Angle</FL>
+              <Select
+                value={content_angle}
+                onValueChange={(v) => { if (v) setField('content_angle', v as ContentAngle) }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CONTENT_ANGLES.map((a) => (
+                    <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-400">
+                Image Post only. Keeps the caption — and, with Infographic style, the headline/subtitle
+                rendered on the image — built around the same idea instead of two unrelated guesses.
+              </p>
+            </div>
+
             {/* ── Custom scene / story idea (optional) ──────────────── */}
             <div className="space-y-1.5">
               <FL htmlFor="scene_notes">
@@ -766,7 +894,7 @@ export default function NewContentPage() {
           {phase === 'creating' ? (
             <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Creating job…</>
           ) : phase === 'triggering' ? (
-            <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Triggering n8n…</>
+            <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Starting generation…</>
           ) : (
             <>
               <Sparkles className="mr-2 h-5 w-5" />

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
+// blog and image_post regeneration now go through their own dedicated
+// routes (src/app/api/jobs/[jobId]/blog/regenerate, .../image/regenerate) —
+// this generic n8n-backed route is video-only now.
 const REGEN_WEBHOOKS: Record<string, string | undefined> = {
-  video:      process.env.N8N_VIDEO_WEBHOOK,
-  image_post: process.env.N8N_IMAGE_WEBHOOK,
-  blog:       process.env.N8N_BLOG_WEBHOOK,
+  video: process.env.N8N_VIDEO_WEBHOOK,
 }
 
 interface VideoDraftData {
@@ -56,15 +57,6 @@ export async function POST(
     .update({ status: 'pending', is_approved: false, updated_at: new Date().toISOString() })
     .eq('job_id', jobId)
     .eq('content_type', content_type)
-
-  // For image_post: reset generated_content so the old row isn't picked up by the poll
-  if (content_type === 'image_post') {
-    await supabase
-      .from('generated_content')
-      .update({ status: 'pending', updated_at: new Date().toISOString() })
-      .eq('job_id', jobId)
-      .eq('content_type', 'image_post')
-  }
 
   // Reset job status to pending
   await supabase

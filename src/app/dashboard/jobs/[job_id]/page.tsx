@@ -51,6 +51,7 @@ interface ContentJob {
   content_types: ContentType[]
   status: JobStatus
   created_at: string
+  image_style?: 'photo' | 'infographic'
 }
 
 interface ScriptConfig {
@@ -130,7 +131,9 @@ function toStrArray(v: unknown): string[] {
 }
 
 function blogEditFromDraft(data: Record<string, unknown>): BlogEditState {
-  // Unwrap array wrapper (n8n sometimes returns [{...}])
+  // Unwrap array wrapper — a legacy shape from before blog moved onto the
+  // worker pipeline; the current generate_copy step never produces one, but
+  // older rows written by the old n8n-based blog flow can still have it.
   let d: Record<string, unknown> = data
   if (Array.isArray(d) && d.length > 0) d = (d[0] as Record<string, unknown>) ?? {}
 
@@ -303,7 +306,7 @@ function imgField(r: ImagePostResult, key: string): string {
 }
 
 function imgHashtags(r: ImagePostResult): string[] {
-  // hashtags is a plain string from n8n: "#FoodDesert #FreshCAN ..."
+  // hashtags is a plain string, as written by the worker: "#FoodDesert #FreshCAN ..."
   const row = r as unknown as Record<string, unknown>
   const raw = row.hashtags ?? r.output_data?.hashtags
   if (typeof raw === 'string' && raw) return raw.split(/[\s,]+/).filter((t) => t.length > 0)
@@ -333,6 +336,8 @@ const TYPE_APPROVE_LABEL: Record<ContentType, string> = {
 
 // ─── RegenerateDialog ──────────────────────────────────────────────────────────
 
+type RegenerateScope = 'visual' | 'copy'
+
 function RegenerateDialog({
   open,
   contentType,
@@ -343,13 +348,18 @@ function RegenerateDialog({
   open: boolean
   contentType: ContentType | null
   onClose: () => void
-  onConfirm: (instructions: string) => void
+  onConfirm: (instructions: string, scope: RegenerateScope) => void
   loading: boolean
 }) {
   const [instructions, setInstructions] = useState('')
+  // Blog only: the shared images and each language's copy regenerate
+  // independently now (never conflated into one action — a picture tweak
+  // must never force a text rewrite, or vice versa). image_post/video keep
+  // a single action since they have only one thing to regenerate.
+  const [scope, setScope] = useState<RegenerateScope>('copy')
 
   useEffect(() => {
-    if (open) setInstructions('')
+    if (open) { setInstructions(''); setScope('copy') }
   }, [open])
 
   if (!contentType) return null
@@ -357,8 +367,14 @@ function RegenerateDialog({
   const placeholders: Record<ContentType, string> = {
     video:      'e.g., Make it more emotional, focus on winter food access challenges…',
     image_post: 'e.g., Use warmer colors, show community gathering, more optimistic tone…',
-    blog:       'e.g., Add a section on local farms, make the intro more compelling…',
+    blog:       scope === 'copy'
+      ? 'e.g., Add a section on local farms, make the intro more compelling…'
+      : 'e.g., Warmer tones, more people in frame, a different setting…',
   }
+
+  const targetLabel = contentType === 'blog'
+    ? (scope === 'copy' ? 'the text' : 'the images')
+    : TYPE_LABELS[contentType].toLowerCase()
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
@@ -372,6 +388,37 @@ function RegenerateDialog({
               Add extra instructions to refine the output. The current draft will be replaced.
             </p>
           </div>
+
+          {contentType === 'blog' && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-gray-700">What do you want to regenerate?</p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={scope === 'copy' ? 'default' : 'outline'}
+                  className={scope === 'copy' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
+                  onClick={() => setScope('copy')}
+                  disabled={loading}
+                >
+                  Text
+                </Button>
+                <Button
+                  type="button"
+                  variant={scope === 'visual' ? 'default' : 'outline'}
+                  className={scope === 'visual' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
+                  onClick={() => setScope('visual')}
+                  disabled={loading}
+                >
+                  Images
+                </Button>
+              </div>
+              <p className="mt-1.5 text-xs text-gray-400">
+                {scope === 'copy'
+                  ? "Rewrites this draft's text. The hero/inline images stay exactly as they are."
+                  : "Regenerates the hero/inline images. This draft's text stays exactly as it is."}
+              </p>
+            </div>
+          )}
 
           <div>
             <p className="mb-1.5 text-xs font-medium text-gray-700">
@@ -390,8 +437,7 @@ function RegenerateDialog({
 
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
             <p className="text-xs text-amber-700">
-              ⚠️ This will send the job back to n8n and generate a new{' '}
-              {TYPE_LABELS[contentType].toLowerCase()}. You will see a waiting state
+              ⚠️ This will generate new {targetLabel} for this job. You will see a waiting state
               while it processes.
             </p>
           </div>
@@ -407,11 +453,11 @@ function RegenerateDialog({
             </Button>
             <Button
               className="flex-1 bg-gray-900 hover:bg-gray-800"
-              onClick={() => onConfirm(instructions)}
+              onClick={() => onConfirm(instructions, scope)}
               disabled={loading}
             >
               {loading ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending to n8n…</>
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Regenerating…</>
               ) : (
                 <><RefreshCw className="mr-2 h-4 w-4" />Regenerate</>
               )}
@@ -493,13 +539,13 @@ function WaitingCard({
 
   const messages: Record<ContentType, { title: string; sub: string }> = {
     video:      { title: 'AI is writing your video script…',     sub: 'n8n is generating the script' },
-    image_post: { title: 'AI is creating your image concept…',  sub: 'n8n is generating the image brief' },
-    blog:       { title: 'AI is writing your blog post…',       sub: 'n8n is drafting the content' },
+    image_post: { title: 'AI is creating your image concept…',  sub: 'Generating the photo and caption' },
+    blog:       { title: 'AI is writing your blog post…',       sub: 'Generating the outline, copy, and images' },
   }
   const regenMessages: Record<ContentType, { title: string; sub: string }> = {
     video:      { title: 'Regenerating video script…',   sub: 'n8n is writing a new script' },
-    image_post: { title: 'Regenerating image concept…', sub: 'n8n is reworking the brief' },
-    blog:       { title: 'Regenerating blog post…',     sub: 'n8n is rewriting the content' },
+    image_post: { title: 'Regenerating image concept…', sub: 'Reworking the photo' },
+    blog:       { title: 'Regenerating blog post…',     sub: 'Reworking the content' },
   }
   const { title, sub } = isRegenerating ? regenMessages[type] : messages[type]
 
@@ -709,13 +755,24 @@ function BlogTabContent({
   approveError,
   onClearApproveError,
   rawData,
+  imageStyle,
 }: {
   editState: BlogEditState
   onChange: (updates: Partial<BlogEditState>) => void
   approveError: string | null
   onClearApproveError: () => void
   rawData?: Record<string, unknown>
+  imageStyle?: 'photo' | 'infographic'
 }) {
+  // 'infographic' images are 4:5 portrait with headline text along the top
+  // edge and a CTA bar along the bottom edge (see worker's compose.ts) — a
+  // short, wide h-48 object-cover box would crop off exactly that text, so
+  // infographic previews get a taller, aspect-locked box with object-contain
+  // instead of a hard crop. 'photo' stays on the original 1:1 crop box.
+  const imagePreviewClassName =
+    imageStyle === 'infographic' ? 'aspect-[4/5] w-full object-contain bg-gray-50' : 'h-48 w-full object-cover'
+  const inlineSectionPreviewClassName =
+    imageStyle === 'infographic' ? 'aspect-[4/5] w-full object-contain bg-gray-50' : 'h-40 w-full object-cover'
   const [showSEO, setShowSEO]     = useState(false)
   const [showImages, setShowImages] = useState(false)
   const [showRaw, setShowRaw]     = useState(false)
@@ -773,7 +830,7 @@ function BlogTabContent({
               <p className="mb-1 text-xs text-gray-400">Hero image</p>
               <div className="overflow-hidden rounded-xl border border-gray-200">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={editState.images.hero.url} alt={editState.images.hero.alt} className="h-48 w-full object-cover" />
+                <img src={editState.images.hero.url} alt={editState.images.hero.alt} className={imagePreviewClassName} />
               </div>
             </div>
           )}
@@ -782,7 +839,7 @@ function BlogTabContent({
               <p className="mb-1 text-xs text-gray-400">Inline image</p>
               <div className="overflow-hidden rounded-xl border border-gray-200">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={editState.images.inline.url} alt={editState.images.inline.alt} className="h-48 w-full object-cover" />
+                <img src={editState.images.inline.url} alt={editState.images.inline.alt} className={imagePreviewClassName} />
               </div>
             </div>
           )}
@@ -837,7 +894,7 @@ function BlogTabContent({
                 {sec.has_inline_image && editState.images.inline.url && (
                   <div className="overflow-hidden rounded-lg border border-gray-100">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={editState.images.inline.url} alt={editState.images.inline.alt} className="h-40 w-full object-cover" />
+                    <img src={editState.images.inline.url} alt={editState.images.inline.alt} className={inlineSectionPreviewClassName} />
                   </div>
                 )}
 
@@ -1077,7 +1134,7 @@ function BlogTabContent({
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                {allEmpty ? '⚠ No fields mapped — raw n8n response' : 'Raw n8n response'}
+                {allEmpty ? '⚠ No fields mapped — raw draft data' : 'Raw draft data'}
               </p>
               {!allEmpty && (
                 <button onClick={() => setShowRaw(false)} className="text-xs text-amber-600 hover:text-amber-800">Hide</button>
@@ -1093,7 +1150,7 @@ function BlogTabContent({
       {rawData && !allEmpty && !showRaw && (
         <div className="text-center">
           <button onClick={() => setShowRaw(true)} className="text-xs text-gray-400 hover:text-gray-600 underline">
-            Show raw n8n response
+            Show raw draft data
           </button>
         </div>
       )}
@@ -1317,11 +1374,14 @@ export default function JobDetailPage() {
     setLoading(true)
     setPageError(null)
 
-    const [{ data: jobRow, error: jobErr }, { data: draftRows, error: draftErr }, { data: imgRow }] =
+    const [{ data: jobRow, error: jobErr }, { data: draftRows, error: draftErr }, { data: imgRows }] =
       await Promise.all([
         supabase.from('content_jobs').select('*').eq('id', job_id).single(),
         supabase.from('content_drafts').select('*').eq('job_id', job_id).order('created_at', { ascending: true }),
-        supabase.from('generated_content').select('*').eq('job_id', job_id).eq('content_type', 'image_post').eq('status', 'completed').maybeSingle(),
+        // No .maybeSingle() — a BOTH job produces one row per language now
+        // (previously one concatenated row), and .maybeSingle() throws once
+        // more than one row matches.
+        supabase.from('generated_content').select('*').eq('job_id', job_id).eq('content_type', 'image_post').eq('status', 'completed'),
       ])
 
     if (jobErr) { setPageError(jobErr.message); setLoading(false); return }
@@ -1364,7 +1424,20 @@ export default function JobDetailPage() {
       if (bd) setBlogEdit(blogEditFromDraft(bd.draft_data))
     }
 
-    if (imgRow) setImageResult(imgRow as ImagePostResult)
+    // For a BOTH job, only treat image_post as done once BOTH an EN and FR
+    // row exist — same reasoning as video below: one language finishing
+    // does not mean the whole step is complete. Picking a row to actually
+    // display: imageResult is a single value (not language-aware like
+    // allDrafts), so prefer whichever language the job defaults to.
+    if (imgRows && imgRows.length > 0) {
+      const langsDone = new Set(imgRows.map((r) => r.language))
+      const allLanguagesDone = j.language === 'BOTH' ? langsDone.has('EN') && langsDone.has('FR') : true
+      if (allLanguagesDone) {
+        const preferredLang = j.language === 'BOTH' ? 'EN' : j.language
+        const preferred = imgRows.find((r) => r.language === preferredLang) ?? imgRows[0]
+        setImageResult(preferred as ImagePostResult)
+      }
+    }
 
     // Check if job is stuck at 'generating' but video is already done.
     // For a BOTH job, only treat it as stuck-but-done once BOTH an EN and FR
@@ -1402,9 +1475,12 @@ export default function JobDetailPage() {
   useEffect(() => { loadData() }, [loadData])
 
   // ── Polling: keep checking DB while drafts are pending OR video is generating ──
-  // n8n updates content_jobs.status before it writes the draft, so the realtime
-  // handler fires too early. This poll catches the window between those two events.
-  // Also polls during 'generating' state to catch video completion if realtime misses it.
+  // For video, n8n's callback updates content_jobs.status before it writes the
+  // draft, so the realtime handler below fires too early. This poll catches the
+  // window between those two events. Also polls during 'generating' state to
+  // catch video completion if realtime misses it. (Blog/image_post don't rely
+  // on content_jobs.status at all — see ActiveGenerationBanner's comment for
+  // why — so this race is video-specific.)
 
   useEffect(() => {
     if (!needsPolling || timedOut) return
@@ -1537,8 +1613,9 @@ export default function JobDetailPage() {
   }, [job_id, getEffectiveLanguage])
 
   // ── Image post polling — polls generated_content every 10s ────────────────────
-  // n8n responds immediately to fc-image-post and saves the result to
-  // generated_content when done (~2-3 min). We poll until a row appears.
+  // The worker (worker/src/steps/finalizeImageContent.ts) writes the result to
+  // generated_content once the shared photo and this track's caption are both
+  // ready (typically a couple of minutes). We poll until a row appears.
 
   useEffect(() => {
     if (!job) return
@@ -1556,21 +1633,31 @@ export default function JobDetailPage() {
         return
       }
       attempts++
+      // No .maybeSingle() — a BOTH job produces one row per language now,
+      // and .maybeSingle() throws once more than one row matches, which
+      // previously made this poll silently error out forever for BOTH jobs
+      // (looking exactly like "images never generated") once both languages
+      // completed, or redirect away the instant just one language finished.
       const { data, error } = await supabase
         .from('generated_content')
         .select('*')
         .eq('job_id', job_id)
         .eq('content_type', 'image_post')
         .eq('status', 'completed')
-        .maybeSingle()
 
       if (error) {
         console.error('[ImagePost] poll error:', error.message)
         return
       }
 
-      if (data) {
-        setImageResult(data as ImagePostResult)
+      if (data && data.length > 0) {
+        const langsDone = new Set(data.map((r) => r.language))
+        const allLanguagesDone = job?.language === 'BOTH' ? langsDone.has('EN') && langsDone.has('FR') : true
+        if (!allLanguagesDone) return // still waiting on the other language
+
+        const preferredLang = job?.language === 'BOTH' ? 'EN' : job?.language
+        const preferred = data.find((r) => r.language === preferredLang) ?? data[0]
+        setImageResult(preferred as ImagePostResult)
         setImagePolling(false)
         // Auto-redirect to Library images section, highlighted
         router.push(`/dashboard/library?section=images&highlight=${job_id}`)
@@ -1584,9 +1671,12 @@ export default function JobDetailPage() {
   }, [job?.id, imageResult])
 
   // ── Realtime: job status ─────────────────────────────────────────────────────
-  // When job transitions to draft_ready we call reloadDrafts() immediately.
-  // This may still read 'pending' if n8n hasn't written the draft yet — the
-  // polling interval above will keep retrying until the draft arrives.
+  // content_jobs.status only ever reaches 'draft_ready'/'ready' via n8n's video
+  // callback (blog/image_post's worker pipeline never writes it — see
+  // ActiveGenerationBanner.tsx), so in practice this handler only fires for
+  // video. When it does, we call reloadDrafts() immediately; this may still
+  // read 'pending' if n8n hasn't written the draft yet — the polling interval
+  // above will keep retrying until the draft arrives.
 
   useEffect(() => {
     const channel = supabase
@@ -1613,15 +1703,37 @@ export default function JobDetailPage() {
 
   // ── Regenerate handler ────────────────────────────────────────────────────────
 
-  const handleRegenerate = async (type: ContentType, instructions: string) => {
+  const handleRegenerate = async (
+    type: ContentType,
+    instructions: string,
+    scope: 'visual' | 'copy' = 'visual',
+  ) => {
     setRegenLoading(type)
     setRegenError(null)
 
-    const res = await fetch(`/api/jobs/${job_id}/regenerate`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ content_type: type, extra_instructions: instructions }),
-    })
+    const lang = getEffectiveLanguage(type)
+    let res: Response
+
+    if (type === 'blog') {
+      res = await fetch(`/api/jobs/${job_id}/blog/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(scope === 'copy' ? { scope: 'copy', lang, instructions } : { scope: 'visual' }),
+      })
+    } else if (type === 'image_post') {
+      res = await fetch(`/api/jobs/${job_id}/image/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scope: 'visual', instructions }),
+      })
+    } else {
+      // video — unmigrated, still goes through n8n via the old generic route
+      res = await fetch(`/api/jobs/${job_id}/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content_type: type, extra_instructions: instructions }),
+      })
+    }
 
     if (!res.ok) {
       const b = await res.json().catch(() => ({}))
@@ -1630,10 +1742,33 @@ export default function JobDetailPage() {
       return
     }
 
-    // Optimistically mark draft as pending in local state
+    setRegenDialog({ open: false, type: null })
+
+    // Visual-only regen (blog images, or image_post's only regen type)
+    // shares an asset across languages and never touches content_drafts /
+    // generated_content directly — the pipeline flips the track to 'stale'
+    // in the background, and there's no automatic "it's done" signal to
+    // wait for on this page (finalize only re-runs once the shared asset is
+    // ready AND the track is re-approved). The CURRENT draft/photo is still
+    // valid and stays visible; re-approving once the new asset is ready is
+    // what actually pulls it in (tracks/[lang]/approve reconciles against
+    // whatever's current).
+    const isSharedAssetOnlyRegen = (type === 'blog' && scope === 'visual') || type === 'image_post'
+    if (isSharedAssetOnlyRegen) {
+      setRegenLoading(null)
+      window.alert(
+        `Regenerating the ${type === 'blog' ? 'images' : 'photo'}. This runs in the background — ` +
+        `click Approve again once it's ready to publish the update.`,
+      )
+      return
+    }
+
+    // Full replacement (blog copy, or video's existing n8n flow): the
+    // current draft is being fully redone — show the waiting state until a
+    // new one lands via the existing content_drafts realtime subscription.
     setAllDrafts((prev) => {
       const next = new Map(prev)
-      const key = draftKey(type, getEffectiveLanguage(type))
+      const key = draftKey(type, lang)
       const existing = next.get(key)
       if (existing) next.set(key, { ...existing, status: 'pending', is_approved: false })
       return next
@@ -1641,8 +1776,6 @@ export default function JobDetailPage() {
     setApprovedTypes((prev) => { const s = new Set(prev); s.delete(type); return s })
     setJob((prev) => prev ? { ...prev, status: 'pending' } : prev)
     if (type === 'blog') setBlogEdit(null)
-    if (type === 'image_post') setImageResult(null) // will re-poll generated_content
-    setRegenDialog({ open: false, type: null })
     // regenLoading clears when realtime UPDATE arrives with status 'draft_ready'
   }
 
@@ -1797,8 +1930,25 @@ export default function JobDetailPage() {
     setApproving(type)
     setApproveErrors((prev) => { const m = new Map(prev); m.delete(type); return m })
 
-    // image_post: result already in generated_content — mark approved, then redirect
+    // image_post: result already in generated_content — flip each language's
+    // track to 'ready' (mirrors blog's per-language approve; without this,
+    // content_language_tracks never advances past draft_ready/stale, which
+    // matters for the regenerate→re-approve reconciliation flow), then mark
+    // the job approved and redirect. Generation for a BOTH job isn't
+    // considered ready until both languages exist (see the polling fix
+    // above), so both are safe to approve here.
     if (type === 'image_post') {
+      const imageLanguages = job.language === 'BOTH' ? ['EN', 'FR'] : [job.language]
+      for (const lang of imageLanguages) {
+        const approveRes = await fetch(`/api/jobs/${job_id}/image/tracks/${lang}/approve`, { method: 'POST' })
+        if (!approveRes.ok) {
+          const b = await approveRes.json().catch(() => ({}))
+          setApproveErrors((prev) => { const m = new Map(prev); m.set(type, `[${lang}] ${b.error ?? 'Failed to approve'}`); return m })
+          setApproving(null)
+          return
+        }
+      }
+
       await supabase.from('content_jobs')
         .update({ status: 'approved', updated_at: new Date().toISOString() })
         .eq('id', job_id)
@@ -1871,53 +2021,29 @@ export default function JobDetailPage() {
       }
     }
 
-    // Mark approved in DB + local state
-    await supabase.from('content_drafts')
-      .update({ is_approved: true, status: 'approved', updated_at: new Date().toISOString() })
-      .eq('job_id', job_id).eq('content_type', type).eq('language', draftLang)
+    // Backend now owns the whole blog approve transaction — writes
+    // generated_content, flips content_drafts.is_approved/status, AND the
+    // content_language_tracks status (draft_ready/stale -> ready). Fixes the
+    // old client-side write here duplicating what the callback route did for
+    // every other content type (ARCHITECTURE.MD §11).
+    //
+    // For a BOTH job, one click approves every language that has a real
+    // draft — mirrors handleVideoApprove. Without this, only the currently
+    // active language tab (defaulting to EN) ever gets published to
+    // generated_content, and the other language silently never appears in
+    // the Library even though the worker generated it correctly.
+    const languagesToApprove = job.language === 'BOTH' ? getAvailableLanguages('blog') : [draftLang]
 
-    // For blog: save approved content to generated_content so it appears in Library
-    if (type === 'blog') {
-      const be = blogEdit ?? blogEditFromDraft(draft.draft_data)
-      const wordCount = be.sections.reduce(
-        (n, s) => n + s.paragraphs.join(' ').split(' ').length,
-        0,
-      )
-      // html_final preserved through BlogEditState — use it directly
-      await supabase.from('generated_content').upsert(
-        {
-          job_id,
-          content_type: 'blog',
-          language: draftLang,
-          file_url: be.images.hero.url || null,
-          output_data: {
-            // New n8n format — Library reads these
-            post_title:          be.post_title,
-            post_slug:           be.post_slug,
-            post_excerpt:        be.seo.meta_description,
-            focus_keyword:       be.seo.focus_keyword,
-            html_final:          be.html_final ?? null,
-            hero_image_url:      be.images.hero.url  || null,
-            inline_image_url:    be.images.inline.url || null,
-            images: {
-              hero:   be.images.hero,
-              inline: be.images.inline,
-            },
-            seo: {
-              ...be.seo,
-              focus_keyword: be.seo.focus_keyword,
-            },
-            // Legacy keys for backwards compat
-            title:               be.post_title,
-            slug:                be.post_slug,
-            excerpt:             be.seo.meta_description,
-            secondary_keywords:  be.seo.secondary_keywords,
-            word_count:          wordCount,
-          },
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'job_id,content_type,language' },
-      )
+    for (const lang of languagesToApprove) {
+      const approveRes = await fetch(`/api/jobs/${job_id}/blog/tracks/${lang}/approve`, {
+        method: 'POST',
+      })
+      if (!approveRes.ok) {
+        const b = await approveRes.json().catch(() => ({}))
+        setApproveErrors((prev) => { const m = new Map(prev); m.set(type, `[${lang}] ${b.error ?? 'Failed to approve'}`); return m })
+        setApproving(null)
+        return
+      }
     }
 
     const newApprovedFinal = new Set([...approvedTypes, type])
@@ -2027,6 +2153,7 @@ export default function JobDetailPage() {
           setApproveErrors((prev) => { const m = new Map(prev); m.delete('blog'); return m })
         }
         rawData={draft.draft_data}
+        imageStyle={job?.image_style}
       />
     )
   }
@@ -2260,7 +2387,7 @@ export default function JobDetailPage() {
                 className="bg-gray-900 hover:bg-gray-800"
               >
                 {approving === activeTab ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending to n8n…</>
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Approving…</>
                 ) : activeTab === 'video' ? (
                   <><Zap className="mr-2 h-4 w-4" />{TYPE_APPROVE_LABEL.video}</>
                 ) : (
@@ -2288,8 +2415,8 @@ export default function JobDetailPage() {
         open={regenDialog.open}
         contentType={regenDialog.type}
         onClose={() => setRegenDialog({ open: false, type: null })}
-        onConfirm={(instructions) => {
-          if (regenDialog.type) handleRegenerate(regenDialog.type, instructions)
+        onConfirm={(instructions, scope) => {
+          if (regenDialog.type) handleRegenerate(regenDialog.type, instructions, scope)
         }}
         loading={regenLoading !== null && regenDialog.open}
       />

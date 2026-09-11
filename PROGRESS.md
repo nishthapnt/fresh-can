@@ -7,10 +7,10 @@
 | Field | Value |
 |-------|-------|
 | **Project** | Fresh-CAN Content Automation Dashboard |
-| **Last Updated** | 2026-06-15 |
-| **Phase** | ✅ Core Build |
-| **Progress** | ████████░░ 80% |
-| **Blockers** | Supabase anon key not yet added to .env.local |
+| **Last Updated** | 2026-09-09 |
+| **Phase** | ✅ Blog + Image Pipeline Migration Complete — Video still on n8n |
+| **Progress** | █████████░ 90% |
+| **Blockers** | None. Note: `worker/` must be started manually (`npm run dev` inside `worker/`) — nothing runs it automatically. |
 
 ---
 
@@ -18,11 +18,13 @@
 
 - [x] Phase 1 — Project Setup (Next.js, Supabase, ShadCN, Tailwind)
 - [x] Phase 2 — Core pages built (dashboard, new, jobs, social, library)
-- [x] Phase 3 — n8n webhook integration wired
+- [x] Phase 3 — n8n webhook integration wired (video/social only as of Phase 8)
 - [x] Phase 4 — UI upgrade (skeletons, KPI trends, TopBar, empty/error states)
 - [ ] Phase 5 — Supabase tables confirmed + anon key connected
 - [ ] Phase 6 — End-to-end test with real n8n flows
 - [ ] Phase 7 — Deploy to production
+- [x] Phase 8 — Blog + image_post migrated off n8n onto `worker/` pipeline architecture (Session 5, 2026-09-09) — see `docs/IMPLEMENTATION_PLAN.md`, `ARCHITECTURE.MD`
+- [ ] Phase 9 — Video migration off n8n (not started — largest remaining migration: multi-language audio/captions/character-refs/FFmpeg render chain)
 
 ---
 
@@ -162,3 +164,57 @@
 **⭐ Pick Up Next Session**
 - Update `CLAUDE.md` / `API_DOCS.md` "Auth Method" if a real user-based auth system replaces this later
 - Consider rate-limiting `/api/auth/login` if this is ever exposed beyond trusted internal users
+
+---
+
+### Session 5 — 2026-09-09
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Blog pipeline (off n8n, onto `worker/`)*
+- Verified/fixed the KIE.ai adapter (`worker/src/adapters/kie.ts`) against the real Flux Kontext API — the prior implementation guessed at endpoints and 404'd
+- Built the 4 previously-missing routes: `blog/tracks/[lang]/{draft,approve,retry}`, `blog/regenerate`
+- Wired `new/page.tsx` (trigger) and job detail page (approve) to the new backend
+- Found + fixed 2 real bugs live: Markdown-fenced JSON silently breaking draft parsing (`generateCopy` output), and the model writing section body text under `summary` instead of the `paragraphs` field the editor expects
+- Added real **copy-only regeneration** (`scope: 'copy'`) — redoes one language track's text independent of the shared images, with user instructions actually reaching the rewrite prompt. Required bumping `content_language_tracks.master_generation_used` as a second, independent generation counter from the pipeline's
+
+*Image_post pipeline (built from scratch on the same architecture)*
+- New worker steps: `generatePhoto`, `generateCaption`, `finalizeImageContent`
+- New `adapters/storage.ts` — downloads KIE.ai's ephemeral photo and re-uploads to permanent Supabase Storage (`fc-image-posts` bucket, `{job_id}-final.jpg`, matching n8n's existing convention) — blog's hero/inline images still don't do this (follow-up)
+- Same 5 routes as blog: `image/generate`, `image/status`, `image/tracks/[lang]/{approve,retry}`, `image/regenerate`
+- Persisted previously-ephemeral context (`content_jobs.province/city/scene_notes/image_answers`) that the old n8n payload carried but never stored — worker now actually uses it in the photo/caption prompts. Verified live: a photo matched hand-written scene notes almost exactly, and a caption came out genuinely locally-relevant ("Lunenburg", `#LunenburgNS`)
+- Regenerate instructions verified live (requested film-noir black & white — got it)
+
+*Shared fixes*
+- Race condition: a stray late retry could downgrade an already-`ready` visual asset back to `failed`, wiping its URL — fixed in both `generatePhoto.ts` and (backported) `generateVisualImage.ts`
+- Garbled text baked into generated photos (colon-labeled prompt phrasing read as a caption to render) — rewrote all 3 photo prompts as plain descriptive prose + explicit no-text instruction. Improves it substantially but is **not fully deterministic** — recurred once in later testing, correlated with a headline-like job topic
+
+*Full n8n cutover*
+- Removed `blog`/`image_post`/`blog_approve`/`image_approve` entirely from `/api/n8n/trigger` (the latter two were already dead code) — confirmed live that calling either type now fails outright
+- Pruned `/api/jobs/[jobId]/regenerate` to video-only
+- Rewrote stale UI copy still referencing n8n for blog/image (waiting cards, debug panel labels, button text)
+- video/social/`image_questions` untouched — not migrated, not planned to be as part of this pass
+
+**📁 Files Changed** (non-exhaustive — this was a large, multi-day session)
+- `worker/src/steps/{generatePhoto,generateCaption,finalizeImageContent}.ts` (new)
+- `worker/src/adapters/{kie,storage}.ts` (kie.ts fixed, storage.ts new)
+- `worker/src/{index,db}.ts` (generalized beyond blog-only; added `regen_instructions` fields)
+- `src/app/api/jobs/[jobId]/blog/**`, `.../image/**` (new routes)
+- `src/app/api/n8n/trigger/route.ts`, `.../regenerate/route.ts` (pruned)
+- `src/app/dashboard/new/page.tsx`, `.../jobs/[job_id]/page.tsx` (trigger/approve/regenerate wiring, RegenerateDialog scope selector)
+- `supabase/migrations/20260909120000_image_post_context_fields.sql`, `20260909130000_regen_instructions.sql` (new — applied manually via Supabase SQL editor, no CLI/DB connection available to this session)
+- `CLAUDE.md`, `.env.example` (updated to match)
+
+**💡 Decisions Made**
+- Blog and image copy/caption generation are deliberately independent of the shared visual asset (gated on nothing but the job's basic fields) — mirrors the "words vs. picture never conflated" principle in `ARCHITECTURE.MD`, confirmed working via the copy-only regen test
+- Regenerate dialog gets a scope selector ("Text" / "Images") for blog only — image_post has just one shared layer, no ambiguity to resolve
+- Left the text-in-image imperfection and worker e2e test flakiness as known, non-blocking issues rather than chasing them to 100% in this session
+
+**⭐ Pick Up Next Session**
+- Investigate whether KIE.ai's API has a dedicated negative-prompt parameter to more reliably eliminate baked-in text
+- Stabilize `worker/src/steps/blogPipeline.e2e.test.ts` (real-DB timing flakiness, pre-existing, unrelated to this session's changes)
+- Backport permanent Supabase Storage upload to blog's hero/inline images (currently on KIE.ai's ~14-day ephemeral host)
+- Surface "stale" track state in the editor UI — after a visual regenerate, nothing currently tells the user a new image is waiting on re-approval
+- Video migration (Phase 9) — largest remaining piece, not started

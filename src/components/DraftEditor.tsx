@@ -75,8 +75,7 @@ export default function DraftEditor({
           <div className="text-center">
             <div className="mb-2 text-2xl">⏳</div>
             <p className="text-sm text-gray-500">
-              Waiting for n8n to generate the{' '}
-              {contentTypeLabels[contentType]} draft...
+              Waiting for the {contentTypeLabels[contentType]} draft to generate...
             </p>
           </div>
         </CardContent>

@@ -36,6 +36,25 @@ export type TargetAudience =
   | 'Local farmers & partners'
   | 'General public'
 
+// 'photo': strictly no text baked into the image (default, existing
+// behavior). 'infographic': headline/subtitle/logo/CTA text rendered onto
+// the image via a text-capable model — user-selected, never an automatic
+// per-category guess (a prior automatic version of this was tried and
+// removed for poor image quality).
+export type ImageStyle = 'photo' | 'infographic'
+
+// image_post only. A fixed dropdown, never free text, so the caption — and
+// for image_style: 'infographic', the on-image headline/subtitle — draw
+// from one of a known set of creative briefs (worker/src/prompts/brand/
+// fresh-can.ts adAngleBriefs) instead of two independent, unrelated guesses
+// at the same topic. null = "let AI decide".
+export type ContentAngle =
+  | 'community_story'
+  | 'behind_scenes'
+  | 'fresh_produce'
+  | 'stat_fact'
+  | 'call_to_action'
+
 // ─── Database row types ───────────────────────────────────────────────────────
 
 export interface ContentJob {
@@ -46,6 +65,8 @@ export interface ContentJob {
   target_audience: TargetAudience
   language: Language
   content_types: ContentType[]
+  image_style: ImageStyle
+  content_angle: ContentAngle | null
   status: JobStatus
   created_at: string
   updated_at: string
@@ -104,6 +125,7 @@ export interface NewContentFormData {
   target_audience: TargetAudience
   language: Language
   content_types: ContentType[]
+  image_style: ImageStyle
 }
 
 // ─── n8n webhook payload types ────────────────────────────────────────────────
@@ -245,7 +267,7 @@ export interface BlogLibraryItem {
     excerpt?: string
     word_count?: number
     tags?: string[]
-    // New n8n structured format
+    // Current blog worker format (worker/src/steps/generateCopy.ts's schema)
     post_title?: string
     post_slug?: string
     post_status?: string
