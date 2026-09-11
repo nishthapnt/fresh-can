@@ -207,6 +207,14 @@ export const BRAND_PROFILE: BrandProfile = {
   // worker/assets/fresh-can/. One is picked per image (hero/inline/photo
   // pick independently) — each `framing` string must accurately describe
   // what that specific photo shows, since Flux Kontext edits from it.
+  // TODO before M3 can run against the real ElevenLabs API: fill these in
+  // from elevenlabs.io's Voice Library (or a cloned voice) — left empty
+  // rather than guessed, per BrandProfile.videoVoiceIds's doc comment.
+  videoVoiceIds: {
+    EN: '',
+    FR: '',
+  },
+
   referenceImages: {
     exterior: [
       {

@@ -39,9 +39,21 @@ export function hasExceededMaxAttempts(retryCount: number, maxAttempts: number):
 // Per-provider caps — small and documented here, unlike n8n's scattered
 // 12/60/200 magic numbers (ARCHITECTURE.MD §3.9). Blog has no long polling
 // chains like Video, so these stay small.
+//
+// Video's three new entries are initial placeholders (M0) — n8n's old
+// per-stage caps (12 for character-ref/image, 60 for transcription/video,
+// 200 for FFmpeg render) were themselves undocumented magic numbers with no
+// stated rationale, not a baseline worth inheriting as-is. `kie` is shared
+// by both KieImageGenerator (scene images) and KieVideoGenerator (scene
+// clips) since they're the same provider/account, not per-asset-type.
+// Tune elevenlabs/assemblyai/upload_post against real failure rates once
+// M3/M4 are live-tested.
 export const MAX_ATTEMPTS = {
   openai: 3,
   kie: 5,
+  elevenlabs: 3,
+  assemblyai: 5,
+  upload_post: 3,
 } as const
 
 export type ProviderName = keyof typeof MAX_ATTEMPTS

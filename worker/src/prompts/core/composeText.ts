@@ -120,6 +120,78 @@ export function composeCaptionSystemPrompt(brand: BrandProfile, opts: CaptionSys
   )
 }
 
+export interface VideoScriptSystemPromptOptions {
+  category: string
+  scriptType: string
+}
+
+/**
+ * Produces the script AND its scene-by-scene shot plan in ONE call
+ * (ARCHITECTURE.MD §17.1 — scene planning is not a separate post-approval
+ * step; real production draft data showed it was already produced alongside
+ * the script, and splitting it out would just be an unneeded round-trip).
+ * `narration_intent` is deliberately SEMANTIC ("the idea to convey"), never
+ * literal wording — it's what a later, per-language localize_script step
+ * translates into actual EN/FR narration text. This is the one thing that
+ * keeps the shared scene plan genuinely language-neutral; a model that
+ * writes literal English sentences into narration_intent here would quietly
+ * reintroduce the "FR is just a translation of the EN script" bug this
+ * whole redesign exists to avoid.
+ */
+export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoScriptSystemPromptOptions): string {
+  return (
+    brandContext(brand, opts.category) +
+    statsLine(brand) +
+    `\n\nYou are a video scriptwriter and shot planner. Produce a short-form marketing video script AND its ` +
+    `scene-by-scene shot plan in ONE response. Script type: ${opts.scriptType}.\n\n` +
+    'Respond with strictly valid JSON matching this exact shape (all fields required):\n' +
+    '{\n' +
+    '  "script": string (the full narration/voiceover text, human-readable, in English, for internal review only),\n' +
+    '  "visual_description": string (one-paragraph overview of the video\'s overall visual concept),\n' +
+    '  "duration_seconds": number (total estimated runtime, summing the scenes below),\n' +
+    '  "scenes": [\n' +
+    '    {\n' +
+    '      "scene_number": number (1-indexed, sequential, no gaps),\n' +
+    '      "visual_description": string (what the camera shows — specific enough to generate an image from),\n' +
+    '      "shot_notes": string (camera angle/movement notes; "" if none),\n' +
+    '      "narration_intent": string (the SEMANTIC content this scene\'s narration should convey — describe ' +
+    'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
+    'independently localized into actual EN or FR wording by a later step),\n' +
+    '      "target_duration_seconds": number (this scene\'s planned runtime budget)\n' +
+    '    }\n' +
+    '  ]\n' +
+    '}\n' +
+    'Produce between 4 and 10 scenes whose target_duration_seconds sum to approximately duration_seconds.'
+  )
+}
+
+export interface LocalizeScriptSystemPromptOptions {
+  /** Full word ("English"/"French"), not the EN/FR code — reads more
+   *  naturally in the instruction itself. */
+  language: string
+}
+
+/**
+ * The ONLY place video narration wording is produced per language
+ * (ARCHITECTURE.MD §4.2 step 6a/§13's n8n mapping table) — takes each
+ * scene's language-neutral narration_intent and localizes it, never
+ * regenerating the scene plan itself. This is what replaces n8n's "FR —"
+ * forced-script-regeneration branch, which is retired entirely, not ported
+ * forward (worker/src/steps/localizeScript.ts).
+ */
+export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: LocalizeScriptSystemPromptOptions): string {
+  return (
+    `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n` +
+    `You are localizing a video's narration into ${opts.language}. You will be given a list of scenes, each ` +
+    'with a "narration_intent" (the SEMANTIC content that scene\'s narration should convey — not literal ' +
+    `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
+    'each scene, fitting comfortably within its target duration (roughly 2.5 words per second is a reasonable ' +
+    'speaking pace) — a soft constraint, not an exact word count. Respond with strictly valid JSON: ' +
+    '{ "scenes": [ { "scene_number": number, "narration_text": string } ] }, exactly one entry per scene given, ' +
+    'in the same order, using the given scene_number values unchanged.'
+  )
+}
+
 export interface AdCopySystemPromptOptions {
   category: string
   /** Resolved text of the job's selected content_angle, or undefined if the

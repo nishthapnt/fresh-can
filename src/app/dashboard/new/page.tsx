@@ -263,6 +263,28 @@ export default function NewContentPage() {
           return type
         }
 
+        // Video runs on the new pipeline/worker too now (see the video
+        // migration plan) — creates a content_pipelines row (no
+        // requestedLanguages yet: video gates language-track creation
+        // behind approval, unlike blog/image, ARCHITECTURE.MD §6.4). The
+        // worker picks it up and writes the master script+scene draft to
+        // content_drafts, same as blog's finalize_draft does.
+        if (type === 'video') {
+          const res = await fetch(`/api/jobs/${jobId}/video/generate`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({}),
+          })
+          if (res.redirected && res.url.includes('/login')) {
+            throw new Error('[video] Your session has expired — please log in again and resubmit.')
+          }
+          if (!res.ok) {
+            const b = await res.json().catch(() => ({}))
+            throw new Error(`[video] ${b.error ?? `HTTP ${res.status}`}`)
+          }
+          return type
+        }
+
         const res = await fetch('/api/n8n/trigger', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },

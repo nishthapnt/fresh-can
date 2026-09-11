@@ -14,6 +14,13 @@ import {
   type TrackRow,
 } from './db.js'
 import { runGenerateOutline, type OutlineJobInput } from './steps/generateOutline.js'
+import { runGenerateScript, type VideoScriptJobInput } from './steps/generateScript.js'
+import { runGenerateCharacterRef } from './steps/generateCharacterRef.js'
+import { runGenerateSceneVisual } from './steps/generateSceneVisual.js'
+import { runLocalizeScript } from './steps/localizeScript.js'
+import { runSynthesizeVoice } from './steps/synthesizeVoice.js'
+import { runTranscribeAudio } from './steps/transcribeAudio.js'
+import { runRenderLanguageTrack } from './steps/renderLanguageTrack.js'
 import { runGenerateVisualImage } from './steps/generateVisualImage.js'
 import { runGenerateCopy } from './steps/generateCopy.js'
 import { runFinalizeDraft } from './steps/finalizeDraft.js'
@@ -22,16 +29,24 @@ import { runGeneratePhoto } from './steps/generatePhoto.js'
 import { runGenerateCaption } from './steps/generateCaption.js'
 import { runFinalizeImageContent } from './steps/finalizeImageContent.js'
 import { OpenAIScriptGenerator } from './adapters/openai.js'
-import { KieImageGenerator } from './adapters/kie.js'
+import { KieImageGenerator, KieVideoGenerator } from './adapters/kie.js'
 import { NanoBananaImageGenerator } from './adapters/nanoBanana.js'
 import type { ImageGenerator } from './adapters/types.js'
-import { SupabasePhotoStorageUploader } from './adapters/storage.js'
+import { SupabasePhotoStorageUploader, SupabaseVideoStorageUploader } from './adapters/storage.js'
+import { ElevenLabsVoiceSynthesizer } from './adapters/elevenlabs.js'
+import { AssemblyAITranscriptionService } from './adapters/assemblyai.js'
+import { UploadPostAVMerger } from './adapters/avMerger.js'
 import { env } from './env.js'
-import { BRAND_PROFILE, composeHeroPrompt, composeInlinePrompt, composePhotoPrompt, type ImageStyle } from './prompts/index.js'
+import { BRAND_PROFILE, composeHeroPrompt, composeInlinePrompt, composePhotoPrompt, composeCharacterRefPrompt, type ImageStyle } from './prompts/index.js'
 import { parseAdCopy } from './lib/adCopy.js'
 
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 5000)
-const PIPELINE_CONTENT_TYPES = ['blog', 'image_post'] as const
+// 'video': generate_script (M1, created/drafting -> draft_ready),
+// generate_character_ref + generate_scene_visual (M2, approved -> generating
+// -> ready/"visuals_ready"). Per-language audio/caption/render (M3/M4)
+// aren't built yet — a track created by POST /video/approve just sits at
+// waiting_on_shared until then.
+const PIPELINE_CONTENT_TYPES = ['blog', 'image_post', 'video'] as const
 
 interface ImageAnswer {
   question: string
@@ -58,13 +73,20 @@ interface JobInputs {
   // BRAND_PROFILE.adAngleBriefs' keys, or null for "let AI decide". Resolved
   // to brief text (angleBriefFor below) before use — never spliced in raw.
   contentAngle: string | null
+  // video-only — script_type is required by new/page.tsx whenever 'video'
+  // is a selected content type; language is the job-level intent-only value
+  // (EN|FR|BOTH, ARCHITECTURE.MD §5) used only to populate content_drafts'
+  // legacy language column for the master script draft, never to decide
+  // wording (see generateScript.ts's VideoScriptJobInput.jobLanguage).
+  scriptType: string | null
+  jobLanguage: string
 }
 
 async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<JobInputs> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle',
+      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language',
     )
     .eq('id', jobId)
     .single()
@@ -82,6 +104,8 @@ async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<Jo
     imageAnswers: (data.image_answers as ImageAnswer[] | null) ?? null,
     imageStyle: ((data.image_style as string | null) === 'infographic' ? 'infographic' : 'photo'),
     contentAngle: (data.content_angle as string | null) ?? null,
+    scriptType: (data.script_type as string | null) ?? null,
+    jobLanguage: (data.language as string | null) ?? 'EN',
   }
 }
 
@@ -144,12 +168,16 @@ async function tickPipelines(
   imageGenerator: KieImageGenerator,
   nanoBananaGenerator: NanoBananaImageGenerator,
   uploader: SupabasePhotoStorageUploader,
+  videoGenerator: KieVideoGenerator,
+  videoUploader: SupabaseVideoStorageUploader,
 ): Promise<void> {
   const { data: pipelines, error } = await client
     .from('content_pipelines')
     .select('*')
+    // 'approved' is video-only (script locked, pre-visual-generation) — blog
+    // and image_post never reach it (no pre-generation approval gate).
     .in('content_type', PIPELINE_CONTENT_TYPES)
-    .in('status', ['created', 'drafting', 'generating'])
+    .in('status', ['created', 'drafting', 'approved', 'generating'])
 
   if (error) {
     console.error('[worker] failed to fetch pipelines:', error.message)
@@ -274,6 +302,61 @@ async function tickPipelines(
           5000,
           photo.referenceImageUrl,
         )
+      } else if (pipeline.content_type === 'video') {
+        if (pipeline.status === 'created' || pipeline.status === 'drafting') {
+          const scriptInput: VideoScriptJobInput = {
+            topic: jobInputs.topic,
+            keywords: jobInputs.keywords,
+            category: jobInputs.category,
+            targetAudience: jobInputs.targetAudience,
+            scriptType: jobInputs.scriptType ?? 'SOLUTION',
+            jobLanguage: jobInputs.jobLanguage,
+          }
+          await runGenerateScript(client, pipeline, scriptInput, scriptGenerator)
+        } else if (pipeline.status === 'approved' || pipeline.status === 'generating') {
+          // M2 scope: character_ref (once) then per-scene visuals. Neither
+          // step is reachable from a per-language trigger — see
+          // generateSceneVisual.ts's header for why that's load-bearing,
+          // not just documentation.
+          const characterRefPrompt = composeCharacterRefPrompt(BRAND_PROFILE, { pipelineId: pipeline.id })
+          await runGenerateCharacterRef(
+            client,
+            pipeline,
+            characterRefPrompt.prompt,
+            imageGenerator,
+            videoUploader,
+            5000,
+            characterRefPrompt.referenceImageUrl,
+          )
+
+          // Re-fetch — generate_character_ref may have just advanced this
+          // pipeline's status/current_step.
+          const { data: freshPipeline } = await client
+            .from('content_pipelines')
+            .select('*')
+            .eq('id', pipeline.id)
+            .single()
+          if (freshPipeline && (freshPipeline as PipelineRow).status === 'generating') {
+            const assets = await client
+              .from('content_visual_assets')
+              .select('*')
+              .eq('content_pipeline_id', pipeline.id)
+              .eq('generation', pipeline.current_generation)
+              .eq('asset_type', 'character_ref')
+              .maybeSingle()
+            const characterRefUrl = (assets.data?.file_url as string | undefined) ?? undefined
+            if (characterRefUrl) {
+              await runGenerateSceneVisual(
+                client,
+                freshPipeline as PipelineRow,
+                characterRefUrl,
+                imageGenerator,
+                videoGenerator,
+                videoUploader,
+              )
+            }
+          }
+        }
       }
     } catch (err) {
       console.error(`[worker] pipeline ${pipeline.id} tick failed:`, err)
@@ -284,11 +367,18 @@ async function tickPipelines(
 async function tickTracks(
   client: SupabaseClient,
   scriptGenerator: OpenAIScriptGenerator,
+  voiceSynthesizer: ElevenLabsVoiceSynthesizer,
+  transcriptionService: AssemblyAITranscriptionService,
+  videoUploader: SupabaseVideoStorageUploader,
+  avMerger: UploadPostAVMerger,
 ): Promise<void> {
   const { data: tracks, error } = await client
     .from('content_language_tracks')
     .select('*')
-    .in('status', ['waiting_on_shared', 'generating'])
+    // 'awaiting_shared'/'rendering' are video-only (M3/M4) — Blog/Image
+    // tracks never reach them (no render step, no shared-visual gate after
+    // their own text-generation step).
+    .in('status', ['waiting_on_shared', 'generating', 'awaiting_shared', 'rendering'])
 
   if (error) {
     console.error('[worker] failed to fetch tracks:', error.message)
@@ -356,6 +446,51 @@ async function tickTracks(
             { topic: jobInputs.topic, category: jobInputs.category, imageStyle: jobInputs.imageStyle },
           )
         }
+      } else if (pipeline.content_type === 'video') {
+        // localize_script -> synthesize_voice (per scene) ->
+        // transcribe_captions (M3) -> render (M4, gated on the pipeline's
+        // shared visuals AND generation fencing — see renderLanguageTrack.ts).
+        await runLocalizeScript(client, track, pipeline.id, scriptGenerator)
+
+        const { data: afterLocalize } = await client
+          .from('content_language_tracks')
+          .select('*')
+          .eq('id', track.id)
+          .single()
+        if (afterLocalize) {
+          await runSynthesizeVoice(
+            client,
+            afterLocalize as TrackRow,
+            pipeline.id,
+            pipeline.job_id,
+            voiceSynthesizer,
+            videoUploader,
+          )
+        }
+
+        const { data: afterSynthesize } = await client
+          .from('content_language_tracks')
+          .select('*')
+          .eq('id', track.id)
+          .single()
+        if (afterSynthesize) {
+          await runTranscribeAudio(client, afterSynthesize as TrackRow, pipeline.id, transcriptionService)
+        }
+
+        const { data: afterTranscribe } = await client
+          .from('content_language_tracks')
+          .select('*')
+          .eq('id', track.id)
+          .single()
+        if (afterTranscribe) {
+          await runRenderLanguageTrack(
+            client,
+            afterTranscribe as TrackRow,
+            pipeline as PipelineRow,
+            avMerger,
+            videoUploader,
+          )
+        }
       }
     } catch (err) {
       console.error(`[worker] track ${track.id} tick failed:`, err)
@@ -369,9 +504,14 @@ async function tick(
   imageGenerator: KieImageGenerator,
   nanoBananaGenerator: NanoBananaImageGenerator,
   uploader: SupabasePhotoStorageUploader,
+  videoGenerator: KieVideoGenerator,
+  videoUploader: SupabaseVideoStorageUploader,
+  voiceSynthesizer: ElevenLabsVoiceSynthesizer,
+  transcriptionService: AssemblyAITranscriptionService,
+  avMerger: UploadPostAVMerger,
 ): Promise<void> {
-  await tickPipelines(client, scriptGenerator, imageGenerator, nanoBananaGenerator, uploader)
-  await tickTracks(client, scriptGenerator)
+  await tickPipelines(client, scriptGenerator, imageGenerator, nanoBananaGenerator, uploader, videoGenerator, videoUploader)
+  await tickTracks(client, scriptGenerator, voiceSynthesizer, transcriptionService, videoUploader, avMerger)
 }
 
 async function main(): Promise<void> {
@@ -380,6 +520,11 @@ async function main(): Promise<void> {
   const imageGenerator = new KieImageGenerator(env.KIE_API_KEY)
   const nanoBananaGenerator = new NanoBananaImageGenerator(env.KIE_API_KEY)
   const uploader = new SupabasePhotoStorageUploader(client)
+  const videoGenerator = new KieVideoGenerator(env.KIE_API_KEY)
+  const videoUploader = new SupabaseVideoStorageUploader(client)
+  const voiceSynthesizer = new ElevenLabsVoiceSynthesizer(env.ELEVENLABS_API_KEY)
+  const transcriptionService = new AssemblyAITranscriptionService(env.ASSEMBLYAI_API_KEY)
+  const avMerger = new UploadPostAVMerger(env.UPLOAD_POST_API_KEY)
 
   let stopping = false
   const stop = () => {
@@ -391,7 +536,18 @@ async function main(): Promise<void> {
 
   console.log(`[worker] started, polling every ${POLL_INTERVAL_MS}ms`)
   while (!stopping) {
-    await tick(client, scriptGenerator, imageGenerator, nanoBananaGenerator, uploader)
+    await tick(
+      client,
+      scriptGenerator,
+      imageGenerator,
+      nanoBananaGenerator,
+      uploader,
+      videoGenerator,
+      videoUploader,
+      voiceSynthesizer,
+      transcriptionService,
+      avMerger,
+    )
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
   console.log('[worker] stopped')

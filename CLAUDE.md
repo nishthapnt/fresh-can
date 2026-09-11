@@ -7,7 +7,7 @@
 | Field | Value |
 |---|---|
 | **Project Name** | Fresh-CAN Content Automation Dashboard |
-| **Description** | AI-powered dashboard: one form triggers Image Post, Video, and Blog content generation. Video still runs via n8n; Image Post and Blog run on an in-repo worker/pipeline architecture (`worker/`, `src/app/api/jobs/[jobId]/{blog,image}/`) — see `docs/IMPLEMENTATION_PLAN.md`. |
+| **Description** | AI-powered dashboard: one form triggers Image Post, Video, and Blog content generation. All three run on an in-repo worker/pipeline architecture (`worker/`, `src/app/api/jobs/[jobId]/{blog,image,video}/`) — n8n is only left for social posting. See `docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD`. |
 | **Type** | ✅ Dashboard  ✅ Full-Stack |
 | **Start Date** | 2026-06-15 |
 | **Status** | ✅ In Progress |
@@ -31,7 +31,7 @@
 | **State** | React hooks + Supabase Realtime | realtime on job detail page |
 | **Database** | Supabase (PostgreSQL) | project: `jbrktjnscnzmhwupojiu` |
 | **API** | Next.js API Routes (REST) | |
-| **Automation** | n8n webhooks (video/social only) + in-repo worker (blog/image_post) | `worker/` polls Supabase directly, no queue |
+| **Automation** | n8n webhook (social only) + in-repo worker (blog/image_post/video) | `worker/` polls Supabase directly, no queue |
 | **Auth** | Fixed ID/password, HMAC-signed session cookie | `src/proxy.ts` gates all routes; login at `/login` |
 
 ---
@@ -79,12 +79,14 @@ src/
 NEXT_PUBLIC_SUPABASE_URL=https://jbrktjnscnzmhwupojiu.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase → Settings → API>
 SUPABASE_SERVICE_ROLE_KEY=<from Supabase → Settings → API>
-N8N_VIDEO_WEBHOOK=https://n8n.srv1712072.hstgr.cloud/webhook/video-genration
 N8N_SOCIAL_WEBHOOK=<n8n social webhook>
 N8N_IMAGE_QUESTIONS_WEBHOOK=<n8n image_questions webhook — still used, see below>
-# Blog + image_post generation — no n8n webhook, these run on worker/ instead
+# Blog + image_post + video generation — no n8n webhook, these run on worker/ instead
 OPENAI_API_KEY=<from platform.openai.com>
 KIE_API_KEY=<from kie.ai>
+ELEVENLABS_API_KEY=<from elevenlabs.io — video narration>
+ASSEMBLYAI_API_KEY=<from assemblyai.com — video caption timing>
+UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render>
 ```
 
 ---
@@ -111,21 +113,28 @@ KIE_API_KEY=<from kie.ai>
 
 ---
 
-## 🌐 N8N WEBHOOK URLS (video/social only — blog and image_post generation moved off n8n)
+## 🌐 N8N WEBHOOK URLS (social only — blog, image_post, and video generation moved off n8n)
 
 | Type | URL |
 |------|-----|
-| Video | `https://n8n.srv1712072.hstgr.cloud/webhook/video-genration` *(typo intentional)* |
+| Social posting | `N8N_SOCIAL_WEBHOOK` |
 | Image clarifying questions (`image_questions`) | still via n8n — no worker equivalent, unrelated to generation |
-| Callback (inbound, video/social) | `POST /api/webhooks/n8n-callback` |
+| Callback (inbound, social) | `POST /api/webhooks/n8n-callback` |
 
-## 🤖 BLOG + IMAGE_POST PIPELINE (no n8n)
+## 🤖 BLOG + IMAGE_POST + VIDEO PIPELINE (no n8n)
 
-Both run on `worker/` (an always-on Node process polling `content_pipelines`/
+All three run on `worker/` (an always-on Node process polling `content_pipelines`/
 `content_language_tracks` in Supabase directly — no queue) plus API routes
-under `src/app/api/jobs/[jobId]/{blog,image}/`. See `docs/IMPLEMENTATION_PLAN.md`
-and `ARCHITECTURE.MD` for the full design. Start the worker with `npm run dev`
-inside `worker/` — nothing else runs it automatically.
+under `src/app/api/jobs/[jobId]/{blog,image,video}/`. Video is the newest and
+most complex of the three: a shared script+scene plan and per-scene visuals
+(character-ref + KIE.ai image/video generation) are generated ONCE per job
+regardless of language, then localization/narration audio (ElevenLabs)/
+caption timing (AssemblyAI)/final render (upload-post.com FFmpeg) run once
+per requested language — see `ARCHITECTURE.MD` §4.2/§6/§10.1 for why that
+split matters (it's what stops EN/FR from ever getting different visuals).
+See `docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD` for the full design.
+Start the worker with `npm run dev` inside `worker/` — nothing else runs it
+automatically.
 
 ---
 

@@ -179,6 +179,82 @@ export function composeInlinePrompt(brand: BrandProfile, job: BlogImageJob): Ima
   return composeBlogImage(brand, job, 'inline')
 }
 
+interface CharacterRefJob {
+  pipelineId: string
+}
+
+/**
+ * Video's ONE shared character-reference image (ARCHITECTURE.MD §4.2 step
+ * 3) — establishes a single locked visual instance of the brand's subject
+ * that every scene_image generation then edits FROM (via its file_url as
+ * Flux Kontext's inputImage), instead of each scene independently picking
+ * its own reference photo. This is the actual mechanism that keeps the
+ * subject's appearance identical across every scene and both languages —
+ * not a convention callers have to remember, but a real single row that all
+ * scene generation reads.
+ */
+export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRefJob): ImageComposition {
+  const parts = [
+    `A clean, well-lit reference photo of ${brand.name}'s branded vehicle, establishing its exact appearance ` +
+      'for a video — this exact image will be reused as the visual anchor for every scene.',
+    brand.containerDescriptor,
+  ]
+
+  let referenceImageUrl: string | undefined
+  const reference = pickReferenceFrom(brand.referenceImages.exterior, `${job.pipelineId}:character_ref`)
+  if (reference) {
+    parts.push(reference.framing)
+    referenceImageUrl = reference.url
+  }
+  parts.push(referenceImageUrl ? brand.noNewTextInstruction : brand.noTextInstruction)
+
+  return { prompt: parts.join(' '), referenceImageUrl }
+}
+
+interface SceneImageJob {
+  pipelineId: string
+  sceneNumber: number
+  visualDescription: string
+  shotNotes: string | null
+  /** The character_ref asset's file_url — always attached as the Flux
+   *  Kontext edit source. A scene_image generation with no reference image
+   *  would let the model reinvent the subject's appearance per scene,
+   *  exactly the bug this design fixes (ARCHITECTURE.MD §4.1). */
+  characterRefUrl: string
+}
+
+export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob): ImageComposition {
+  const parts = [
+    `Scene ${job.sceneNumber} of a marketing video: ${job.visualDescription}`,
+    job.shotNotes ? `Shot notes: ${job.shotNotes}.` : '',
+    // Same mood per pipeline (not per scene) — keeps lighting/atmosphere
+    // consistent across all of one video's scenes, same reasoning as
+    // composeBlogImage's hero/inline pairing.
+    moodDetailFor(brand, job.pipelineId),
+    // Always the "reference photo attached" instruction — a scene_image
+    // generation ALWAYS has characterRefUrl attached, never the
+    // no-reference-image branch other composers have.
+    brand.noNewTextInstruction,
+  ]
+
+  return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl: job.characterRefUrl }
+}
+
+interface SceneVideoJob {
+  visualDescription: string
+  shotNotes: string | null
+}
+
+/** Prompt for Kling 2.6 image-to-video (worker/src/adapters/kie.ts's
+ *  KieVideoGenerator) — motion/camera direction only. The subject's
+ *  appearance is NOT re-described here; it's already locked in the
+ *  scene_image frame this call animates from (image_urls[0]), so repeating
+ *  a physical description would be redundant at best. */
+export function composeSceneVideoPrompt(job: SceneVideoJob): string {
+  const shot = job.shotNotes ? ` ${job.shotNotes}` : ''
+  return `${job.visualDescription}${shot} Subtle, natural motion — no camera shake, no jump cuts.`
+}
+
 export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageComposition {
   const sceneText = `${job.scene} ${job.regenInstructions ?? ''}`
   // image_post's photo is inherently a "grocery access" post, so default to

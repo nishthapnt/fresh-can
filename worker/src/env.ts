@@ -26,4 +26,15 @@ export const env = {
   get KIE_API_KEY() {
     return required('KIE_API_KEY')
   },
+  // Video-only providers (M0 of the video migration) — n8n held these
+  // credentials internally before; the worker now needs them directly.
+  get ELEVENLABS_API_KEY() {
+    return required('ELEVENLABS_API_KEY')
+  },
+  get ASSEMBLYAI_API_KEY() {
+    return required('ASSEMBLYAI_API_KEY')
+  },
+  get UPLOAD_POST_API_KEY() {
+    return required('UPLOAD_POST_API_KEY')
+  },
 }
