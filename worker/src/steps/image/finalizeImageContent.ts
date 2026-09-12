@@ -8,9 +8,9 @@ import {
   recordStepAttempt,
   type TrackRow,
   type PipelineRow,
-} from '../db.js'
-import type { ImageStyle } from '../prompts/index.js'
-import { parseAdCopy } from '../lib/adCopy.js'
+} from '../../db.js'
+import type { ImageStyle } from '../../prompts/index.js'
+import { parseAdCopy } from '../../lib/adCopy.js'
 
 export interface ImageJobMeta {
   topic: string

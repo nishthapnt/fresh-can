@@ -163,11 +163,13 @@ export interface BrandProfile {
    */
   adAngleBriefs?: Readonly<Record<string, string>>
   /**
-   * ElevenLabs voice IDs for video narration, one per supported language.
-   * Deliberately left unfilled in brand/fresh-can.ts rather than guessed —
-   * an empty/missing entry makes synthesizeVoice.ts fail loudly (a clear
-   * "no voice id configured" error) instead of silently calling ElevenLabs
-   * with an invalid id and getting a confusing 404 back.
+   * ElevenLabs voice ID for video narration, one per supported language —
+   * a single fixed voice per language (no rotation, no gender variation,
+   * no per-job selection); see synthesizeVoice.ts's lookup. An empty/missing
+   * entry makes synthesizeVoice.ts fail loudly (a clear "no voice id
+   * configured" error) instead of silently calling ElevenLabs with an
+   * invalid id and getting a confusing 404 back — leave a language's entry
+   * blank rather than guess an ID if a real one isn't available yet.
    */
   videoVoiceIds?: Readonly<Partial<Record<'EN' | 'FR', string>>>
   referenceImages: {

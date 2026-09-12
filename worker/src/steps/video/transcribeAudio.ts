@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { TranscriptionService } from '../adapters/types.js'
-import { ProviderCallError } from '../adapters/types.js'
+import type { TranscriptionService } from '../../adapters/types.js'
+import { ProviderCallError } from '../../adapters/types.js'
 import {
   claimTrack,
   hasSucceededStep,
@@ -11,8 +11,8 @@ import {
   getVideoSceneAudioRows,
   upsertVideoCaptions,
   type TrackRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
 
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 120_000
@@ -74,7 +74,7 @@ export async function runTranscribeAudio(
   const alreadySucceeded = await hasSucceededStep(client, { contentLanguageTrackId: track.id }, stepName, generation)
   if (alreadySucceeded) return { ran: false }
 
-  const scenes = await getVideoScenes(client, contentPipelineId, generation)
+  const scenes = await getVideoScenes(client, contentPipelineId)
   if (scenes.length === 0) return { ran: false }
   const audioRows = await getVideoSceneAudioRows(client, track.id, generation)
   const allAudioReady = scenes.every(

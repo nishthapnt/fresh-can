@@ -9,11 +9,11 @@ import { useNewContentStore } from '../stores/newContentStore'
 /**
  * Whether every requested content_type (for every requested language) has
  * actually produced something to review yet. Deliberately NOT based on
- * content_jobs.status — blog and image_post run on the newer worker
- * pipeline (content_pipelines/content_language_tracks), which never writes
- * back to content_jobs.status the way n8n's video callback does, so that
- * column stays stuck at 'pending' for those two content types even once
- * their drafts are long since ready. Checking the same per-type tables the
+ * content_jobs.status — blog, image_post, AND video all run on the worker
+ * pipeline (content_pipelines/content_language_tracks) now, and nothing
+ * writes back to content_jobs.status for any of them anymore, so that
+ * column stays stuck at 'pending' even once their drafts are long since
+ * ready. Checking the same per-type tables the
  * job detail page itself reads (content_drafts for video/blog,
  * generated_content for image_post) is what actually reflects reality.
  */

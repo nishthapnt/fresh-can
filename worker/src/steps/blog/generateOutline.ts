@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ScriptGenerator } from '../adapters/types.js'
+import type { ScriptGenerator } from '../../adapters/types.js'
 import {
   claimPipeline,
   hasSucceededStep,
@@ -7,32 +7,35 @@ import {
   recordPipelineRetryableFailure,
   markPipelineFailed,
   type PipelineRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
-import { BRAND_PROFILE, composeAdCopySystemPrompt } from '../prompts/index.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
+import { BRAND_PROFILE, composeOutlineSystemPrompt } from '../../prompts/index.js'
 
-export interface AdCopyJobInput {
+export interface OutlineJobInput {
   topic: string
+  keywords: string
   category: string
-  /** Resolved text of the job's selected content_angle, or undefined. */
-  angleBrief?: string
+  targetAudience: string
 }
 
 /**
- * Shared, pipeline-scoped step for image_post pipelines with
- * image_style: 'infographic' ONLY (see tickPipelines in index.ts — 'photo'
- * style pipelines skip this entirely and go created -> generating exactly
- * as before). Mirrors generateOutline.ts's created -> drafting ->
- * generating transition exactly, so the headline/subtitle rendered directly
- * onto the photo comes from a real, idempotent LLM call instead of a crude
- * topic-truncation fallback — and so generate_caption (per-language) has a
- * durable, already-succeeded place to read the same headline/subtitle from,
- * to keep every language's caption cohesive with the image's on-image text.
+ * Shared, pipeline-scoped step — runs exactly once per pipeline generation
+ * regardless of how many languages were requested. Transitions:
+ * created -> drafting (claimed here) -> generating (on success, meaning
+ * "generating shared visuals" next).
+ *
+ * Handles two distinct cases, not just the fresh-claim one: a pipeline in
+ * 'created' is claimed via CAS as before; a pipeline already in 'drafting'
+ * with a recorded last_error is a RETRY of a previously failed attempt —
+ * status alone can't distinguish "another worker has this in flight right
+ * now" from "a prior attempt failed and this is eligible for retry", so the
+ * backoff window (isReadyToRetry) is what gates re-attempting it, not a
+ * second claim.
  */
-export async function runGenerateAdCopy(
+export async function runGenerateOutline(
   client: SupabaseClient,
   pipeline: PipelineRow,
-  input: AdCopyJobInput,
+  input: OutlineJobInput,
   scriptGenerator: ScriptGenerator,
   backoffBaseDelayMs = 5000,
 ): Promise<{ ran: boolean }> {
@@ -63,7 +66,7 @@ export async function runGenerateAdCopy(
   const alreadySucceeded = await hasSucceededStep(
     client,
     { contentPipelineId: pipeline.id },
-    'generate_ad_copy',
+    'generate_outline',
     generation,
   )
 
@@ -71,15 +74,12 @@ export async function runGenerateAdCopy(
     const attemptNumber = working.retry_count + 1
     try {
       const result = await scriptGenerator.generate({
-        systemPrompt: composeAdCopySystemPrompt(BRAND_PROFILE, {
-          category: input.category,
-          angleBrief: input.angleBrief,
-        }),
-        userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}`,
+        systemPrompt: composeOutlineSystemPrompt(BRAND_PROFILE, input.category),
+        userPrompt: `Topic: ${input.topic}\nKeywords: ${input.keywords}\nCategory: ${input.category}\nAudience: ${input.targetAudience}`,
       })
       await recordStepAttempt(client, {
         contentPipelineId: pipeline.id,
-        stepName: 'generate_ad_copy',
+        stepName: 'generate_outline',
         generation,
         attemptNumber,
         status: 'succeeded',
@@ -90,7 +90,7 @@ export async function runGenerateAdCopy(
       const message = err instanceof Error ? err.message : String(err)
       await recordStepAttempt(client, {
         contentPipelineId: pipeline.id,
-        stepName: 'generate_ad_copy',
+        stepName: 'generate_outline',
         generation,
         attemptNumber,
         status: 'failed_retryable',
@@ -106,9 +106,8 @@ export async function runGenerateAdCopy(
     }
   }
 
-  // Advance to shared-photo generation regardless of whether this call did
-  // the work or found it already done (resumed worker case) — mirrors
-  // generateOutline.ts.
+  // Advance to shared-visual generation regardless of whether this call did
+  // the work or found it already done (resumed worker case).
   await claimPipeline(client, pipeline.id, 'drafting', 'generating')
   return { ran: true }
 }

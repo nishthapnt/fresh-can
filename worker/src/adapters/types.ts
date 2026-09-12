@@ -122,18 +122,17 @@ export interface VideoGenerator {
 }
 
 export interface AVMergeInput {
-  /** Ordered per-scene (video clip, audio) pairs, concatenated in order.
-   *  No standalone audio-concatenation service exists (synthesizeVoice.ts
+  /** Ordered per-scene (video clip, audio) pairs. synthesizeVoice.ts
    *  produces one audio file PER SCENE, never one combined track-level
-   *  file) — pairing each clip with its own scene's audio here, and
-   *  concatenating pairs together (not video-then-audio separately), is
-   *  what produces a properly synced render without needing one. */
+   *  file, so there's no standalone pre-combined audio track to hand over —
+   *  the clip/audio pairing here is just "which files belong to which
+   *  scene," concatenated independently per-track (video-only, audio-only —
+   *  see avMerger.ts's buildVideoConcatCommand/buildAudioConcatCommand),
+   *  NOT interleaved into one mixed concat. An earlier version concatenated
+   *  video and audio together in a single filter; confirmed live
+   *  2026-09-12 that this truncates the resulting audio to ~2 seconds
+   *  regardless of scene count or real audio length. */
   scenes: Array<{ clipUrl: string; audioUrl: string }>
-  /** Caption timing data (from TranscriptionPollResult.timingData, already
-   *  combined across scenes with cumulative offsets by transcribeAudio.ts)
-   *  — used to build the ffmpeg drawtext filter for burned-in captions.
-   *  Optional: a render with no captions burned in is still a valid render. */
-  captionTimingData?: unknown
 }
 
 export interface AVMergeJobRef {
@@ -153,8 +152,39 @@ export type AVMergeResult =
  *  docs.upload-post.com 2026-09-12). Unlike every other adapter here, the
  *  provider doesn't know how to "merge scenes with audio" — it executes a
  *  raw ffmpeg command string the caller builds. See avMerger.ts's
- *  buildFfmpegCommand for that logic, tested independently of the HTTP call. */
+ *  buildVideoConcatCommand/buildAudioConcatCommand/buildMuxCommand/
+ *  buildCaptionCommand for that logic, tested independently of the HTTP
+ *  call.
+ *
+ *  Multi-pass by necessity, not by choice, for two independent reasons:
+ *  (1) upload-post.com's API rejects any ';' in full_command (part of a
+ *  fixed command-injection denylist), and burning captions into a
+ *  concatenated multi-scene video requires routing concat's two named
+ *  outputs (video, audio) to different downstream filters, which ffmpeg's
+ *  filtergraph grammar can only express with a ';'-separated filterchain —
+ *  so caption burn-in (submitCaptionBurn) is always its own pass, over the
+ *  single merged file, via -vf (a linear chain that never needs ';').
+ *  (2) concatenating video and audio TOGETHER in one mixed v=1:a=1 concat
+ *  filter — what an earlier version of this did in a single submit() call —
+ *  silently truncates the resulting audio to ~2 seconds regardless of
+ *  scene count (confirmed live 2026-09-12), so video and audio are instead
+ *  concatenated INDEPENDENTLY (submitVideoConcat/submitAudioConcat) and
+ *  reunited by a plain -c copy remux (submitMux). See renderLanguageTrack.ts
+ *  for the full orchestration (including the temp re-uploads needed
+ *  between passes, since this provider's `files` field takes fetchable
+ *  URLs, not raw bytes). */
 export interface AVMerger {
-  submit(input: AVMergeInput): Promise<AVMergeJobRef>
+  submitVideoConcat(input: AVMergeInput): Promise<AVMergeJobRef>
+  submitAudioConcat(input: AVMergeInput): Promise<AVMergeJobRef>
+  /** videoUrl/audioUrl are submitVideoConcat's/submitAudioConcat's own
+   *  outputs, re-hosted by the caller so this provider can fetch them as
+   *  plain input files. */
+  submitMux(videoUrl: string, audioUrl: string): Promise<AVMergeJobRef>
+  /** Only ever called when there are caption cues to burn in — a render
+   *  with no captions stops after the mux pass (its output IS the final
+   *  render). mergedVideoUrl is the mux pass's output, re-hosted by the
+   *  caller so this provider can fetch it as a plain input file. */
+  submitCaptionBurn(mergedVideoUrl: string, captionTimingData: unknown): Promise<AVMergeJobRef>
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }
+

@@ -10,7 +10,7 @@
 // inside n8n's per-language loop) this whole migration exists to fix.
 import { describe, it, expect, beforeAll, afterEach, afterAll, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createServiceClient, type PipelineRow, type TrackRow } from '../db.js'
+import { createServiceClient, type PipelineRow, type TrackRow } from '../../db.js'
 import { runGenerateScript, type VideoScriptJobInput } from './generateScript.js'
 import { runGenerateCharacterRef } from './generateCharacterRef.js'
 import { runGenerateSceneVisual } from './generateSceneVisual.js'
@@ -18,7 +18,7 @@ import { runLocalizeScript } from './localizeScript.js'
 import { runSynthesizeVoice } from './synthesizeVoice.js'
 import { runTranscribeAudio } from './transcribeAudio.js'
 import { runRenderLanguageTrack } from './renderLanguageTrack.js'
-import { BRAND_PROFILE } from '../prompts/index.js'
+import { BRAND_PROFILE } from '../../prompts/index.js'
 import type {
   ScriptGenerator,
   ImageGenerator,
@@ -30,8 +30,8 @@ import type {
   TranscriptionPollResult,
   AVMerger,
   AVMergeResult,
-} from '../adapters/types.js'
-import type { VideoStorageUploader } from '../adapters/storage.js'
+} from '../../adapters/types.js'
+import type { VideoStorageUploader } from '../../adapters/storage.js'
 
 const hasCreds = !!process.env.SUPABASE_SERVICE_ROLE_KEY
 
@@ -176,9 +176,12 @@ function makeMockTranscriptionService() {
 
 function makeMockAVMerger() {
   let counter = 0
-  const submit = vi.fn(async () => ({ providerRef: `render-${++counter}` }))
+  const submitVideoConcat = vi.fn(async () => ({ providerRef: `video-concat-${++counter}` }))
+  const submitAudioConcat = vi.fn(async () => ({ providerRef: `audio-concat-${++counter}` }))
+  const submitMux = vi.fn(async () => ({ providerRef: `mux-${++counter}` }))
+  const submitCaptionBurn = vi.fn(async () => ({ providerRef: `caption-${++counter}` }))
   const poll = vi.fn(async (): Promise<AVMergeResult> => ({ status: 'ready', fileBuffer: Buffer.from(`fake-video-${counter}`) }))
-  return { submit, poll } satisfies AVMerger
+  return { submitVideoConcat, submitAudioConcat, submitMux, submitCaptionBurn, poll } satisfies AVMerger
 }
 
 describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers) — M1+M2+M3', () => {
@@ -266,6 +269,32 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
   /** Mirrors POST /video/approve's CAS-claim + track creation, done
    *  directly against the DB the same way the other e2e tests bypass their
    *  own content type's API routes to test worker logic in isolation. */
+  // Mirrors POST /video/regenerate { scope: "visuals" }'s DB writes — done
+  // directly against the DB the same way approve() bypasses its own route,
+  // to test worker logic (not route logic) in isolation.
+  async function regenerateVisuals(pipeline: PipelineRow): Promise<{ newGeneration: number }> {
+    const newGeneration = pipeline.current_generation + 1
+    const { error: pErr } = await client
+      .from('content_pipelines')
+      .update({
+        current_generation: newGeneration,
+        status: 'generating',
+        scenes_visuals_ready_count: 0,
+        retry_count: 0,
+        last_error: null,
+      })
+      .eq('id', pipeline.id)
+    if (pErr) throw pErr
+
+    const { error: tErr } = await client
+      .from('content_language_tracks')
+      .update({ status: 'waiting_on_shared', master_generation_used: newGeneration, retry_count: 0, last_error: null })
+      .eq('content_pipeline_id', pipeline.id)
+    if (tErr) throw tErr
+
+    return { newGeneration }
+  }
+
   async function approve(pipeline: PipelineRow, languages: ('EN' | 'FR')[]) {
     const { data: claimed, error } = await client
       .from('content_pipelines')
@@ -619,9 +648,21 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
 
     const { data: finalTrack } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
     expect(finalTrack.status).toBe('ready')
-    expect(avMerger.submit).toHaveBeenCalledTimes(1)
-    const submittedInput = (avMerger.submit as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(submittedInput.scenes).toHaveLength(2) // one (clip, audio) pair per scene
+    // Video and audio are concatenated INDEPENDENTLY (not one mixed
+    // concat — that truncates audio to ~2s regardless of scene count,
+    // confirmed live 2026-09-12), then muxed back together.
+    expect(avMerger.submitVideoConcat).toHaveBeenCalledTimes(1)
+    expect(avMerger.submitAudioConcat).toHaveBeenCalledTimes(1)
+    const submittedVideoInput = (avMerger.submitVideoConcat as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    const submittedAudioInput = (avMerger.submitAudioConcat as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(submittedVideoInput.scenes).toHaveLength(2) // one (clip, audio) pair per scene
+    expect(submittedAudioInput.scenes).toHaveLength(2)
+    expect(avMerger.submitMux).toHaveBeenCalledTimes(1)
+    // Real caption timing data comes back from the mock transcription
+    // service above, so the caption-burn pass must also run — upload-post.com
+    // rejects any ';' in full_command, so concat/mux/caption burn-in are all
+    // separate jobs.
+    expect(avMerger.submitCaptionBurn).toHaveBeenCalledTimes(1)
 
     const { data: row } = await client
       .from('generated_content')
@@ -654,13 +695,98 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const result = await runRenderLanguageTrack(client, staleTrack, pipeline, avMerger, uploader)
 
     expect(result.ran).toBe(false)
-    expect(avMerger.submit).not.toHaveBeenCalled()
+    expect(avMerger.submitVideoConcat).not.toHaveBeenCalled()
 
     // Same guard applies when generations don't match, even if the
     // pipeline itself says 'ready'.
     const mismatchedPipeline = { ...pipeline, status: 'ready', current_generation: 2 } as PipelineRow
     const result2 = await runRenderLanguageTrack(client, staleTrack, mismatchedPipeline, avMerger, uploader)
     expect(result2.ran).toBe(false)
-    expect(avMerger.submit).not.toHaveBeenCalled()
+    expect(avMerger.submitVideoConcat).not.toHaveBeenCalled()
+  })
+
+  it('M5: a visuals-only regenerate reuses the SAME scene plan (never rewritten) while producing new visual assets at the bumped generation', async () => {
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    const image = makeMockImageGenerator()
+    const video = makeMockVideoGenerator()
+    const uploader = makeFakeVideoUploader()
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
+    let fresh = (await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()).data as PipelineRow
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader)
+    const { data: readyGen1 } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    expect(readyGen1.status).toBe('ready')
+
+    const { data: scenesBeforeRegen } = await client.from('video_scenes').select('*').eq('content_pipeline_id', pipeline.id)
+    expect(scenesBeforeRegen).toHaveLength(2) // unchanged from M1 — never rewritten by a visuals regen
+
+    // ── Regenerate visuals ──────────────────────────────────────────────
+    const { newGeneration } = await regenerateVisuals(readyGen1 as PipelineRow)
+    expect(newGeneration).toBe(2)
+
+    const image2 = makeMockImageGenerator()
+    const video2 = makeMockVideoGenerator()
+    await runGenerateCharacterRef(client, { ...(readyGen1 as PipelineRow), current_generation: newGeneration, status: 'generating' }, 'a reference prompt', image2, uploader)
+    fresh = (await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()).data as PipelineRow
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader)
+    const { data: readyGen2 } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    expect(readyGen2.status).toBe('ready')
+    expect(readyGen2.current_generation).toBe(2)
+
+    // Scene plan is STILL the same 2 rows — a visuals regen never touched video_scenes.
+    const { data: scenesAfterRegen } = await client.from('video_scenes').select('*').eq('content_pipeline_id', pipeline.id)
+    expect(scenesAfterRegen).toHaveLength(2)
+
+    // But there are now TWO generations of visual assets — old (gen 1) and new (gen 2)
+    // — as distinct DB rows. (Storage paths are generation-agnostic by
+    // design — {job_id}/character-ref.png — so file_url legitimately stays
+    // the same string across generations; a regen overwrites that file in
+    // place rather than versioning it. Row existence per generation is the
+    // thing that actually matters here, not the URL string.)
+    const { data: allAssets } = await client.from('content_visual_assets').select('*').eq('content_pipeline_id', pipeline.id)
+    const gen1CharacterRefs = allAssets!.filter((a) => a.asset_type === 'character_ref' && a.generation === 1)
+    const gen2CharacterRefs = allAssets!.filter((a) => a.asset_type === 'character_ref' && a.generation === 2)
+    expect(gen1CharacterRefs).toHaveLength(1)
+    expect(gen2CharacterRefs).toHaveLength(1)
+    expect(gen1CharacterRefs[0].id).not.toBe(gen2CharacterRefs[0].id)
+
+    // The reset track re-runs localize/synthesize/transcribe/render fresh at gen 2.
+    const { data: trackAfterReset } = await client
+      .from('content_language_tracks')
+      .select('*')
+      .eq('content_pipeline_id', pipeline.id)
+      .single()
+    expect(trackAfterReset.master_generation_used).toBe(2)
+    expect(trackAfterReset.status).toBe('waiting_on_shared')
+
+    const scriptGen2 = makeLocalizeAwareScriptGenerator()
+    await runLocalizeScript(client, trackAfterReset as TrackRow, pipeline.id, scriptGen2)
+    let trackFresh = (await client.from('content_language_tracks').select('*').eq('id', trackAfterReset.id).single()).data as TrackRow
+    const voice2 = makeMockVoiceSynthesizer()
+    await runSynthesizeVoice(client, trackFresh, pipeline.id, jobId, voice2, uploader)
+    trackFresh = (await client.from('content_language_tracks').select('*').eq('id', trackAfterReset.id).single()).data as TrackRow
+    const transcription2 = makeMockTranscriptionService()
+    await runTranscribeAudio(client, trackFresh, pipeline.id, transcription2)
+    trackFresh = (await client.from('content_language_tracks').select('*').eq('id', trackAfterReset.id).single()).data as TrackRow
+    expect(trackFresh.status).toBe('awaiting_shared')
+
+    const avMerger2 = makeMockAVMerger()
+    await runRenderLanguageTrack(client, trackFresh, readyGen2 as PipelineRow, avMerger2, uploader)
+    const { data: trackFinal } = await client.from('content_language_tracks').select('*').eq('id', trackAfterReset.id).single()
+    expect(trackFinal.status).toBe('ready')
+
+    const { data: finalRow } = await client
+      .from('generated_content')
+      .select('*')
+      .eq('job_id', jobId)
+      .eq('content_type', 'video')
+      .single()
+    expect(finalRow.status).toBe('completed')
   })
 })

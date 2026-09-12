@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ImageGenerator } from '../adapters/types.js'
-import { ProviderCallError } from '../adapters/types.js'
+import type { ImageGenerator } from '../../adapters/types.js'
+import { ProviderCallError } from '../../adapters/types.js'
 import {
   claimPipeline,
   hasSucceededStep,
@@ -9,8 +9,8 @@ import {
   upsertVisualAsset,
   getVisualAssets,
   type PipelineRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
 
 const POLL_INTERVAL_MS = 2000
 const POLL_TIMEOUT_MS = 60_000

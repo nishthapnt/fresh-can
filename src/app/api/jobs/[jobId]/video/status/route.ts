@@ -43,11 +43,18 @@ export async function GET(
       .select('*')
       .eq('content_pipeline_id', pipeline.id)
       .maybeSingle(),
+    // NOT filtered by pipeline.current_generation — a visuals-only
+    // regenerate bumps that without ever rewriting the scene plan (it
+    // didn't change), so an exact match would show an empty scene list
+    // after every visuals regen. Fetch all and keep only the latest
+    // generation actually present, mirroring worker/src/db.ts's
+    // getVideoScenes (duplicated here since this route can't import
+    // worker code — separate package).
     supabase
       .from('video_scenes')
       .select('*')
       .eq('content_pipeline_id', pipeline.id)
-      .eq('generation', pipeline.current_generation)
+      .order('generation', { ascending: false })
       .order('scene_number', { ascending: true }),
     supabase.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id),
     supabase
@@ -62,10 +69,13 @@ export async function GET(
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 })
 
+  const latestGeneration = scenes?.[0]?.generation
+  const currentScenes = (scenes ?? []).filter((s) => s.generation === latestGeneration)
+
   return NextResponse.json({
     pipeline,
     draft: draft ?? null,
-    scenes: scenes ?? [],
+    scenes: currentScenes,
     tracks: tracks ?? [],
     visualAssets: visualAssets ?? [],
   })

@@ -119,16 +119,68 @@ export async function claimTrack(
   return data as TrackRow | null
 }
 
+/**
+ * Advances a job's aggregate status to 'failed' when one of its
+ * pipelines/tracks fails terminally — fixes a real bug found live: a video
+ * job whose pipeline/tracks had all genuinely failed stayed at
+ * content_jobs.status = 'generating' forever, because nothing ever wrote
+ * 'failed' at the job level (the exact "status: 'failed' is never written
+ * by anything" gap ARCHITECTURE.MD §3.2 already documented for the old n8n
+ * system — it turned out the new worker never closed it either). Called
+ * from markPipelineFailed/markTrackFailed below, so it's automatic for
+ * blog, image_post, AND video — not a video-specific patch.
+ *
+ * Never downgrades a job already at a genuinely terminal state ('ready',
+ * 'posted', or already 'failed') — content_jobs.status is a single flat
+ * field shared across every content type in a multi-type job (a known,
+ * pre-existing coarseness, not something this fix attempts to redesign —
+ * see ARCHITECTURE.MD §6.2 for the finer-grained aggregate this could
+ * become), so this only ever moves a job TOWARD 'failed', never away from
+ * a success it's already reached.
+ */
+async function markJobFailedIfNotAlreadyTerminal(client: SupabaseClient, jobId: string): Promise<void> {
+  const { data: job, error } = await client.from('content_jobs').select('status').eq('id', jobId).single()
+  if (error) throw error
+  if (job.status === 'ready' || job.status === 'posted' || job.status === 'failed') return
+  const { error: updateErr } = await client
+    .from('content_jobs')
+    .update({ status: 'failed', updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+  if (updateErr) throw updateErr
+}
+
 export async function markPipelineFailed(
   client: SupabaseClient,
   id: string,
   errorMessage: string,
 ): Promise<void> {
-  const { error } = await client
+  const { data, error } = await client
     .from('content_pipelines')
     .update({ status: 'failed', last_error: errorMessage, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .select('job_id')
+    .single()
   if (error) throw error
+
+  // A language track that already finished localize/synthesize/transcribe
+  // (sitting at 'awaiting_shared', or mid-render at 'rendering') was never
+  // gated on the shared pipeline's own outcome — only on it existing. If
+  // the shared visuals fail here, that track's pipeline can never reach
+  // 'ready' again, so runRenderLanguageTrack's very first check
+  // (pipeline.status !== 'ready') permanently no-ops on it, forever,
+  // stranding it at whatever status it was in — confirmed live: exactly
+  // this happened to a real track after a scene-visual generation
+  // exhausted its retries. Fail every non-terminal track too, same
+  // 'Cancelled by user'-style pattern the video/cancel route already uses,
+  // so nothing is ever left dangling behind a dead shared pipeline.
+  const { error: tErr } = await client
+    .from('content_language_tracks')
+    .update({ status: 'failed', last_error: `Shared pipeline failed: ${errorMessage}`, updated_at: new Date().toISOString() })
+    .eq('content_pipeline_id', id)
+    .not('status', 'in', '(ready,failed)')
+  if (tErr) throw tErr
+
+  await markJobFailedIfNotAlreadyTerminal(client, data.job_id)
 }
 
 export async function markTrackFailed(
@@ -136,11 +188,20 @@ export async function markTrackFailed(
   id: string,
   errorMessage: string,
 ): Promise<void> {
-  const { error } = await client
+  const { data, error } = await client
     .from('content_language_tracks')
     .update({ status: 'failed', last_error: errorMessage, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .select('content_pipeline_id')
+    .single()
   if (error) throw error
+  const { data: pipeline, error: pErr } = await client
+    .from('content_pipelines')
+    .select('job_id')
+    .eq('id', data.content_pipeline_id)
+    .single()
+  if (pErr) throw pErr
+  await markJobFailedIfNotAlreadyTerminal(client, pipeline.job_id)
 }
 
 /** Bumps retry_count/last_error without changing status — used when a step fails but hasn't exhausted its retry cap yet. */
@@ -586,19 +647,33 @@ export async function upsertVideoScenes(
   if (error) throw error
 }
 
+/**
+ * Returns the pipeline's CURRENT scene plan — the rows at the highest
+ * generation present, not an exact match against whatever generation the
+ * caller happens to be at. Deliberately NOT generation-exact: a
+ * visuals-only regenerate (scope: "visuals") bumps content_pipelines.
+ * current_generation without ever re-running generate_script (the scene
+ * plan itself didn't change), so an exact-match lookup at the new
+ * generation would find nothing, forever. This mirrors the same "any
+ * generation" reasoning generate_outline's lookup already uses for Blog
+ * (getLastSucceededStepOutputAnyGeneration) — the scene plan is shared,
+ * foundational data that only changes when generate_script itself reruns
+ * (scope: "script"), not on every regeneration.
+ */
 export async function getVideoScenes(
   client: SupabaseClient,
   contentPipelineId: string,
-  generation: number,
 ): Promise<VideoSceneRow[]> {
   const { data, error } = await client
     .from('video_scenes')
     .select('*')
     .eq('content_pipeline_id', contentPipelineId)
-    .eq('generation', generation)
+    .order('generation', { ascending: false })
     .order('scene_number', { ascending: true })
   if (error) throw error
-  return (data ?? []) as VideoSceneRow[]
+  if (!data || data.length === 0) return []
+  const latestGeneration = (data[0] as VideoSceneRow).generation
+  return (data as VideoSceneRow[]).filter((s) => s.generation === latestGeneration)
 }
 
 export interface VideoSceneAudioRow {

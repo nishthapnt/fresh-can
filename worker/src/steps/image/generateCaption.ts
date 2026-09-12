@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ScriptGenerator } from '../adapters/types.js'
+import type { ScriptGenerator } from '../../adapters/types.js'
 import {
   claimTrack,
   hasSucceededStep,
@@ -8,10 +8,10 @@ import {
   recordTrackRetryableFailure,
   markTrackFailed,
   type TrackRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
-import { BRAND_PROFILE, composeCaptionSystemPrompt, type ImageStyle } from '../prompts/index.js'
-import { parseAdCopy } from '../lib/adCopy.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
+import { BRAND_PROFILE, composeCaptionSystemPrompt, type ImageStyle } from '../../prompts/index.js'
+import { parseAdCopy } from '../../lib/adCopy.js'
 
 export interface CaptionJobInput {
   topic: string

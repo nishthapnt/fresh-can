@@ -1,47 +1,105 @@
 import { describe, it, expect, vi } from 'vitest'
-import { buildFfmpegCommand, UploadPostAVMerger } from './avMerger.js'
+import {
+  buildVideoConcatCommand,
+  buildAudioConcatCommand,
+  buildMuxCommand,
+  buildCaptionCommand,
+  UploadPostAVMerger,
+} from './avMerger.js'
 import { ProviderCallError } from './types.js'
 
-describe('buildFfmpegCommand', () => {
+const THREE_SCENES = [
+  { clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' },
+  { clipUrl: 'https://example.com/s2.mp4', audioUrl: 'https://example.com/a2.mp3' },
+  { clipUrl: 'https://example.com/s3.mp4', audioUrl: 'https://example.com/a3.mp3' },
+]
+
+describe('buildVideoConcatCommand', () => {
   it('throws when there are no scenes', () => {
-    expect(() => buildFfmpegCommand({ scenes: [] })).toThrow()
+    expect(() => buildVideoConcatCommand([])).toThrow()
   })
 
-  it('interleaves each scene\'s clip and audio as (clip, audio) pairs in files', () => {
-    const { files } = buildFfmpegCommand({
-      scenes: [
-        { clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' },
-        { clipUrl: 'https://example.com/s2.mp4', audioUrl: 'https://example.com/a2.mp3' },
-      ],
-    })
-    expect(files).toEqual([
-      'https://example.com/s1.mp4',
-      'https://example.com/a1.mp3',
-      'https://example.com/s2.mp4',
-      'https://example.com/a2.mp3',
-    ])
+  it('takes only the clip URLs, in order, as files', () => {
+    const { files } = buildVideoConcatCommand(THREE_SCENES)
+    expect(files).toEqual(['https://example.com/s1.mp4', 'https://example.com/s2.mp4', 'https://example.com/s3.mp4'])
   })
 
-  it('builds a (video,audio)-pair concat filter sized to the scene count, with no captions', () => {
-    const { fullCommand, outputExtension } = buildFfmpegCommand({
-      scenes: [
-        { clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' },
-        { clipUrl: 'https://example.com/s2.mp4', audioUrl: 'https://example.com/a2.mp3' },
-        { clipUrl: 'https://example.com/s3.mp4', audioUrl: 'https://example.com/a3.mp3' },
-      ],
-    })
-    expect(fullCommand).toContain(
-      '-i {input0} -i {input1} -i {input2} -i {input3} -i {input4} -i {input5}',
-    )
-    // scene i's clip is input 2*i, its audio is input 2*i+1
-    expect(fullCommand).toContain('[0:v][1:a][2:v][3:a][4:v][5:a]concat=n=3:v=1:a=1[vconcat][aconcat]')
-    expect(fullCommand).toContain('-map "[vconcat]"')
-    expect(fullCommand).toContain('-map "[aconcat]"')
-    expect(fullCommand).not.toContain('drawtext')
+  it('builds a video-only concat filter (a=0) sized to the scene count', () => {
+    const { fullCommand, outputExtension } = buildVideoConcatCommand(THREE_SCENES)
+    expect(fullCommand).toContain('-i {input0} -i {input1} -i {input2}')
+    expect(fullCommand).toContain('[0:v][1:v][2:v]concat=n=3:v=1:a=0[vout]')
+    expect(fullCommand).toContain('-map "[vout]"')
     expect(outputExtension).toBe('mp4')
   })
 
-  it('chains drawtext filters for caption cues, chunked into lines, in timeline order', () => {
+  it('never contains a semicolon (upload-post.com rejects any ";")', () => {
+    const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
+    expect(fullCommand).not.toContain(';')
+  })
+})
+
+describe('buildAudioConcatCommand', () => {
+  it('throws when there are no scenes', () => {
+    expect(() => buildAudioConcatCommand([])).toThrow()
+  })
+
+  it('takes only the audio URLs, in order, as files', () => {
+    const { files } = buildAudioConcatCommand(THREE_SCENES)
+    expect(files).toEqual(['https://example.com/a1.mp3', 'https://example.com/a2.mp3', 'https://example.com/a3.mp3'])
+  })
+
+  it('builds an audio-only concat filter (v=0) sized to the scene count', () => {
+    const { fullCommand, outputExtension } = buildAudioConcatCommand(THREE_SCENES)
+    expect(fullCommand).toContain('-i {input0} -i {input1} -i {input2}')
+    expect(fullCommand).toContain('[0:a][1:a][2:a]concat=n=3:v=0:a=1[aout]')
+    expect(fullCommand).toContain('-map "[aout]"')
+    expect(outputExtension).toBe('mp4')
+  })
+
+  it('never contains a semicolon (upload-post.com rejects any ";")', () => {
+    const { fullCommand } = buildAudioConcatCommand(THREE_SCENES)
+    expect(fullCommand).not.toContain(';')
+  })
+})
+
+describe('buildMuxCommand', () => {
+  it('takes the video and audio URLs as its two inputs, remuxed via -c copy', () => {
+    const { files, fullCommand, outputExtension } = buildMuxCommand(
+      'https://example.com/video.mp4',
+      'https://example.com/audio.mp4',
+    )
+    expect(files).toEqual(['https://example.com/video.mp4', 'https://example.com/audio.mp4'])
+    expect(fullCommand).toContain('-i {input0} -i {input1}')
+    expect(fullCommand).toContain('-c copy')
+    expect(fullCommand).toContain('-shortest')
+    expect(outputExtension).toBe('mp4')
+  })
+
+  it('never contains a semicolon or filter_complex (no filtergraph at all)', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4')
+    expect(fullCommand).not.toContain(';')
+    expect(fullCommand).not.toContain('-filter_complex')
+  })
+})
+
+describe('buildCaptionCommand', () => {
+  it('throws when there are no caption cues', () => {
+    expect(() => buildCaptionCommand('https://example.com/merged.mp4', { not: 'an array' })).toThrow()
+    expect(() => buildCaptionCommand('https://example.com/merged.mp4', undefined)).toThrow()
+  })
+
+  it('takes the merged video as its sole input and passes audio through with -c:a copy', () => {
+    const words = [{ text: 'hello', start: 0, end: 400 }]
+    const { files, fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
+    expect(files).toEqual(['https://example.com/merged.mp4'])
+    // Bare {input}, not {input0} — confirmed live that upload-post.com's
+    // single-file code path rejects an indexed placeholder outright.
+    expect(fullCommand).toContain('-i {input}')
+    expect(fullCommand).not.toContain('{input0}')
+    expect(fullCommand).toContain('-c:a copy')
+  })
+
+  it('chains drawtext filters for caption cues via -vf, chunked into lines, in timeline order', () => {
     const words = [
       { text: 'hello', start: 0, end: 400 },
       { text: 'world', start: 400, end: 800 },
@@ -52,35 +110,29 @@ describe('buildFfmpegCommand', () => {
       { text: 'today', start: 2100, end: 2400 },
       { text: 'and', start: 2400, end: 2500 },
     ]
-    const { fullCommand } = buildFfmpegCommand({
-      scenes: [{ clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' }],
-      captionTimingData: words,
-    })
+    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
     // 8 words / 7 per line -> 2 cues
     expect(fullCommand).toContain("drawtext=text='hello world this is fresh-can foods today'")
     expect(fullCommand).toContain("drawtext=text='and'")
-    expect(fullCommand).toContain('[vconcat]drawtext=')
-    // second drawtext stage chains off the first stage's output label
-    expect(fullCommand).toContain('[vcap0]drawtext=')
-    expect(fullCommand).toContain('-map "[vcap1]"')
-    expect(fullCommand).toContain('-map "[aconcat]"')
+    expect(fullCommand).toContain('-vf "')
   })
 
   it('escapes colons and single quotes in caption text', () => {
     const words = [{ text: "it's: fresh", start: 0, end: 500 }]
-    const { fullCommand } = buildFfmpegCommand({
-      scenes: [{ clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' }],
-      captionTimingData: words,
-    })
+    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
     expect(fullCommand).toContain("it'\\\\''s\\: fresh")
   })
 
-  it('ignores captionTimingData that is not an array of word objects', () => {
-    const { fullCommand } = buildFfmpegCommand({
-      scenes: [{ clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' }],
-      captionTimingData: { not: 'an array' },
-    })
-    expect(fullCommand).not.toContain('drawtext')
+  it('never contains a semicolon or bracket-labeled pads, regardless of cue count', () => {
+    const words = Array.from({ length: 20 }, (_, i) => ({
+      text: `word${i}`,
+      start: i * 300,
+      end: i * 300 + 250,
+    }))
+    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
+    expect(fullCommand).not.toContain(';')
+    expect(fullCommand).not.toContain('[vconcat]')
+    expect(fullCommand).not.toContain('-filter_complex')
   })
 })
 
@@ -97,7 +149,7 @@ function mockFetch(response: Partial<Response> & { jsonBody?: unknown; textBody?
 const ONE_SCENE = { scenes: [{ clipUrl: 'https://example.com/s1.mp4', audioUrl: 'https://example.com/a1.mp3' }] }
 
 describe('UploadPostAVMerger', () => {
-  it('submit() sends Apikey auth (not Bearer) and the built command', async () => {
+  it('submitVideoConcat() sends Apikey auth (not Bearer) and the built video-concat command', async () => {
     let capturedHeaders: Record<string, string> = {}
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -106,16 +158,63 @@ describe('UploadPostAVMerger', () => {
       return { ok: true, status: 202, json: async () => ({ job_id: 'job-1', status: 'PENDING' }), text: async () => '' }
     }) as unknown as typeof fetch
     const merger = new UploadPostAVMerger('secret-key', fetchImpl)
-    const ref = await merger.submit(ONE_SCENE)
+    const ref = await merger.submitVideoConcat(ONE_SCENE)
     expect(ref.providerRef).toBe('job-1')
     expect(capturedHeaders.Authorization).toBe('Apikey secret-key')
-    expect(JSON.parse(capturedBody!)).toMatchObject({ output_extension: 'mp4' })
+    const body = JSON.parse(capturedBody!)
+    expect(body).toMatchObject({ output_extension: 'mp4' })
+    expect(body.files).toEqual(['https://example.com/s1.mp4'])
+    expect(body.full_command).not.toContain(';')
   })
 
-  it('submit() throws ProviderCallError when job_id is missing', async () => {
+  it('submitAudioConcat() sends the audio-only concat command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-1a' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitAudioConcat(ONE_SCENE)
+    expect(ref.providerRef).toBe('job-1a')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/a1.mp3'])
+    expect(body.full_command).not.toContain(';')
+  })
+
+  it('submitMux() sends both URLs as files and a semicolon-free remux command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-1m' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitMux('https://example.com/v.mp4', 'https://example.com/a.mp4')
+    expect(ref.providerRef).toBe('job-1m')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
+    expect(body.full_command).not.toContain(';')
+  })
+
+  it('submitVideoConcat() throws ProviderCallError when job_id is missing', async () => {
     const fetchImpl = mockFetch({ jsonBody: {} })
     const merger = new UploadPostAVMerger('key', fetchImpl)
-    await expect(merger.submit(ONE_SCENE)).rejects.toThrow(ProviderCallError)
+    await expect(merger.submitVideoConcat(ONE_SCENE)).rejects.toThrow(ProviderCallError)
+  })
+
+  it('submitCaptionBurn() sends the merged video URL as the sole file and a semicolon-free command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-2' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitCaptionBurn('https://example.com/merged.mp4', [
+      { text: 'hi', start: 0, end: 300 },
+    ])
+    expect(ref.providerRef).toBe('job-2')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/merged.mp4'])
+    expect(body.full_command).not.toContain(';')
   })
 
   it('poll() returns pending for PENDING/PROCESSING', async () => {
@@ -162,6 +261,40 @@ describe('UploadPostAVMerger', () => {
     const merger = new UploadPostAVMerger('key', mockFetch({ jsonBody: { status: 'ERROR' } }))
     const result = await merger.poll({ providerRef: 'job-1' })
     expect(result.status).toBe('failed')
+  })
+
+  // The real API (confirmed live 2026-09-12, RQ-backed): lowercase
+  // queued/started/finished/failed — not the PENDING/PROCESSING/FINISHED/
+  // ERROR this adapter used to check for, which meant a real 'finished' or
+  // 'failed' silently fell through to "pending" forever.
+  it('poll() returns pending for the real lowercase in-flight statuses', async () => {
+    const merger = new UploadPostAVMerger('key', mockFetch({ jsonBody: { status: 'started' } }))
+    expect(await merger.poll({ providerRef: 'job-1' })).toEqual({ status: 'pending' })
+  })
+
+  it('poll() downloads on the real lowercase "finished" status', async () => {
+    const videoBytes = new Uint8Array([1, 2, 3, 4])
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/download')) {
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '', arrayBuffer: async () => videoBytes.buffer }
+      }
+      return { ok: true, status: 200, json: async () => ({ status: 'finished' }), text: async () => '', arrayBuffer: async () => new ArrayBuffer(0) }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('key', fetchImpl)
+    const result = await merger.poll({ providerRef: 'job-1' })
+    expect(result.status).toBe('ready')
+  })
+
+  it('poll() surfaces the provider\'s exc_info traceback as the failure detail on the real lowercase "failed" status', async () => {
+    const merger = new UploadPostAVMerger(
+      'key',
+      mockFetch({ jsonBody: { status: 'failed', exc_info: 'ValueError: full_command debe contener {input} y {output}' } }),
+    )
+    const result = await merger.poll({ providerRef: 'job-1' })
+    expect(result).toEqual({
+      status: 'failed',
+      detail: 'ValueError: full_command debe contener {input} y {output}',
+    })
   })
 
   it('poll() throws ProviderCallError on a non-ok HTTP response from the status check', async () => {

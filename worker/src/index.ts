@@ -1,7 +1,7 @@
 // Content worker process entrypoint. Polls content_pipelines/content_language_tracks
 // directly by status (no separate queue table — see ARCHITECTURE.MD §7 /
 // docs/IMPLEMENTATION_PLAN.md Phase 2) and dispatches to the step handlers
-// in src/steps/, per content_type. Each step handler is independently
+// in src/steps/{blog,image,video}/, per content_type. Each step handler is independently
 // idempotent and claim-guarded, so this loop can be simple: fetch
 // candidates, attempt each, log and move on if one fails — a bad tick never
 // blocks the others.
@@ -13,21 +13,21 @@ import {
   type PipelineRow,
   type TrackRow,
 } from './db.js'
-import { runGenerateOutline, type OutlineJobInput } from './steps/generateOutline.js'
-import { runGenerateScript, type VideoScriptJobInput } from './steps/generateScript.js'
-import { runGenerateCharacterRef } from './steps/generateCharacterRef.js'
-import { runGenerateSceneVisual } from './steps/generateSceneVisual.js'
-import { runLocalizeScript } from './steps/localizeScript.js'
-import { runSynthesizeVoice } from './steps/synthesizeVoice.js'
-import { runTranscribeAudio } from './steps/transcribeAudio.js'
-import { runRenderLanguageTrack } from './steps/renderLanguageTrack.js'
-import { runGenerateVisualImage } from './steps/generateVisualImage.js'
-import { runGenerateCopy } from './steps/generateCopy.js'
-import { runFinalizeDraft } from './steps/finalizeDraft.js'
-import { runGenerateAdCopy } from './steps/generateAdCopy.js'
-import { runGeneratePhoto } from './steps/generatePhoto.js'
-import { runGenerateCaption } from './steps/generateCaption.js'
-import { runFinalizeImageContent } from './steps/finalizeImageContent.js'
+import { runGenerateOutline, type OutlineJobInput } from './steps/blog/generateOutline.js'
+import { runGenerateScript, type VideoScriptJobInput } from './steps/video/generateScript.js'
+import { runGenerateCharacterRef } from './steps/video/generateCharacterRef.js'
+import { runGenerateSceneVisual } from './steps/video/generateSceneVisual.js'
+import { runLocalizeScript } from './steps/video/localizeScript.js'
+import { runSynthesizeVoice } from './steps/video/synthesizeVoice.js'
+import { runTranscribeAudio } from './steps/video/transcribeAudio.js'
+import { runRenderLanguageTrack } from './steps/video/renderLanguageTrack.js'
+import { runGenerateVisualImage } from './steps/blog/generateVisualImage.js'
+import { runGenerateCopy } from './steps/blog/generateCopy.js'
+import { runFinalizeDraft } from './steps/blog/finalizeDraft.js'
+import { runGenerateAdCopy } from './steps/image/generateAdCopy.js'
+import { runGeneratePhoto } from './steps/image/generatePhoto.js'
+import { runGenerateCaption } from './steps/image/generateCaption.js'
+import { runFinalizeImageContent } from './steps/image/finalizeImageContent.js'
 import { OpenAIScriptGenerator } from './adapters/openai.js'
 import { KieImageGenerator, KieVideoGenerator } from './adapters/kie.js'
 import { NanoBananaImageGenerator } from './adapters/nanoBanana.js'
@@ -318,7 +318,10 @@ async function tickPipelines(
           // step is reachable from a per-language trigger — see
           // generateSceneVisual.ts's header for why that's load-bearing,
           // not just documentation.
-          const characterRefPrompt = composeCharacterRefPrompt(BRAND_PROFILE, { pipelineId: pipeline.id })
+          const characterRefPrompt = composeCharacterRefPrompt(BRAND_PROFILE, {
+            pipelineId: pipeline.id,
+            regenInstructions: pipeline.regen_instructions,
+          })
           await runGenerateCharacterRef(
             client,
             pipeline,

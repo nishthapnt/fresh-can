@@ -399,7 +399,9 @@ const TYPE_APPROVE_LABEL: Record<ContentType, string> = {
 
 // ─── RegenerateDialog ──────────────────────────────────────────────────────────
 
-type RegenerateScope = 'visual' | 'copy'
+// Blog: 'visual' | 'copy'. Video: 'script' | 'visuals'. image_post has only
+// one thing to regenerate, so it never uses the scope selector at all.
+type RegenerateScope = 'visual' | 'copy' | 'script' | 'visuals'
 
 function RegenerateDialog({
   open,
@@ -415,20 +417,26 @@ function RegenerateDialog({
   loading: boolean
 }) {
   const [instructions, setInstructions] = useState('')
-  // Blog only: the shared images and each language's copy regenerate
-  // independently now (never conflated into one action — a picture tweak
-  // must never force a text rewrite, or vice versa). image_post/video keep
-  // a single action since they have only one thing to regenerate.
+  // Blog and video both have two independent regenerate scopes (never
+  // conflated into one action — a picture tweak must never force a text/
+  // script rewrite, or vice versa, ARCHITECTURE.MD §10.1). image_post keeps
+  // a single action since it has only one thing to regenerate.
   const [scope, setScope] = useState<RegenerateScope>('copy')
 
   useEffect(() => {
-    if (open) { setInstructions(''); setScope('copy') }
-  }, [open])
+    if (open) {
+      setInstructions('')
+      setScope(contentType === 'video' ? 'visuals' : 'copy')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, contentType])
 
   if (!contentType) return null
 
   const placeholders: Record<ContentType, string> = {
-    video:      'e.g., Make it more emotional, focus on winter food access challenges…',
+    video: scope === 'script'
+      ? 'e.g., Focus on winter food access challenges, add a call-to-action scene…'
+      : 'e.g., Show the truck at sunset, warmer lighting, a busier street…',
     image_post: 'e.g., Use warmer colors, show community gathering, more optimistic tone…',
     blog:       scope === 'copy'
       ? 'e.g., Add a section on local farms, make the intro more compelling…'
@@ -437,6 +445,8 @@ function RegenerateDialog({
 
   const targetLabel = contentType === 'blog'
     ? (scope === 'copy' ? 'the text' : 'the images')
+    : contentType === 'video'
+    ? (scope === 'script' ? 'the script' : 'the visuals')
     : TYPE_LABELS[contentType].toLowerCase()
 
   return (
@@ -479,6 +489,37 @@ function RegenerateDialog({
                 {scope === 'copy'
                   ? "Rewrites this draft's text. The hero/inline images stay exactly as they are."
                   : "Regenerates the hero/inline images. This draft's text stays exactly as it is."}
+              </p>
+            </div>
+          )}
+
+          {contentType === 'video' && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-gray-700">What do you want to regenerate?</p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={scope === 'script' ? 'default' : 'outline'}
+                  className={scope === 'script' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
+                  onClick={() => setScope('script')}
+                  disabled={loading}
+                >
+                  Script
+                </Button>
+                <Button
+                  type="button"
+                  variant={scope === 'visuals' ? 'default' : 'outline'}
+                  className={scope === 'visuals' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
+                  onClick={() => setScope('visuals')}
+                  disabled={loading}
+                >
+                  Visuals
+                </Button>
+              </div>
+              <p className="mt-1.5 text-xs text-gray-400">
+                {scope === 'script'
+                  ? 'Rewrites the script and scene plan. Every language track restarts from scratch (audio/captions included).'
+                  : 'Regenerates the character reference and scene visuals only. The script and scene plan stay exactly as they are — but every language track still re-records its audio/captions against the new visuals.'}
               </p>
             </div>
           )}
@@ -601,12 +642,12 @@ function WaitingCard({
   }
 
   const messages: Record<ContentType, { title: string; sub: string }> = {
-    video:      { title: 'AI is writing your video script…',     sub: 'n8n is generating the script' },
+    video:      { title: 'AI is writing your video script…',     sub: 'Generating the script and scene plan' },
     image_post: { title: 'AI is creating your image concept…',  sub: 'Generating the photo and caption' },
     blog:       { title: 'AI is writing your blog post…',       sub: 'Generating the outline, copy, and images' },
   }
   const regenMessages: Record<ContentType, { title: string; sub: string }> = {
-    video:      { title: 'Regenerating video script…',   sub: 'n8n is writing a new script' },
+    video:      { title: 'Regenerating video script…',   sub: 'Writing a new script and scene plan' },
     image_post: { title: 'Regenerating image concept…', sub: 'Reworking the photo' },
     blog:       { title: 'Regenerating blog post…',     sub: 'Reworking the content' },
   }
@@ -701,12 +742,20 @@ function VideoTabContent({
   disabled,
   approveError,
   onClearApproveError,
+  onCancel,
+  cancelling,
+  cancelError,
+  onOpenRegenerate,
 }: {
   job: ContentJob
   videoStatus: VideoStatusResponse
   disabled: boolean
   approveError: string | null
   onClearApproveError: () => void
+  onCancel: () => void
+  cancelling: boolean
+  cancelError: string | null
+  onOpenRegenerate: () => void
 }) {
   const { pipeline, draft, scenes, tracks } = videoStatus
   const draftData = draft?.draft_data
@@ -714,6 +763,11 @@ function VideoTabContent({
   // (ARCHITECTURE.MD §6.4) — before 'approved', this is a single master
   // script+scene-plan review, no language toggle and no per-track cards yet.
   const isPreApproval = pipeline.status === 'created' || pipeline.status === 'drafting' || pipeline.status === 'draft_ready'
+  const isStoppable = pipeline.status !== 'ready' && pipeline.status !== 'failed'
+  // POST /video/regenerate { scope: "visuals" } only accepts 'ready'/'failed'
+  // server-side (redoing visuals mid-flight doesn't make sense) — matches
+  // isStoppable's negation exactly, by construction.
+  const canRegeneratePostApproval = !isPreApproval && !isStoppable
 
   return (
     <div className="space-y-4">
@@ -731,12 +785,35 @@ function VideoTabContent({
       )}
 
       {draftData && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-          <Chip label="Duration" value={draftData.duration_seconds ? `${draftData.duration_seconds}s` : '—'} />
-          <div className="h-4 w-px bg-gray-300" />
-          <Chip label="Scenes"   value={String(scenes.length)} />
-          <div className="h-4 w-px bg-gray-300" />
-          <Chip label="Language" value={job.language} />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Chip label="Duration" value={draftData.duration_seconds ? `${draftData.duration_seconds}s` : '—'} />
+            <div className="h-4 w-px bg-gray-300" />
+            <Chip label="Scenes"   value={String(scenes.length)} />
+            <div className="h-4 w-px bg-gray-300" />
+            <Chip label="Language" value={job.language} />
+          </div>
+          {isStoppable && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onCancel}
+              disabled={cancelling}
+              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+            >
+              {cancelling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Stop generation
+            </Button>
+          )}
+        </div>
+      )}
+
+      {cancelError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <p className="text-xs text-red-700">{cancelError}</p>
+          </div>
         </div>
       )}
 
@@ -794,7 +871,15 @@ function VideoTabContent({
                   <p className="mt-1 text-xs text-red-600">{pipeline.last_error}</p>
                 )}
               </div>
-              <MiniStatusBadge status={pipeline.status} />
+              <div className="flex items-center gap-2">
+                {canRegeneratePostApproval && (
+                  <Button variant="outline" size="sm" onClick={onOpenRegenerate}>
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    Regenerate
+                  </Button>
+                )}
+                <MiniStatusBadge status={pipeline.status} />
+              </div>
             </CardContent>
           </Card>
 
@@ -1413,7 +1498,7 @@ export default function JobDetailPage() {
     return langs
   }, [allDrafts])
 
-  // Switching language doesn't call n8n or Supabase — it only changes which
+  // Switching language doesn't call Supabase — it only changes which
   // already-loaded draft is displayed, and refreshes blogEdit to match it.
   // (Video has no per-language draft/toggle anymore — see VideoStatusResponse.)
   const handleLanguageSwitch = useCallback((type: ContentType, lang: string) => {
@@ -1457,6 +1542,26 @@ export default function JobDetailPage() {
     const data = (await res.json()) as VideoStatusResponse
     setVideoStatus(data)
   }, [job_id])
+
+  const [videoCancelling, setVideoCancelling] = useState(false)
+  const [videoCancelError, setVideoCancelError] = useState<string | null>(null)
+
+  const handleVideoCancel = useCallback(async () => {
+    if (!window.confirm('Stop generating this video? Progress so far is kept, but nothing further will be generated.')) {
+      return
+    }
+    setVideoCancelling(true)
+    setVideoCancelError(null)
+    const res = await fetch(`/api/jobs/${job_id}/video/cancel`, { method: 'POST' })
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}))
+      setVideoCancelError(b.error ?? 'Failed to stop generation')
+      setVideoCancelling(false)
+      return
+    }
+    await loadVideoStatus()
+    setVideoCancelling(false)
+  }, [job_id, loadVideoStatus])
 
   // Timeout for long-running generation
   const [timedOut, setTimedOut] = useState(false)
@@ -1638,12 +1743,11 @@ export default function JobDetailPage() {
   useEffect(() => { loadData() }, [loadData])
 
   // ── Polling: keep checking DB while drafts are pending OR video is generating ──
-  // For video, n8n's callback updates content_jobs.status before it writes the
-  // draft, so the realtime handler below fires too early. This poll catches the
-  // window between those two events. Also polls during 'generating' state to
-  // catch video completion if realtime misses it. (Blog/image_post don't rely
-  // on content_jobs.status at all — see ActiveGenerationBanner's comment for
-  // why — so this race is video-specific.)
+  // Nothing writes content_jobs.status to 'draft_ready'/'ready' for any content
+  // type anymore now that blog/image_post/video all run on the worker/pipeline
+  // architecture (their real status lives in content_pipelines/
+  // content_language_tracks instead) — this poll's own generated_content check
+  // below is what actually catches video completion, independent of job.status.
 
   useEffect(() => {
     if (!needsPolling || timedOut) return
@@ -1830,11 +1934,11 @@ export default function JobDetailPage() {
   }, [job?.id, imageResult])
 
   // ── Video status polling — worker/src/index.ts's own tick, not realtime ──────
-  // Video's pipeline/tracks are written by the worker process, not by n8n's
-  // callback route, so there's no realtime subscription wired for them (the
-  // job-status realtime handler below only ever reflects video's OLD n8n
-  // path). Polls GET /video/status until every requested track (and the
-  // shared pipeline) reaches a terminal state.
+  // Video's pipeline/tracks are written by the worker process directly, with
+  // no realtime subscription wired for them — the job-status realtime handler
+  // below watches content_jobs.status, which nothing writes for video anymore.
+  // Polls GET /video/status until every requested track (and the shared
+  // pipeline) reaches a terminal state.
 
   useEffect(() => {
     if (!job) return
@@ -1866,12 +1970,12 @@ export default function JobDetailPage() {
   }, [job?.id, job?.status, videoStatus?.pipeline.status, videoStatus?.tracks.map((t) => t.status).join(',')])
 
   // ── Realtime: job status ─────────────────────────────────────────────────────
-  // content_jobs.status only ever reaches 'draft_ready'/'ready' via n8n's video
-  // callback (blog/image_post's worker pipeline never writes it — see
-  // ActiveGenerationBanner.tsx), so in practice this handler only fires for
-  // video. When it does, we call reloadDrafts() immediately; this may still
-  // read 'pending' if n8n hasn't written the draft yet — the polling interval
-  // above will keep retrying until the draft arrives.
+  // Nothing writes content_jobs.status to 'draft_ready'/'ready' anymore for any
+  // content type (blog/image_post/video all moved onto the worker/pipeline
+  // architecture — see ActiveGenerationBanner.tsx), so this subscription is
+  // effectively dormant today; kept as a harmless no-op rather than removed
+  // outright, since content_jobs.status is still a real column other code
+  // reads (e.g. the 'failed' transition worker/src/db.ts writes).
 
   useEffect(() => {
     const channel = supabase
@@ -1901,10 +2005,37 @@ export default function JobDetailPage() {
   const handleRegenerate = async (
     type: ContentType,
     instructions: string,
-    scope: 'visual' | 'copy' = 'visual',
+    scope: RegenerateScope = 'visual',
   ) => {
     setRegenLoading(type)
     setRegenError(null)
+
+    // Video's regenerate is entirely self-contained here — its state
+    // (videoStatus) has nothing to do with allDrafts/blogEdit, which the
+    // shared tail below manipulates for blog/image_post specifically.
+    if (type === 'video') {
+      const res = await fetch(`/api/jobs/${job_id}/video/regenerate`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scope, instructions }),
+      })
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}))
+        setRegenError(b.error ?? 'Failed to trigger regeneration')
+        setRegenLoading(null)
+        return
+      }
+      setRegenDialog({ open: false, type: null })
+      // Both scopes fully reset every track (see the route's own doc
+      // comment on why "visuals" doesn't preserve audio/captions) — video
+      // is no longer approved in any real sense, so drop it from
+      // approvedTypes the same way blog/image_post's own full-reset path
+      // does below.
+      setApprovedTypes((prev) => { const s = new Set(prev); s.delete('video'); return s })
+      await loadVideoStatus()
+      setRegenLoading(null)
+      return
+    }
 
     const lang = getEffectiveLanguage(type)
     let res: Response
@@ -1915,21 +2046,13 @@ export default function JobDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(scope === 'copy' ? { scope: 'copy', lang, instructions } : { scope: 'visual' }),
       })
-    } else if (type === 'image_post') {
+    } else {
+      // image_post — video already returned above.
       res = await fetch(`/api/jobs/${job_id}/image/regenerate`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ scope: 'visual', instructions }),
       })
-    } else {
-      // Video has no regenerate route yet on the new backend (the old
-      // n8n-backed generic route was retired along with the rest of
-      // video's n8n path) — this button is hidden for the video tab, so
-      // this branch shouldn't be reachable; bail defensively rather than
-      // calling a route that no longer exists.
-      setRegenError('Regenerate is not yet available for video.')
-      setRegenLoading(null)
-      return
     }
 
     if (!res.ok) {
@@ -1960,7 +2083,7 @@ export default function JobDetailPage() {
       return
     }
 
-    // Full replacement (blog copy, or video's existing n8n flow): the
+    // Full replacement (blog copy, or a video script regenerate): the
     // current draft is being fully redone — show the waiting state until a
     // new one lands via the existing content_drafts realtime subscription.
     setAllDrafts((prev) => {
@@ -2189,6 +2312,10 @@ export default function JobDetailPage() {
           onClearApproveError={() =>
             setApproveErrors((prev) => { const m = new Map(prev); m.delete('video'); return m })
           }
+          onCancel={handleVideoCancel}
+          cancelling={videoCancelling}
+          cancelError={videoCancelError}
+          onOpenRegenerate={() => setRegenDialog({ open: true, type: 'video' })}
         />
       )
     }
@@ -2456,20 +2583,19 @@ export default function JobDetailPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Video has no regenerate route yet on the new backend — the
-                 old generic /regenerate route still targets n8n, which would
-                 race the worker's own generation. Hidden here rather than
-                 wired to a path that would double-generate. */}
-              {activeTab !== 'video' && (
-                <Button
-                  variant="outline"
-                  onClick={() => setRegenDialog({ open: true, type: activeTab })}
-                  disabled={approving === activeTab}
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Regenerate
-                </Button>
-              )}
+              {/* Video's own Regenerate entry point for the post-approval
+                 (ready/failed) window lives inside VideoTabContent itself —
+                 this sticky bar only ever shows while activeTabReady, which
+                 for video means draft_ready (pre-approval), where only
+                 scope: "script" is actually valid server-side. */}
+              <Button
+                variant="outline"
+                onClick={() => setRegenDialog({ open: true, type: activeTab })}
+                disabled={approving === activeTab}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Regenerate
+              </Button>
 
               <Button
                 onClick={() =>

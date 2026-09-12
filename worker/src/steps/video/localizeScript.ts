@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ScriptGenerator } from '../adapters/types.js'
+import type { ScriptGenerator } from '../../adapters/types.js'
 import {
   claimTrack,
   hasSucceededStep,
@@ -9,9 +9,9 @@ import {
   getVideoScenes,
   upsertVideoSceneAudio,
   type TrackRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
-import { BRAND_PROFILE, composeLocalizeScriptSystemPrompt } from '../prompts/index.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
+import { BRAND_PROFILE, composeLocalizeScriptSystemPrompt } from '../../prompts/index.js'
 
 interface LocalizedScene {
   scene_number: number
@@ -30,16 +30,26 @@ function isValidLocalizeOutput(parsed: unknown, expectedCount: number): parsed i
 }
 
 /**
- * Per-language-track step — [ONCE PER TRACK]. Gated on generate_script
- * having succeeded (the shared scene plan must exist), NOT on the shared
- * visuals being ready — narration wording doesn't need scene images/clips,
- * only the render step does (ARCHITECTURE.MD §6.5's "language-specific work
- * starts as soon as the shared layer permits it"). This is the ONLY place
- * narration wording is produced — it translates the already-approved,
- * language-neutral narration_intent, never a second call to the
- * script-generation model. Replaces n8n's "FR —" forced-script-regeneration
- * branch entirely (ARCHITECTURE.MD §13's mapping table) — that branch is
- * retired, not ported forward.
+ * Per-language-track step — [ONCE PER TRACK]. Gated on the shared scene
+ * plan existing (checked below via getVideoScenes, NOT via
+ * hasSucceededStep(...,'generate_script', track.master_generation_used) —
+ * that would only ever be true at the EXACT generation generate_script
+ * last ran, but a visuals-only regenerate (scope: "visuals") bumps
+ * master_generation_used on every track without ever rerunning
+ * generate_script, which would permanently strand every track at this
+ * gate. A track can't structurally exist before generate_script has
+ * already succeeded at least once — tracks are only ever created at
+ * approval, which itself requires draft_ready — so this was always a
+ * redundant defensive check in practice, not a real "wait for it" gate).
+ * NOT gated on the shared visuals being ready either — narration wording
+ * doesn't need scene images/clips, only the render step does
+ * (ARCHITECTURE.MD §6.5's "language-specific work starts as soon as the
+ * shared layer permits it"). This is the ONLY place narration wording is
+ * produced — it translates the already-approved, language-neutral
+ * narration_intent, never a second call to the script-generation model.
+ * Replaces n8n's "FR —" forced-script-regeneration branch entirely
+ * (ARCHITECTURE.MD §13's mapping table) — that branch is retired, not
+ * ported forward.
  *
  * Writes one video_scene_audio row per scene (narration_text only — audio
  * synthesis is synthesizeVoice.ts's job). Leaves the track in 'generating'
@@ -53,14 +63,6 @@ export async function runLocalizeScript(
   scriptGenerator: ScriptGenerator,
   backoffBaseDelayMs = 5000,
 ): Promise<{ ran: boolean }> {
-  const scriptReady = await hasSucceededStep(
-    client,
-    { contentPipelineId },
-    'generate_script',
-    track.master_generation_used,
-  )
-  if (!scriptReady) return { ran: false } // not our turn yet
-
   let working: TrackRow
   if (track.status === 'waiting_on_shared') {
     const claimed = await claimTrack(client, track.id, 'waiting_on_shared', 'generating', {
@@ -89,7 +91,7 @@ export async function runLocalizeScript(
   const alreadySucceeded = await hasSucceededStep(client, { contentLanguageTrackId: track.id }, 'localize_script', generation)
   if (alreadySucceeded) return { ran: true }
 
-  const scenes = await getVideoScenes(client, contentPipelineId, generation)
+  const scenes = await getVideoScenes(client, contentPipelineId)
   if (scenes.length === 0) return { ran: false } // guards a race against generate_script's own writes
 
   const attemptNumber = working.retry_count + 1

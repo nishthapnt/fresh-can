@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ScriptGenerator } from '../adapters/types.js'
+import type { ScriptGenerator } from '../../adapters/types.js'
 import {
   claimTrack,
   hasSucceededStep,
@@ -8,9 +8,9 @@ import {
   recordTrackRetryableFailure,
   markTrackFailed,
   type TrackRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
-import { BRAND_PROFILE, composeCopySystemPrompt } from '../prompts/index.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
+import { BRAND_PROFILE, composeCopySystemPrompt } from '../../prompts/index.js'
 
 export interface CopyJobInput {
   topic: string

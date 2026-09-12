@@ -50,6 +50,18 @@ export class OpenAIScriptGenerator implements ScriptGenerator {
           { role: 'system', content: input.systemPrompt },
           { role: 'user', content: input.userPrompt },
         ],
+        // Every caller's system prompt already asks for "strictly valid
+        // JSON" and describes the exact shape, but without this the model
+        // is free to preface the JSON with conversational text (e.g. "Sure,
+        // here's the script:") — stripCodeFence's anchored regex only
+        // strips a fence wrapping the ENTIRE response, so any preamble
+        // makes JSON.parse fail on the whole string, not just the fence.
+        // Confirmed live: generate_script (the video scriptwriter prompt,
+        // a more "creative writing" framing than blog/image's more
+        // clinical prompts) hit exactly this failure mode 3 attempts in a
+        // row. json_object mode makes the API itself guarantee a bare JSON
+        // object — no prompt-engineering reliability needed.
+        response_format: { type: 'json_object' },
       }),
     })
 

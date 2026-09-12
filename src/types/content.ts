@@ -129,37 +129,9 @@ export interface NewContentFormData {
 }
 
 // ─── n8n webhook payload types ────────────────────────────────────────────────
-
-export interface N8nWebhookPayload {
-  job_id: string
-  topic: string
-  keywords: string
-  category: string
-  target_audience: string
-  language: Language
-  brand: 'Fresh-CAN'
-  content_type: ContentType
-}
-
-export interface N8nCallbackDraftReady {
-  job_id: string
-  content_type: ContentType
-  event: 'draft_ready'
-  data: {
-    draft_data: Record<string, unknown>
-  }
-}
-
-export interface N8nCallbackGenerationComplete {
-  job_id: string
-  content_type: ContentType
-  event: 'generation_complete'
-  data: {
-    file_url: string
-    thumbnail_url?: string
-    output_data: Record<string, unknown>
-  }
-}
+// social posting is the only content type still on n8n (blog, image_post,
+// and video generation all moved to worker/) — so post_complete is the only
+// callback shape left.
 
 export interface N8nCallbackPostComplete {
   job_id: string
@@ -171,38 +143,6 @@ export interface N8nCallbackPostComplete {
     post_url: string
   }
 }
-
-// New format sent by the video-approve n8n workflow on completion
-export interface N8nVideoComplete {
-  success: true
-  status: 'completed'
-  job_id: string
-  completed_at: string
-  video: {
-    url: string
-    duration_sec: number
-    total_scenes: number
-    language: string
-    script_type: string
-  }
-  content: {
-    topic: string
-    category: string
-    script_type: string
-    language: string
-  }
-  display: {
-    title: string
-    subtitle: string
-    status_label: string
-    video_url: string
-  }
-}
-
-export type N8nCallback =
-  | N8nCallbackDraftReady
-  | N8nCallbackGenerationComplete
-  | N8nCallbackPostComplete
 
 // ─── Aggregated view types ────────────────────────────────────────────────────
 

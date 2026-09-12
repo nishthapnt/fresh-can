@@ -146,52 +146,7 @@ export async function approveDraft(draftId: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-export async function upsertDraftFromCallback(
-  jobId: string,
-  contentType: ContentType,
-  language: string,
-  draftData: Record<string, unknown>,
-): Promise<void> {
-  const { error } = await supabase.from('content_drafts').upsert(
-    {
-      job_id: jobId,
-      content_type: contentType,
-      language,
-      draft_data: draftData,
-      is_approved: false,
-      status: 'draft_ready',
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'job_id,content_type,language' },
-  )
-
-  if (error) throw new Error(error.message)
-}
-
 // ─── Generated Content ────────────────────────────────────────────────────────
-
-export async function upsertGeneratedContent(
-  jobId: string,
-  contentType: ContentType,
-  language: string,
-  fileUrl: string,
-  thumbnailUrl: string | undefined,
-  outputData: Record<string, unknown>,
-): Promise<void> {
-  const { error } = await supabase.from('generated_content').upsert(
-    {
-      job_id: jobId,
-      content_type: contentType,
-      language,
-      file_url: fileUrl,
-      thumbnail_url: thumbnailUrl ?? null,
-      output_data: outputData,
-    },
-    { onConflict: 'job_id,content_type,language' },
-  )
-
-  if (error) throw new Error(error.message)
-}
 
 export async function getGeneratedContent(
   jobId: string,

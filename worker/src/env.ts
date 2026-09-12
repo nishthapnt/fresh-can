@@ -26,8 +26,7 @@ export const env = {
   get KIE_API_KEY() {
     return required('KIE_API_KEY')
   },
-  // Video-only providers (M0 of the video migration) — n8n held these
-  // credentials internally before; the worker now needs them directly.
+  // Video-only providers (M0 of the video migration)
   get ELEVENLABS_API_KEY() {
     return required('ELEVENLABS_API_KEY')
   },

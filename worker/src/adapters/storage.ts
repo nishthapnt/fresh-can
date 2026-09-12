@@ -5,7 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * permanent Supabase Storage. KIE.ai's own URLs expire (~14 days,
  * tempfile.aiquickdraw.com host) — the old n8n image_post flow already did
  * this download+reupload step; the Blog pipeline currently does NOT (a
- * known gap — see worker/src/steps/generateVisualImage.ts), but image_post
+ * known gap — see worker/src/steps/blog/generateVisualImage.ts), but image_post
  * gets it from day one here since it's cheap to do right the first time.
  *
  * Bucket name and path convention (`{job_id}-final.jpg`) confirmed against

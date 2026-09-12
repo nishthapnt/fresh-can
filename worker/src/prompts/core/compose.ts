@@ -181,6 +181,9 @@ export function composeInlinePrompt(brand: BrandProfile, job: BlogImageJob): Ima
 
 interface CharacterRefJob {
   pipelineId: string
+  /** Set by POST /video/regenerate { scope: "visuals" } — never present on
+   *  a first-time generation. */
+  regenInstructions?: string | null
 }
 
 /**
@@ -207,6 +210,7 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
     referenceImageUrl = reference.url
   }
   parts.push(referenceImageUrl ? brand.noNewTextInstruction : brand.noTextInstruction)
+  if (job.regenInstructions) parts.push(`${job.regenInstructions}.`)
 
   return { prompt: parts.join(' '), referenceImageUrl }
 }
@@ -221,6 +225,9 @@ interface SceneImageJob {
    *  would let the model reinvent the subject's appearance per scene,
    *  exactly the bug this design fixes (ARCHITECTURE.MD §4.1). */
   characterRefUrl: string
+  /** Set by POST /video/regenerate { scope: "visuals" } — never present on
+   *  a first-time generation. */
+  regenInstructions?: string | null
 }
 
 export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob): ImageComposition {
@@ -235,6 +242,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // generation ALWAYS has characterRefUrl attached, never the
     // no-reference-image branch other composers have.
     brand.noNewTextInstruction,
+    job.regenInstructions ? `${job.regenInstructions}.` : '',
   ]
 
   return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl: job.characterRefUrl }

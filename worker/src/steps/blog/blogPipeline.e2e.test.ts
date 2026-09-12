@@ -9,12 +9,12 @@
 //   - re-running a step that already succeeded does not call the provider again
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createServiceClient, claimPipeline, type PipelineRow, type TrackRow } from '../db.js'
+import { createServiceClient, claimPipeline, type PipelineRow, type TrackRow } from '../../db.js'
 import { runGenerateOutline } from './generateOutline.js'
 import { runGenerateVisualImage } from './generateVisualImage.js'
 import { runGenerateCopy } from './generateCopy.js'
 import { runFinalizeDraft } from './finalizeDraft.js'
-import type { ScriptGenerator, ImageGenerator, ImagePollResult } from '../adapters/types.js'
+import type { ScriptGenerator, ImageGenerator, ImagePollResult } from '../../adapters/types.js'
 
 const hasCreds = !!process.env.SUPABASE_SERVICE_ROLE_KEY
 

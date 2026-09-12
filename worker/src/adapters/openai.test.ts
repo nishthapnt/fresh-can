@@ -30,6 +30,12 @@ describe('OpenAIScriptGenerator', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'user' },
     ])
+    // Forces the API to guarantee a bare JSON object — the actual fix for a
+    // live failure where the model prefaced JSON with conversational text,
+    // which stripCodeFence's anchored regex can't recover from (see its
+    // own doc comment) since it only strips a fence wrapping the ENTIRE
+    // response.
+    expect(body.response_format).toEqual({ type: 'json_object' })
   })
 
   it('returns parsed: null when content is not valid JSON', async () => {

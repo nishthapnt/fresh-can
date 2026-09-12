@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { VoiceSynthesizer } from '../adapters/types.js'
-import type { VideoStorageUploader } from '../adapters/storage.js'
+import type { VoiceSynthesizer } from '../../adapters/types.js'
+import type { VideoStorageUploader } from '../../adapters/storage.js'
 import {
   hasSucceededStep,
   recordStepAttempt,
@@ -10,9 +10,9 @@ import {
   getVideoSceneAudioRows,
   upsertVideoSceneAudio,
   type TrackRow,
-} from '../db.js'
-import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../lib/backoff.js'
-import { BRAND_PROFILE } from '../prompts/index.js'
+} from '../../db.js'
+import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff.js'
+import { BRAND_PROFILE } from '../../prompts/index.js'
 
 // ~150 words per minute — a reasonable average speaking pace. Used only to
 // ESTIMATE duration_ms; ElevenLabs' plain text-to-speech response doesn't
@@ -52,7 +52,7 @@ export async function runSynthesizeVoice(
 
   const voiceId = BRAND_PROFILE.videoVoiceIds?.[track.language]
 
-  const scenes = await getVideoScenes(client, contentPipelineId, generation)
+  const scenes = await getVideoScenes(client, contentPipelineId)
   const audioRows = await getVideoSceneAudioRows(client, track.id, generation)
 
   let anyRan = false

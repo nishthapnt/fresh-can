@@ -161,7 +161,14 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '    }\n' +
     '  ]\n' +
     '}\n' +
-    'Produce between 4 and 10 scenes whose target_duration_seconds sum to approximately duration_seconds.'
+    // TEMPORARY FOR TESTING — was "Produce between 4 and 10 scenes whose
+    // target_duration_seconds sum to approximately duration_seconds."
+    // Forces a short, 2-scene, ~10-second script so a full end-to-end run
+    // (character ref -> scene visuals -> localize -> voice -> transcribe ->
+    // render) completes quickly to verify the pipeline works. Revert to the
+    // original line once confirmed.
+    'Produce exactly 2 scenes, each about 5 seconds, for a total duration_seconds of approximately 10 seconds — ' +
+    'ignore any other sense of "appropriate" length for this script type; this is a short test video.'
   )
 }
 
@@ -177,7 +184,7 @@ export interface LocalizeScriptSystemPromptOptions {
  * scene's language-neutral narration_intent and localizes it, never
  * regenerating the scene plan itself. This is what replaces n8n's "FR —"
  * forced-script-regeneration branch, which is retired entirely, not ported
- * forward (worker/src/steps/localizeScript.ts).
+ * forward (worker/src/steps/video/localizeScript.ts).
  */
 export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: LocalizeScriptSystemPromptOptions): string {
   return (
@@ -201,7 +208,7 @@ export interface AdCopySystemPromptOptions {
 
 /**
  * Produces the shared headline/subtitle rendered directly onto an
- * 'infographic'-style image_post photo (see worker/src/steps/generateAdCopy.ts)
+ * 'infographic'-style image_post photo (see worker/src/steps/image/generateAdCopy.ts)
  * — plus a coreMessage that isn't shown publicly anywhere, but gets folded
  * into composeCaptionSystemPrompt above so the per-language caption stays
  * cohesive with whatever specific idea the headline/subtitle are about,

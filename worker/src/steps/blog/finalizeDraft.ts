@@ -8,7 +8,7 @@ import {
   recordStepAttempt,
   type TrackRow,
   type PipelineRow,
-} from '../db.js'
+} from '../../db.js'
 
 /**
  * Per-language-track step — the only step gated on BOTH this track's copy

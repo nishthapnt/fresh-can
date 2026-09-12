@@ -203,18 +203,17 @@ export const BRAND_PROFILE: BrandProfile = {
     { key: 'urban_daylight', detail: 'Clear daytime light in an urban setting, crisp and modern mood.' },
   ],
 
+  // Real ElevenLabs voice IDs (male voices only, by request — no female
+  // narration voice configured for either language at this time).
+  videoVoiceIds: {
+    EN: 'epkQ8pqDcY2DxhmFi8xl',
+    FR: 'n2pCwUKS6q9Iur03Rten',
+  },
+
   // Uploaded to the public brand-assets Supabase bucket on 2026-09-10 from
   // worker/assets/fresh-can/. One is picked per image (hero/inline/photo
   // pick independently) — each `framing` string must accurately describe
   // what that specific photo shows, since Flux Kontext edits from it.
-  // TODO before M3 can run against the real ElevenLabs API: fill these in
-  // from elevenlabs.io's Voice Library (or a cloned voice) — left empty
-  // rather than guessed, per BrandProfile.videoVoiceIds's doc comment.
-  videoVoiceIds: {
-    EN: '',
-    FR: '',
-  },
-
   referenceImages: {
     exterior: [
       {

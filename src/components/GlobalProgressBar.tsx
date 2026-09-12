@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useContentJobStore, TrackedJob } from '../stores/contentJobStore'
 import { supabase } from '../lib/supabase'
+import { computeVideoProgress } from '../lib/videoProgress'
 
 function progressLabel(progress: number): string {
   if (progress < 15) return 'Writing script…'
@@ -12,17 +13,6 @@ function progressLabel(progress: number): string {
   if (progress < 70) return 'Animating clips…'
   if (progress < 85) return 'Merging video…'
   return 'Almost ready…'
-}
-
-function timeProgress(startedAt: number): number {
-  const s = (Date.now() - startedAt) / 1000
-  if (s < 30)  return 10
-  if (s < 60)  return 25
-  if (s < 90)  return 40
-  if (s < 120) return 55
-  if (s < 150) return 70
-  if (s < 180) return 82
-  return 90
 }
 
 function showToast(job: TrackedJob, router: ReturnType<typeof useRouter>) {
@@ -82,14 +72,30 @@ export default function GlobalProgressBar() {
     const poll = async () => {
       for (const job of videoJobs) {
         try {
-          const { data } = await supabase
-            .from('generated_content')
-            .select('status')
-            .eq('job_id', job.jobId)
-            .eq('content_type', 'video')
-            .maybeSingle()
+          // content_jobs.status reliably reaches 'failed' once the video
+          // pipeline/tracks fail terminally or are cancelled (see
+          // worker/src/db.ts's markJobFailedIfNotAlreadyTerminal and
+          // video/cancel/route.ts) — checked directly rather than inferred
+          // from progress, so a dead job never just sits at a stale number.
+          const [{ data: jobData }, statusRes] = await Promise.all([
+            supabase.from('content_jobs').select('status').eq('id', job.jobId).maybeSingle(),
+            fetch(`/api/jobs/${job.jobId}/video/status`),
+          ])
 
-          if (data?.status === 'completed') {
+          if (jobData?.status === 'failed') {
+            removeJob(job.jobId)
+            continue
+          }
+
+          if (!statusRes.ok) continue
+          const { pipeline, tracks } = (await statusRes.json()) as {
+            pipeline: { status: string; scenes_visuals_ready_count: number | null; scenes_total: number | null }
+            tracks: { status: string }[]
+          }
+
+          const progress = computeVideoProgress(pipeline, tracks)
+
+          if (progress === 100) {
             updateJob(job.jobId, { status: 'completed', progress: 100 })
             if (!job.notified) {
               markNotified(job.jobId)
@@ -97,7 +103,7 @@ export default function GlobalProgressBar() {
             }
             setTimeout(() => removeJob(job.jobId), 5000)
           } else {
-            updateJob(job.jobId, { progress: timeProgress(job.startedAt) })
+            updateJob(job.jobId, { progress })
           }
         } catch (_) {}
       }
