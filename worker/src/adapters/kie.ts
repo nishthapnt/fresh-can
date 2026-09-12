@@ -33,7 +33,9 @@ export class KieImageGenerator implements ImageGenerator {
       },
       body: JSON.stringify({
         prompt: input.prompt,
-        aspectRatio: '1:1',
+        // '1:1' remains the default for callers that never set this
+        // (blog/image_post) — unchanged from before this field existed.
+        aspectRatio: input.aspectRatio ?? '1:1',
         outputFormat: 'png',
         ...(input.referenceImageUrl ? { inputImage: input.referenceImageUrl } : {}),
       }),

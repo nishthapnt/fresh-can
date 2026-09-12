@@ -80,13 +80,19 @@ interface JobInputs {
   // wording (see generateScript.ts's VideoScriptJobInput.jobLanguage).
   scriptType: string | null
   jobLanguage: string
+  // video-only — user-selected per job (supabase/migrations/20260912120000),
+  // passed straight to Flux Kontext's own aspectRatio param for character-ref/
+  // scene-image generation (worker/src/adapters/kie.ts). Kling has no
+  // aspect-ratio param of its own; it inherits whatever reference image it
+  // animates, so this one setting is enough for matching video clips too.
+  aspectRatio: '9:16' | '1:1' | '16:9'
 }
 
 async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<JobInputs> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language',
+      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language, aspect_ratio',
     )
     .eq('id', jobId)
     .single()
@@ -106,6 +112,7 @@ async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<Jo
     contentAngle: (data.content_angle as string | null) ?? null,
     scriptType: (data.script_type as string | null) ?? null,
     jobLanguage: (data.language as string | null) ?? 'EN',
+    aspectRatio: (data.aspect_ratio as '9:16' | '1:1' | '16:9' | null) ?? '9:16',
   }
 }
 
@@ -330,6 +337,7 @@ async function tickPipelines(
             videoUploader,
             5000,
             characterRefPrompt.referenceImageUrl,
+            jobInputs.aspectRatio,
           )
 
           // Re-fetch — generate_character_ref may have just advanced this
@@ -356,6 +364,8 @@ async function tickPipelines(
                 imageGenerator,
                 videoGenerator,
                 videoUploader,
+                5000,
+                jobInputs.aspectRatio,
               )
             }
           }

@@ -31,6 +31,7 @@ import type {
   PlatformType,
 } from '@/types/content'
 import { formatDateTime } from '@/lib/dateUtils'
+import { videoAspectClass } from '@/lib/aspectRatioClass'
 import {
   AlertCircle,
   ArrowUpDown,
@@ -405,7 +406,9 @@ function EmptyState({
 
 function LoadingSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
   const count  = type === 'blog' ? 6 : 8
-  const aspect = type === 'video' ? 'aspect-video' : type === 'image' ? 'aspect-square' : 'h-28'
+  // '9:16' is this app's default aspect ratio for new video jobs — the
+  // real per-item ratio isn't known yet at skeleton time.
+  const aspect = type === 'video' ? videoAspectClass('9:16') : type === 'image' ? 'aspect-square' : 'h-28'
   const cols   = type === 'blog'
     ? 'sm:grid-cols-2 lg:grid-cols-3'
     : 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
@@ -546,7 +549,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
     <>
       <Card className="overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md">
         <div
-          className="group relative aspect-video cursor-pointer overflow-hidden bg-black"
+          className={`group relative cursor-pointer overflow-hidden bg-black ${videoAspectClass(item.aspect_ratio)}`}
           onClick={() => setViewOpen(true)}
         >
           <video

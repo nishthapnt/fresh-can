@@ -39,6 +39,17 @@ export interface ImageGenerationInput {
    * 2026-09-10) — never an array.
    */
   referenceImageUrl?: string
+  /**
+   * Passed straight through to Flux Kontext's own `aspectRatio` param.
+   * Video-only (content_jobs.aspect_ratio, supabase/migrations/
+   * 20260912120000) — blog/image_post callers never set this and get the
+   * adapter's '1:1' default, unchanged from before this field existed.
+   * Kling image-to-video (KieVideoGenerator) has no aspect-ratio param of
+   * its own — it inherits the shape of whatever reference image it
+   * animates, so setting this on character-ref/scene-image generation is
+   * sufficient to get matching video clips too.
+   */
+  aspectRatio?: '9:16' | '1:1' | '16:9'
 }
 
 export interface ImageJobRef {

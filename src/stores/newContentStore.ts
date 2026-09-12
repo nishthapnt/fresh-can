@@ -14,6 +14,12 @@ export type ImageStyle  = 'photo' | 'infographic'
 // default) is converted to null before persisting, same convention as
 // province's 'auto' sentinel.
 export type ContentAngle = 'auto' | 'community_story' | 'behind_scenes' | 'fresh_produce' | 'stat_fact' | 'call_to_action'
+// video only. Passed straight through to Flux Kontext's aspectRatio param
+// for character-ref/scene-image generation — Kling image-to-video has no
+// aspect-ratio param of its own, it inherits whatever reference image it's
+// animating, so this one setting is enough to get matching video clips too.
+// Default '9:16': the native shape for TikTok/Reels/Shorts.
+export type AspectRatio = '9:16' | '1:1' | '16:9'
 
 const SESSION_KEY = 'fc_new_content'
 
@@ -31,6 +37,7 @@ interface FormFields {
   scene_notes:     string   // optional custom scene/story idea from user
   image_style:     ImageStyle
   content_angle:   ContentAngle
+  aspect_ratio:    AspectRatio
 }
 
 interface GenState {
@@ -62,6 +69,7 @@ const FORM_DEFAULTS: FormFields = {
   scene_notes:     '',
   image_style:     'photo',
   content_angle:   'auto',
+  aspect_ratio:    '9:16',
 }
 
 const GEN_DEFAULTS: GenState = {
@@ -77,6 +85,7 @@ function pickPersisted(s: NewContentStore): FormFields & GenState {
     video_duration: s.video_duration, language: s.language,
     content_types: s.content_types, province: s.province, city: s.city,
     scene_notes: s.scene_notes, image_style: s.image_style, content_angle: s.content_angle,
+    aspect_ratio: s.aspect_ratio,
     status: s.status, pendingJobId: s.pendingJobId, generatedAt: s.generatedAt,
   }
 }

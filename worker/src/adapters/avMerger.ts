@@ -168,13 +168,24 @@ export function buildCaptionCommand(
     throw new Error('buildCaptionCommand: no caption cues to burn in — caller should skip this pass')
   }
 
+  // fontsize/y as fractions of frame height (drawtext evaluates these as
+  // expressions, not just plain ints), not fixed pixel values — this used
+  // to be a hardcoded fontsize=48/y=h-120, tuned by eye against the square
+  // 1440x1440 frames every render produced before aspect ratio became
+  // selectable (worker/src/adapters/kie.ts's aspectRatio param). Fixed
+  // pixels only looked right at that one frame height; a 9:16 (1080x1920)
+  // or 16:9 (1920x1080) render would get disproportionately tiny/huge text
+  // and a bottom margin that's too close to or too far from the edge. The
+  // fractions below (0.033/0.083) are exactly what 48px/120px worked out
+  // to at h=1440, so the square case looks identical and every other
+  // aspect ratio now scales correctly too.
   const drawtextFilters = cues.map((cue) => {
     const startSec = (cue.startMs / 1000).toFixed(2)
     const endSec = (cue.endMs / 1000).toFixed(2)
     const text = escapeDrawtextValue(cue.text)
     return (
-      `drawtext=text='${text}':fontcolor=white:fontsize=48:` +
-      `x=(w-text_w)/2:y=h-120:box=1:boxcolor=black@0.5:boxborderw=10:` +
+      `drawtext=text='${text}':fontcolor=white:fontsize=h*0.033:` +
+      `x=(w-text_w)/2:y=h-h*0.083:box=1:boxcolor=black@0.5:boxborderw=10:` +
       `enable='between(t,${startSec},${endSec})'`
     )
   })

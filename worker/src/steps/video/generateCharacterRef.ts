@@ -53,6 +53,7 @@ export async function runGenerateCharacterRef(
   uploader: VideoStorageUploader,
   backoffBaseDelayMs = 5000,
   referenceImageUrl?: string,
+  aspectRatio?: '9:16' | '1:1' | '16:9',
 ): Promise<{ ran: boolean }> {
   const generation = pipeline.current_generation
   const stepName = 'generate_character_ref'
@@ -104,7 +105,7 @@ export async function runGenerateCharacterRef(
         attemptNumber,
       })
 
-      const jobRef = await imageGenerator.submit({ prompt, referenceImageUrl })
+      const jobRef = await imageGenerator.submit({ prompt, referenceImageUrl, aspectRatio })
       const outcome = await pollUntilDone(imageGenerator, jobRef)
 
       if ('fileUrl' in outcome) {

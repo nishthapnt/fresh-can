@@ -84,6 +84,7 @@ async function runSceneImageStep(
   imageGenerator: ImageGenerator,
   uploader: VideoStorageUploader,
   backoffBaseDelayMs: number,
+  aspectRatio?: '9:16' | '1:1' | '16:9',
 ): Promise<boolean> {
   const generation = pipeline.current_generation
   const alreadySucceeded = await hasSucceededStep(
@@ -130,7 +131,7 @@ async function runSceneImageStep(
       regenInstructions: pipeline.regen_instructions,
     })
 
-    const jobRef = await imageGenerator.submit({ prompt, referenceImageUrl: characterRefUrl })
+    const jobRef = await imageGenerator.submit({ prompt, referenceImageUrl: characterRefUrl, aspectRatio })
     const outcome = await pollImageUntilDone(imageGenerator, jobRef)
 
     if ('fileUrl' in outcome) {
@@ -386,6 +387,7 @@ export async function runGenerateSceneVisual(
   videoGenerator: VideoGenerator,
   uploader: VideoStorageUploader,
   backoffBaseDelayMs = 5000,
+  aspectRatio?: '9:16' | '1:1' | '16:9',
 ): Promise<{ ran: boolean }> {
   if (pipeline.status !== 'generating') return { ran: false }
 
@@ -412,6 +414,7 @@ export async function runGenerateSceneVisual(
           imageGenerator,
           uploader,
           backoffBaseDelayMs,
+          aspectRatio,
         )
         anyRan = anyRan || ran
       } else {

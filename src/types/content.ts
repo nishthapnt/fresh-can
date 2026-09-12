@@ -55,6 +55,14 @@ export type ContentAngle =
   | 'stat_fact'
   | 'call_to_action'
 
+// video only. Passed straight through to Flux Kontext's own aspectRatio
+// param for character-ref/scene-image generation (worker/src/adapters/
+// kie.ts) — Kling image-to-video has no aspect-ratio param of its own, it
+// inherits the shape of whatever reference image it's animating, so this
+// one setting is sufficient to get matching video clips too. Default
+// '9:16' — the native shape for TikTok/Reels/Shorts.
+export type AspectRatio = '9:16' | '1:1' | '16:9'
+
 // ─── Database row types ───────────────────────────────────────────────────────
 
 export interface ContentJob {
@@ -67,6 +75,7 @@ export interface ContentJob {
   content_types: ContentType[]
   image_style: ImageStyle
   content_angle: ContentAngle | null
+  aspect_ratio: AspectRatio
   status: JobStatus
   created_at: string
   updated_at: string
@@ -173,6 +182,7 @@ export interface VideoLibraryItem {
   category: string
   language: string
   status: string
+  aspect_ratio: AspectRatio
 }
 
 // ─── Image Library ────────────────────────────────────────────────────────────

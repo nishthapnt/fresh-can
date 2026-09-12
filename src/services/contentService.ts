@@ -14,6 +14,7 @@ import type {
   VideoLibraryItem,
   ImageLibraryItem,
   BlogLibraryItem,
+  AspectRatio,
 } from '@/types/content'
 
 // ─── Content Jobs ─────────────────────────────────────────────────────────────
@@ -173,7 +174,8 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
         topic,
         category,
         language,
-        status
+        status,
+        aspect_ratio
       )
     `)
     .eq('content_type', 'video')
@@ -193,6 +195,10 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
     category:     (row.content_jobs as { category: string })?.category ?? '',
     language:     (row.content_jobs as { language: string })?.language ?? '',
     status:       (row.content_jobs as { status: string })?.status ?? '',
+    // Older jobs predate this column (supabase/migrations/20260912120000) —
+    // '9:16' is also this app's default going forward, so it's the right
+    // fallback for a null/missing value, not just an arbitrary one.
+    aspect_ratio: ((row.content_jobs as { aspect_ratio?: string })?.aspect_ratio as AspectRatio | undefined) ?? '9:16',
   }))
 }
 

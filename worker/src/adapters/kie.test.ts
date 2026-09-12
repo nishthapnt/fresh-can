@@ -38,6 +38,38 @@ describe('KieImageGenerator (Flux Kontext — docs.kie.ai)', () => {
     })
   })
 
+  it('submit() defaults aspectRatio to 1:1 when not given (blog/image_post behavior, unchanged)', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'abc123' } }),
+        text: async () => '',
+      }
+    }) as unknown as typeof fetch
+    const gen = new KieImageGenerator('test-key', fetchImpl)
+    await gen.submit({ prompt: 'a hero image' })
+    expect(JSON.parse(capturedBody!)).toMatchObject({ aspectRatio: '1:1' })
+  })
+
+  it('submit() passes a given aspectRatio straight through (video-only callers)', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'abc123' } }),
+        text: async () => '',
+      }
+    }) as unknown as typeof fetch
+    const gen = new KieImageGenerator('test-key', fetchImpl)
+    await gen.submit({ prompt: 'a scene image', aspectRatio: '9:16' })
+    expect(JSON.parse(capturedBody!)).toMatchObject({ aspectRatio: '9:16' })
+  })
+
   it('submit() omits inputImage entirely when no referenceImageUrl is given', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {

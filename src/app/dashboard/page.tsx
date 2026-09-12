@@ -22,6 +22,7 @@ import type {
   BlogLibraryItem,
 } from '@/types/content'
 import { formatDateTime } from '@/lib/dateUtils'
+import { videoAspectClass } from '@/lib/aspectRatioClass'
 import {
   AlertCircle,
   BookOpen,
@@ -71,7 +72,9 @@ function MiniGridSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
         <div key={i} className="overflow-hidden rounded-xl border bg-white">
           <div
             className={`animate-pulse bg-gray-100 ${
-              type === 'video' ? 'aspect-video' : type === 'image' ? 'aspect-square' : 'h-24'
+              // '9:16' is this app's default aspect ratio for new video jobs
+              // — the real per-item ratio isn't known yet at skeleton time.
+              type === 'video' ? videoAspectClass('9:16') : type === 'image' ? 'aspect-square' : 'h-24'
             }`}
           />
           <div className="space-y-1.5 p-3">
@@ -157,7 +160,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
         className="group cursor-pointer overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md"
         onClick={() => setOpen(true)}
       >
-        <div className="relative aspect-video overflow-hidden bg-black">
+        <div className={`relative overflow-hidden bg-black ${videoAspectClass(item.aspect_ratio)}`}>
           <video
             src={item.video_url}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"

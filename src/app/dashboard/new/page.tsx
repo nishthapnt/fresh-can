@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useNewContentStore } from '@/stores/newContentStore'
-import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle } from '@/stores/newContentStore'
+import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle, AspectRatio } from '@/stores/newContentStore'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ interface FormData {
   scene_notes:     string
   image_style:     ImageStyle
   content_angle:   ContentAngle
+  aspect_ratio:    AspectRatio
 }
 
 type Phase = 'idle' | 'creating' | 'awaiting_questions' | 'triggering'
@@ -209,7 +210,7 @@ export default function NewContentPage() {
 
   const {
     topic, keywords, category, target_audience, script_type, video_duration,
-    language, content_types, province, city, scene_notes, image_style, content_angle, status, pendingJobId,
+    language, content_types, province, city, scene_notes, image_style, content_angle, aspect_ratio, status, pendingJobId,
     restoreSession, setField, toggleType, startGeneration, clearOnCancel,
   } = useNewContentStore()
 
@@ -352,6 +353,11 @@ export default function NewContentPage() {
         // decide" sentinel, same convention as province above — never
         // persisted as a literal value.
         content_angle:   (content_angle && content_angle !== 'auto') ? content_angle : null,
+        // video only — read directly by the worker (worker/src/index.ts's
+        // fetchJobInputs) for character-ref/scene-image generation, passed
+        // straight to Flux Kontext's own aspectRatio param — supabase/
+        // migrations/20260912120000.
+        aspect_ratio:    aspect_ratio,
       })
       .select()
       .single()
@@ -365,7 +371,7 @@ export default function NewContentPage() {
     const formSnapshot: FormData = {
       topic, keywords, category, target_audience,
       script_type, video_duration, language, content_types,
-      province, city, scene_notes, image_style, content_angle,
+      province, city, scene_notes, image_style, content_angle, aspect_ratio,
     }
 
     // ── If image_post wasn't selected, nothing changes — same flow as before ──
@@ -890,6 +896,22 @@ export default function NewContentPage() {
                     {VIDEO_DURATIONS.map((d) => (
                       <SelectItem key={d} value={d}>{d} seconds</SelectItem>
                     ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <FL>Aspect Ratio <span className="text-red-500">*</span></FL>
+                <Select
+                  value={aspect_ratio}
+                  onValueChange={(v) => { if (v) setField('aspect_ratio', v as AspectRatio) }}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="9:16">9:16 — TikTok / Reels / Shorts</SelectItem>
+                    <SelectItem value="1:1">1:1 — Square</SelectItem>
+                    <SelectItem value="16:9">16:9 — Landscape</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
