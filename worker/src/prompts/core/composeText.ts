@@ -123,6 +123,14 @@ export function composeCaptionSystemPrompt(brand: BrandProfile, opts: CaptionSys
 export interface VideoScriptSystemPromptOptions {
   category: string
   scriptType: string
+  /** User-selected target total runtime, in seconds (content_jobs.
+   *  video_duration_seconds, supabase/migrations/20260914000000) — a
+   *  target for the model to aim for, not a hard cap. Previously this
+   *  prompt had no real number at all; "approximately duration_seconds"
+   *  was referencing the model's OWN output field name, giving it zero
+   *  actual length signal (confirmed live 2026-09-13: a real run picked
+   *  90s of total runtime with no target to react to). */
+  targetDurationSeconds: number
 }
 
 /**
@@ -161,14 +169,11 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '    }\n' +
     '  ]\n' +
     '}\n' +
-    // TEMPORARY FOR TESTING — was "Produce between 4 and 10 scenes whose
-    // target_duration_seconds sum to approximately duration_seconds."
-    // Forces a short, 2-scene, ~10-second script so a full end-to-end run
-    // (character ref -> scene visuals -> localize -> voice -> transcribe ->
-    // render) completes quickly to verify the pipeline works. Revert to the
-    // original line once confirmed.
-    'Produce exactly 2 scenes, each about 5 seconds, for a total duration_seconds of approximately 10 seconds — ' +
-    'ignore any other sense of "appropriate" length for this script type; this is a short test video.'
+    `Produce between 4 and 10 scenes whose target_duration_seconds sum to approximately ${opts.targetDurationSeconds} ` +
+    'seconds — that is the target runtime, aim for it. Treat it as a guideline, not a hard cutoff: it is fine ' +
+    'for the true total to land a bit short or long of it if that is what a complete, naturally-paced narration ' +
+    'actually needs. Never truncate a scene\'s narration_intent, or drop a scene\'s idea early, just to force the ' +
+    'total to match exactly.'
   )
 }
 

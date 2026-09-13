@@ -199,3 +199,30 @@ export interface AVMerger {
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }
 
+/**
+ * Downscales a single scene clip to its aspect ratio's standard delivery
+ * resolution — one input, one simple `-vf scale=` chain, no concat, so it
+ * can never need a ';' regardless of target size. A separate, narrower
+ * interface from AVMerger even though UploadPostAVMerger implements both:
+ * this is called from generateSceneVisual.ts (right after KIE.ai generates
+ * each scene's clip), never from renderLanguageTrack.ts — keeping the two
+ * capabilities in separate interfaces means a step's dependency list
+ * documents which capability it actually uses, the same reasoning
+ * ImageGenerator/VideoGenerator/AVMerger are already split apart instead of
+ * one do-everything interface.
+ *
+ * Exists to keep concatenated/rendered output within Supabase Storage's
+ * project-wide file size limit without a perceptible quality loss: Flux
+ * Kontext/Kling's native output for a given aspect ratio already targets
+ * roughly the right pixel budget (kie.ts's own aspectRatio param), but can
+ * still land a bit over it — confirmed live 2026-09-13, a real 8-scene
+ * 9:16 render's un-downscaled clips summed to 140.6MB and failed to
+ * re-upload for the mux pass. Downscaling to the exact resolution nothing
+ * downstream (TikTok/Reels/Shorts, or this app's own preview players) ever
+ * displays past is free size reduction, not a quality tradeoff.
+ */
+export interface SceneClipScaler {
+  submitScale(videoUrl: string, width: number, height: number): Promise<AVMergeJobRef>
+  poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
+}
+

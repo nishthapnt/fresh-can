@@ -4,6 +4,7 @@ import {
   buildAudioConcatCommand,
   buildMuxCommand,
   buildCaptionCommand,
+  buildScaleCommand,
   UploadPostAVMerger,
 } from './avMerger.js'
 import { ProviderCallError } from './types.js'
@@ -35,6 +36,14 @@ describe('buildVideoConcatCommand', () => {
   it('never contains a semicolon (upload-post.com rejects any ";")', () => {
     const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
     expect(fullCommand).not.toContain(';')
+  })
+
+  it('caps bitrate instead of using CRF — CRF has no size ceiling, and a real 9-scene/90s render at CRF23 exceeded Supabase Storage\'s upload size limit even after per-clip downscaling', () => {
+    const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
+    expect(fullCommand).toContain('-b:v 3500k')
+    expect(fullCommand).toContain('-maxrate 3500k')
+    expect(fullCommand).toContain('-bufsize 7000k')
+    expect(fullCommand).not.toContain('-crf')
   })
 })
 
@@ -134,6 +143,45 @@ describe('buildCaptionCommand', () => {
     expect(fullCommand).not.toContain('[vconcat]')
     expect(fullCommand).not.toContain('-filter_complex')
   })
+
+  it('caps bitrate instead of using CRF — this pass re-encodes the final render, so an uncapped CRF here could re-inflate an already size-bounded video-concat pass', () => {
+    const words = [{ text: 'hello', start: 0, end: 400 }]
+    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
+    expect(fullCommand).toContain('-b:v 3500k')
+    expect(fullCommand).toContain('-maxrate 3500k')
+    expect(fullCommand).toContain('-bufsize 7000k')
+    expect(fullCommand).not.toContain('-crf')
+  })
+})
+
+describe('buildScaleCommand', () => {
+  it('takes the clip URL as its sole input', () => {
+    const { files, outputExtension } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
+    expect(files).toEqual(['https://example.com/clip.mp4'])
+    expect(outputExtension).toBe('mp4')
+  })
+
+  it('scales to the exact given width/height and drops audio', () => {
+    const { fullCommand } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
+    expect(fullCommand).toContain('-vf "scale=1080:1920"')
+    expect(fullCommand).toContain('-an')
+  })
+
+  it('uses the bare {input} placeholder, not {input0} (single-file commands crash on the indexed form)', () => {
+    const { fullCommand } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
+    expect(fullCommand).toContain('-i {input}')
+    expect(fullCommand).not.toContain('{input0}')
+  })
+
+  it('sets -crf 23 explicitly — the same quality target libx264 already defaults to, not a reduction', () => {
+    const { fullCommand } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
+    expect(fullCommand).toContain('-crf 23')
+  })
+
+  it('never contains a semicolon', () => {
+    const { fullCommand } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
+    expect(fullCommand).not.toContain(';')
+  })
 })
 
 function mockFetch(response: Partial<Response> & { jsonBody?: unknown; textBody?: string; arrayBufferBody?: Uint8Array }) {
@@ -192,6 +240,24 @@ describe('UploadPostAVMerger', () => {
     expect(ref.providerRef).toBe('job-1m')
     const body = JSON.parse(capturedBody!)
     expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
+    expect(body.full_command).not.toContain(';')
+  })
+
+  it('submitScale() sends Apikey auth and the built scale command for the given clip/dimensions', async () => {
+    let capturedHeaders: Record<string, string> = {}
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedHeaders = init?.headers as Record<string, string>
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-scale' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitScale('https://example.com/clip.mp4', 1080, 1920)
+    expect(ref.providerRef).toBe('job-scale')
+    expect(capturedHeaders.Authorization).toBe('Apikey secret-key')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/clip.mp4'])
+    expect(body.full_command).toContain('scale=1080:1920')
     expect(body.full_command).not.toContain(';')
   })
 

@@ -358,6 +358,14 @@ export default function NewContentPage() {
         // straight to Flux Kontext's own aspectRatio param — supabase/
         // migrations/20260912120000.
         aspect_ratio:    aspect_ratio,
+        // video only — read by the worker (fetchJobInputs) and passed to
+        // generate_script as a target runtime for the script's total
+        // duration — supabase/migrations/20260914000000. Previously
+        // collected here but never persisted (only read by the retired n8n
+        // buildPayload branch), leaving the worker with no length signal at
+        // all — confirmed live 2026-09-13: a real run picked 90s of total
+        // runtime, nearly double this dropdown's own 52s ceiling.
+        video_duration_seconds: Number(video_duration),
       })
       .select()
       .single()

@@ -26,6 +26,12 @@ export interface VideoScriptJobInput {
    *  (see upsertVideoScriptDraft's doc comment). Never used to decide
    *  wording — scenes stay language-neutral regardless of this value. */
   jobLanguage: string
+  /** User-selected target total runtime, in seconds (supabase/migrations/
+   *  20260914000000) — one of the dashboard's fixed options (src/app/
+   *  dashboard/new/page.tsx's VIDEO_DURATIONS, 24-52s). A target passed to
+   *  the model, not a hard cap it's expected to hit exactly — see
+   *  composeVideoScriptSystemPrompt's own header for why. */
+  durationSeconds: number
 }
 
 export interface ScriptSceneOutput {
@@ -154,6 +160,7 @@ export async function runGenerateScript(
         systemPrompt: composeVideoScriptSystemPrompt(BRAND_PROFILE, {
           category: input.category,
           scriptType: input.scriptType,
+          targetDurationSeconds: input.durationSeconds,
         }),
         userPrompt:
           `Topic: ${input.topic}\nKeywords: ${input.keywords}\nCategory: ${input.category}\n` +

@@ -30,6 +30,7 @@ import type {
   TranscriptionPollResult,
   AVMerger,
   AVMergeResult,
+  SceneClipScaler,
 } from '../../adapters/types.js'
 import type { VideoStorageUploader } from '../../adapters/storage.js'
 
@@ -174,6 +175,13 @@ function makeMockTranscriptionService() {
   return { submit, poll } satisfies TranscriptionService
 }
 
+function makeMockScaler() {
+  let counter = 0
+  const submitScale = vi.fn(async () => ({ providerRef: `scale-${++counter}` }))
+  const poll = vi.fn(async (): Promise<AVMergeResult> => ({ status: 'ready', fileBuffer: Buffer.from(`fake-scaled-clip-${counter}`) }))
+  return { submitScale, poll } satisfies SceneClipScaler
+}
+
 function makeMockAVMerger() {
   let counter = 0
   const submitVideoConcat = vi.fn(async () => ({ providerRef: `video-concat-${++counter}` }))
@@ -264,6 +272,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     targetAudience: 'General public',
     scriptType: 'SOLUTION',
     jobLanguage: 'EN',
+    durationSeconds: 36,
   }
 
   /** Mirrors POST /video/approve's CAS-claim + track creation, done
@@ -369,6 +378,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const image = makeMockImageGenerator()
     const video = makeMockVideoGenerator()
     const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
 
     await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
     const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
@@ -377,8 +387,8 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     // Two ticks: each tick advances every scene by exactly one sub-step
     // (image, then clip) — matching the real polling model, where a scene's
     // clip generation only starts once its image is already ready.
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
 
     const { data: ready } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     expect(ready.status).toBe('ready')
@@ -408,11 +418,12 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const image = makeMockImageGenerator()
     const video = makeMockVideoGenerator()
     const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
 
     await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
     const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
 
     const { data: assets } = await client.from('content_visual_assets').select('*').eq('content_pipeline_id', pipeline.id)
     // The critical assertion: BOTH still produces exactly ONE character_ref
@@ -465,18 +476,19 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const image = makeMockImageGenerator()
     const video = makeMockVideoGenerator()
     const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
 
     await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
     const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     // Two ticks to reach real completion (image, then clip, per scene).
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
     const { data: ready } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     expect(ready.status).toBe('ready')
 
     // Third tick — genuinely a no-op now that everything already succeeded.
     await runGenerateCharacterRef(client, ready as PipelineRow, 'a reference prompt', image, uploader)
-    await runGenerateSceneVisual(client, ready as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, ready as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
 
     expect(image.submit).toHaveBeenCalledTimes(3) // character_ref + 2 scene images, not re-called
     expect(video.submit).toHaveBeenCalledTimes(2)
@@ -622,10 +634,11 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const image = makeMockImageGenerator()
     const video = makeMockVideoGenerator()
     const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
     await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
     const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
-    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
     const { data: visualsReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     expect(visualsReady.status).toBe('ready')
 
@@ -715,10 +728,11 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const image = makeMockImageGenerator()
     const video = makeMockVideoGenerator()
     const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
     await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
     let fresh = (await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()).data as PipelineRow
-    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader)
-    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
     const { data: readyGen1 } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     expect(readyGen1.status).toBe('ready')
 
@@ -731,10 +745,11 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
 
     const image2 = makeMockImageGenerator()
     const video2 = makeMockVideoGenerator()
+    const scaler2 = makeMockScaler()
     await runGenerateCharacterRef(client, { ...(readyGen1 as PipelineRow), current_generation: newGeneration, status: 'generating' }, 'a reference prompt', image2, uploader)
     fresh = (await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()).data as PipelineRow
-    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader)
-    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader, scaler2)
+    await runGenerateSceneVisual(client, fresh, 'https://example.com/mock-img-2.png', image2, video2, uploader, scaler2)
     const { data: readyGen2 } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
     expect(readyGen2.status).toBe('ready')
     expect(readyGen2.current_generation).toBe(2)

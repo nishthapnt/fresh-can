@@ -4,6 +4,7 @@ import {
   type AVMergeInput,
   type AVMergeJobRef,
   type AVMergeResult,
+  type SceneClipScaler,
 } from './types.js'
 
 interface CaptionCue {
@@ -93,7 +94,25 @@ export function buildVideoConcatCommand(scenes: AVMergeInput['scenes']): {
   // way again). Trading libx264's default 'medium' preset for 'ultrafast'
   // is the safest lever to claw back margin without touching the
   // filtergraph shape.
-  const fullCommand = `ffmpeg -y ${inputArgs} -filter_complex "${filterComplex}" -map "[vout]" -c:v libx264 -preset ultrafast {output}`
+  //
+  // -b:v/-maxrate/-bufsize (3500k), not -crf: CRF targets a QUALITY level,
+  // not a file size — it gives no ceiling on output size at all. A real
+  // 8-scene render's un-downscaled clips (native ~2MP, no bitrate cap
+  // anywhere) summed to 140.6MB and failed to re-upload past Supabase
+  // Storage's global upload size limit; buildScaleCommand's per-clip
+  // downscale (see that function's header) fixed THAT case, but a real
+  // 9-scene/90s script at CRF 23 — still within the 4-10 scene range
+  // composeVideoScriptSystemPrompt allows — hit the exact same failure
+  // again post-downscale (confirmed live 2026-09-13/14), because CRF's
+  // output size scales with content complexity as much as duration, not
+  // just pixel count. 3500kbps bounds size by DURATION instead: even the
+  // documented worst case (10 scenes x 10s = 100s) tops out at ~43.75MB,
+  // leaving headroom under Supabase's global limit (confirmed empirically
+  // at 50-52MB) for the AAC audio track this gets muxed with afterward.
+  // Empirically confirmed against real Supabase Storage responses: 50MB
+  // uploads succeed, 52MB fails with this exact "object exceeded the
+  // maximum allowed size" error.
+  const fullCommand = `ffmpeg -y ${inputArgs} -filter_complex "${filterComplex}" -map "[vout]" -c:v libx264 -preset ultrafast -b:v 3500k -maxrate 3500k -bufsize 7000k {output}`
 
   return { files, fullCommand, outputExtension: 'mp4' }
 }
@@ -193,7 +212,11 @@ export function buildCaptionCommand(
 
   // Same -preset ultrafast rationale as buildConcatCommand — this pass also
   // re-encodes the full video stream (drawtext forces it), just over one
-  // input instead of several.
+  // input instead of several. Same -b:v/-maxrate/-bufsize bitrate cap as
+  // buildVideoConcatCommand too, and for the same reason: this pass's
+  // OUTPUT is the final render uploaded to Supabase Storage, so a CRF-only
+  // re-encode here could re-inflate a video-concat pass that was correctly
+  // size-bounded going in.
   //
   // {input}, not {input0}: confirmed live 2026-09-12 that upload-post.com's
   // backend rejects a single-file full_command containing an indexed
@@ -204,12 +227,48 @@ export function buildCaptionCommand(
   // instead. Only relevant for exactly one file — buildConcatCommand's
   // multi-file {input0}/{input1}/... indexing is a different, working code
   // path on their side.
-  const fullCommand = `ffmpeg -y -i {input} -vf "${vf}" -c:v libx264 -preset ultrafast -c:a copy {output}`
+  const fullCommand = `ffmpeg -y -i {input} -vf "${vf}" -c:v libx264 -preset ultrafast -b:v 3500k -maxrate 3500k -bufsize 7000k -c:a copy {output}`
 
   return { files: [mergedVideoUrl], fullCommand, outputExtension: 'mp4' }
 }
 
-export class UploadPostAVMerger implements AVMerger {
+/**
+ * Builds the ffmpeg command for downscaling ONE scene clip to its aspect
+ * ratio's standard social-delivery resolution — 1080x1920 (9:16),
+ * 1080x1080 (1:1), or 1920x1080 (16:9), matched to whatever the job's
+ * content_jobs.aspect_ratio selected (worker/src/adapters/kie.ts's own
+ * aspectRatio param already requests this shape from Flux Kontext/Kling,
+ * but their native output can still land slightly above it — e.g. a real
+ * 9:16 clip came back at 1084x1912, and a 1:1 one at 1440x1440, both
+ * modestly over their ~2-megapixel-budget target). A single input, single
+ * linear `-vf scale=` chain, so — like buildCaptionCommand — it
+ * structurally can never need a ';' regardless of target size.
+ *
+ * {input}, not {input0}: same single-file rule buildCaptionCommand's
+ * header documents — confirmed live 2026-09-12 that upload-post.com's
+ * single-input code path rejects an indexed placeholder outright
+ * (ValueError, not a timeout). An EARLIER version of this same downscale
+ * step existed, used `{input0}`, and was removed after every attempt
+ * crashed on exactly that mismatch (worker/src/steps/video/
+ * generateSceneVisual.ts's history) — reintroducing it with the bare
+ * `{input}` this file's other single-input commands already use.
+ */
+export function buildScaleCommand(
+  videoUrl: string,
+  width: number,
+  height: number,
+): { files: string[]; fullCommand: string; outputExtension: string } {
+  // -an: KIE.ai's scene clips are generated with sound=false (no audio
+  // stream at all — see kie.ts) — dropping audio explicitly rather than
+  // assuming there's none to carry through. -crf 23: same "make the
+  // existing default explicit" reasoning as buildVideoConcatCommand — the
+  // downscale itself (fewer pixels in) is what actually shrinks the file;
+  // this isn't lowering the quality target.
+  const fullCommand = `ffmpeg -y -i {input} -vf "scale=${width}:${height}" -c:v libx264 -preset ultrafast -crf 23 -an {output}`
+  return { files: [videoUrl], fullCommand, outputExtension: 'mp4' }
+}
+
+export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
   constructor(
     private readonly apiKey: string,
     private readonly fetchImpl: typeof fetch = fetch,
@@ -236,6 +295,13 @@ export class UploadPostAVMerger implements AVMerger {
    *  list of fetchable URLs, same as every other input it takes) can see it. */
   async submitCaptionBurn(mergedVideoUrl: string, captionTimingData: unknown): Promise<AVMergeJobRef> {
     return this.submitCommand(buildCaptionCommand(mergedVideoUrl, captionTimingData))
+  }
+
+  /** Called from generateSceneVisual.ts, not renderLanguageTrack.ts — see
+   *  SceneClipScaler's header (types.ts) for why this is a separate
+   *  interface from AVMerger even though this same class implements both. */
+  async submitScale(videoUrl: string, width: number, height: number): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildScaleCommand(videoUrl, width, height))
   }
 
   private async submitCommand(command: {

@@ -86,13 +86,19 @@ interface JobInputs {
   // aspect-ratio param of its own; it inherits whatever reference image it
   // animates, so this one setting is enough for matching video clips too.
   aspectRatio: '9:16' | '1:1' | '16:9'
+  // video-only — user-selected per job (supabase/migrations/20260914000000),
+  // passed to generate_script as a target total runtime (VideoScriptJobInput.
+  // durationSeconds -> composeVideoScriptSystemPrompt). A target, not a hard
+  // cap — see that prompt's own header for why the script can run slightly
+  // short or long of this instead of truncating a scene's narration.
+  videoDurationSeconds: number
 }
 
 async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<JobInputs> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language, aspect_ratio',
+      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language, aspect_ratio, video_duration_seconds',
     )
     .eq('id', jobId)
     .single()
@@ -113,6 +119,7 @@ async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<Jo
     scriptType: (data.script_type as string | null) ?? null,
     jobLanguage: (data.language as string | null) ?? 'EN',
     aspectRatio: (data.aspect_ratio as '9:16' | '1:1' | '16:9' | null) ?? '9:16',
+    videoDurationSeconds: (data.video_duration_seconds as number | null) ?? 36,
   }
 }
 
@@ -177,6 +184,7 @@ async function tickPipelines(
   uploader: SupabasePhotoStorageUploader,
   videoGenerator: KieVideoGenerator,
   videoUploader: SupabaseVideoStorageUploader,
+  clipScaler: UploadPostAVMerger,
 ): Promise<void> {
   const { data: pipelines, error } = await client
     .from('content_pipelines')
@@ -318,6 +326,7 @@ async function tickPipelines(
             targetAudience: jobInputs.targetAudience,
             scriptType: jobInputs.scriptType ?? 'SOLUTION',
             jobLanguage: jobInputs.jobLanguage,
+            durationSeconds: jobInputs.videoDurationSeconds,
           }
           await runGenerateScript(client, pipeline, scriptInput, scriptGenerator)
         } else if (pipeline.status === 'approved' || pipeline.status === 'generating') {
@@ -364,6 +373,7 @@ async function tickPipelines(
                 imageGenerator,
                 videoGenerator,
                 videoUploader,
+                clipScaler,
                 5000,
                 jobInputs.aspectRatio,
               )
@@ -523,7 +533,16 @@ async function tick(
   transcriptionService: AssemblyAITranscriptionService,
   avMerger: UploadPostAVMerger,
 ): Promise<void> {
-  await tickPipelines(client, scriptGenerator, imageGenerator, nanoBananaGenerator, uploader, videoGenerator, videoUploader)
+  await tickPipelines(
+    client,
+    scriptGenerator,
+    imageGenerator,
+    nanoBananaGenerator,
+    uploader,
+    videoGenerator,
+    videoUploader,
+    avMerger,
+  )
   await tickTracks(client, scriptGenerator, voiceSynthesizer, transcriptionService, videoUploader, avMerger)
 }
 
