@@ -31,7 +31,6 @@ import type {
   PlatformType,
 } from '@/types/content'
 import { formatDateTime } from '@/lib/dateUtils'
-import { videoAspectClass } from '@/lib/aspectRatioClass'
 import {
   AlertCircle,
   ArrowUpDown,
@@ -406,9 +405,10 @@ function EmptyState({
 
 function LoadingSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
   const count  = type === 'blog' ? 6 : 8
-  // '9:16' is this app's default aspect ratio for new video jobs — the
-  // real per-item ratio isn't known yet at skeleton time.
-  const aspect = type === 'video' ? videoAspectClass('9:16') : type === 'image' ? 'aspect-square' : 'h-28'
+  // Video/image cards are always square now, regardless of the underlying
+  // clip's own aspect ratio — the preview crops to fit (object-cover)
+  // rather than the card stretching to match.
+  const aspect = type === 'video' || type === 'image' ? 'aspect-square' : 'h-28'
   const cols   = type === 'blog'
     ? 'sm:grid-cols-2 lg:grid-cols-3'
     : 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
@@ -506,26 +506,55 @@ function Badges({ isLatest, isNew }: { isLatest: boolean; isNew: boolean }) {
 }
 
 // ─── VideoCard ────────────────────────────────────────────────────────────────
+// `variants` holds this job's EN and/or FR final video — a BOTH-language job
+// has both, and a language toggle (below the title, both in the card body
+// and the view modal) switches which one this card/modal displays. Actions
+// (Watch/Post/Save/Delete) always act on whichever language is currently
+// selected. If only one language exists, no toggle is shown at all.
 
 function VideoCard({
-  item,
+  variants,
   isLatest,
   isNew,
   onDeleted,
 }: {
-  item: VideoLibraryItem
+  variants: Partial<Record<'EN' | 'FR', VideoLibraryItem>>
   isLatest: boolean
   isNew: boolean
   onDeleted: (id: string) => void
 }) {
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+
   const [viewOpen, setViewOpen] = useState(false)
   const [postOpen, setPostOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  if (!item) return null
+
   const rawDuration = item.output_data?.duration_sec
-const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
-  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}.mp4`
+  const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
+  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}-${item.language}.mp4`
+
+  const LanguagePicker = ({ className = '' }: { className?: string }) =>
+    available.length > 1 ? (
+      <div className={`inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 ${className}`}>
+        {available.map((l) => (
+          <button
+            key={l}
+            onClick={() => setSelected(l)}
+            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {l === 'EN' ? 'English' : 'Français'}
+          </button>
+        ))}
+      </div>
+    ) : null
 
   const handleDelete = async () => {
     setDeleting(true)
@@ -549,7 +578,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
     <>
       <Card className="overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md">
         <div
-          className={`group relative cursor-pointer overflow-hidden bg-black ${videoAspectClass(item.aspect_ratio)}`}
+          className="group relative aspect-square cursor-pointer overflow-hidden bg-black"
           onClick={() => setViewOpen(true)}
         >
           <video
@@ -574,6 +603,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
         <CardContent className="space-y-3 p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
+            <LanguagePicker className="mt-1.5" />
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
               <span>{item.category}</span>
               <span className="text-gray-300">·</span>
@@ -619,11 +649,12 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
       <Dialog open={viewOpen} onOpenChange={(v) => setViewOpen(v)}>
         <DialogContent className="sm:max-w-4xl gap-0 p-0 overflow-hidden">
           <div className="bg-black">
-            <video src={item.video_url} controls autoPlay playsInline className="w-full max-h-[72vh]" />
+            <video key={item.id} src={item.video_url} controls autoPlay playsInline className="w-full max-h-[72vh]" />
           </div>
           <div className="flex items-start justify-between gap-4 p-4">
             <div className="min-w-0 flex-1">
               <h3 className="font-semibold leading-snug text-gray-900">{item.topic}</h3>
+              <LanguagePicker className="mt-1.5" />
               <p className="mt-1 text-sm text-gray-500">
                 {item.category} · {item.language}{duration ? ` · ${duration}s` : ''}
               </p>
@@ -658,53 +689,6 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
         error={deleteError}
       />
     </>
-  )
-}
-// ─── VideoCardGroup ───────────────────────────────────────────────────────────
-// Wraps VideoCard. If a job has both an EN and FR video, shows a language
-// toggle and switches which one displays. If only one language exists for
-// that job, behaves exactly like a plain VideoCard — no toggle shown.
-
-function VideoCardGroup({
-  variants,
-  isLatest,
-  isNew,
-  onDeleted,
-}: {
-  variants: Partial<Record<'EN' | 'FR', VideoLibraryItem>>
-  isLatest: boolean
-  isNew: boolean
-  onDeleted: (id: string) => void
-}) {
-  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
-  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
-  const activeItem = variants[selected] ?? variants[available[0]]
-
-  if (!activeItem) return null
-
-  if (available.length <= 1) {
-    return <VideoCard item={activeItem} isLatest={isLatest} isNew={isNew} onDeleted={onDeleted} />
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex justify-center">
-        <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
-          {available.map((l) => (
-            <button
-              key={l}
-              onClick={() => setSelected(l)}
-              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {l === 'EN' ? 'English' : 'Français'}
-            </button>
-          ))}
-        </div>
-      </div>
-      <VideoCard item={activeItem} isLatest={isLatest} isNew={isNew} onDeleted={onDeleted} />
-    </div>
   )
 }
 
@@ -1379,7 +1363,7 @@ function VideoSection() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {grouped.map((g, i) => (
-            <VideoCardGroup
+            <VideoCard
               key={g.jobId}
               variants={g.variants}
               isLatest={i === 0 && sort === 'desc'}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -22,7 +22,6 @@ import type {
   BlogLibraryItem,
 } from '@/types/content'
 import { formatDateTime } from '@/lib/dateUtils'
-import { videoAspectClass } from '@/lib/aspectRatioClass'
 import {
   AlertCircle,
   BookOpen,
@@ -72,9 +71,10 @@ function MiniGridSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
         <div key={i} className="overflow-hidden rounded-xl border bg-white">
           <div
             className={`animate-pulse bg-gray-100 ${
-              // '9:16' is this app's default aspect ratio for new video jobs
-              // — the real per-item ratio isn't known yet at skeleton time.
-              type === 'video' ? videoAspectClass('9:16') : type === 'image' ? 'aspect-square' : 'h-24'
+              // Video/image cards are always square now, regardless of the
+              // underlying clip's own aspect ratio — the preview crops to
+              // fit (object-cover) rather than the card stretching to match.
+              type === 'video' || type === 'image' ? 'aspect-square' : 'h-24'
             }`}
           />
           <div className="space-y-1.5 p-3">
@@ -147,12 +147,21 @@ function SectionEmpty({
 }
 
 // ─── MiniVideoCard ────────────────────────────────────────────────────────────
+// `variants` holds this job's EN and/or FR final video (a BOTH-language job
+// has both). The collapsed card only ever shows one preview — no doubled
+// card, no extra grid space — and a language toggle appears inside the
+// modal opened on click, only when both languages actually exist.
 
-function MiniVideoCard({ item }: { item: VideoLibraryItem }) {
+function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', VideoLibraryItem>> }) {
   const [open, setOpen] = useState(false)
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+  if (!item) return null
+
   const rawDuration = item.output_data?.duration_sec
-const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
-  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}.mp4`
+  const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
+  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}-${item.language}.mp4`
 
   return (
     <>
@@ -160,7 +169,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
         className="group cursor-pointer overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md"
         onClick={() => setOpen(true)}
       >
-        <div className={`relative overflow-hidden bg-black ${videoAspectClass(item.aspect_ratio)}`}>
+        <div className="relative aspect-square overflow-hidden bg-black">
           <video
             src={item.video_url}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
@@ -172,6 +181,11 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
               <Play className="ml-0.5 h-4 w-4 text-gray-900" />
             </div>
           </div>
+          {available.length > 1 && (
+            <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] font-medium text-white">
+              EN/FR
+            </span>
+          )}
           {duration && (
             <span className="absolute bottom-1.5 right-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] font-medium text-white">
               {duration}s
@@ -192,6 +206,7 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
         <DialogContent className="w-[95vw] gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <div className="bg-black">
             <video
+              key={item.id}
               src={item.video_url}
               controls
               autoPlay
@@ -202,7 +217,22 @@ const duration = rawDuration ? Math.round(rawDuration * 10) / 10 : rawDuration
           <div className="flex items-start justify-between gap-3 p-4">
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold text-gray-900 sm:text-base">{item.topic}</h3>
-              <p className="mt-0.5 text-xs text-gray-500 sm:text-sm">
+              {available.length > 1 && (
+                <div className="mt-1.5 inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                  {available.map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setSelected(l)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {l === 'EN' ? 'English' : 'Français'}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1.5 text-xs text-gray-500 sm:text-sm">
                 {item.category} · {item.language}{duration ? ` · ${duration}s` : ''}
               </p>
             </div>
@@ -398,7 +428,11 @@ export default function DashboardPage() {
         getBlogLibrary(),
       ])
       setKpi(kpiData)
-      setVideos(vids.slice(0, 4))
+      // Grouped by job_id below (videoGroups) so a BOTH-language job renders
+      // as one card with a toggle instead of two — sliced to the newest 4
+      // there, not here, since slicing raw EN/FR rows to 4 first could grab
+      // both rows of 2 jobs and leave less than 4 cards to show.
+      setVideos(vids)
       setImages(imgs.slice(0, 4))
       setBlogs(blgs.slice(0, 4))
     } catch (err) {
@@ -410,7 +444,26 @@ export default function DashboardPage() {
 
   useEffect(() => { load() }, [load])
 
-  const hasAnyContent = videos.length > 0 || images.length > 0 || blogs.length > 0
+  // Groups videos by job_id, so a BOTH-language job's EN and FR rows become
+  // one card (MiniVideoCardGroup) instead of two separate ones — same
+  // convention as dashboard/library/LibraryContent.tsx's VideoCardGroup.
+  // Sliced to the newest 4 GROUPS here (not raw rows) — see the load()
+  // comment above for why the order matters.
+  const videoGroups = useMemo(() => {
+    const map = new Map<string, Partial<Record<'EN' | 'FR', VideoLibraryItem>>>()
+    const order: string[] = []
+    for (const item of videos) {
+      if (!map.has(item.job_id)) {
+        map.set(item.job_id, {})
+        order.push(item.job_id)
+      }
+      const langKey = item.language === 'FR' ? 'FR' : 'EN'
+      map.get(item.job_id)![langKey] = item
+    }
+    return order.slice(0, 4).map((jobId) => ({ jobId, variants: map.get(jobId)! }))
+  }, [videos])
+
+  const hasAnyContent = videoGroups.length > 0 || images.length > 0 || blogs.length > 0
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -494,20 +547,20 @@ export default function DashboardPage() {
           <SectionHeader
             icon={FileVideo}
             title="Recent Videos"
-            count={videos.length}
+            count={videoGroups.length}
             color="bg-blue-50 text-blue-600"
             onViewAll={() => router.push('/dashboard/library')}
           />
           {loading ? (
             <MiniGridSkeleton type="video" />
-          ) : videos.length === 0 ? (
+          ) : videoGroups.length === 0 ? (
             <SectionEmpty
               message="No videos yet — approve a script to get started"
               onAction={() => router.push('/dashboard/new')}
             />
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-              {videos.map((v) => <MiniVideoCard key={v.id} item={v} />)}
+              {videoGroups.map((g) => <MiniVideoCard key={g.jobId} variants={g.variants} />)}
             </div>
           )}
         </div>

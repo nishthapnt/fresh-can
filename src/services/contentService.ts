@@ -170,10 +170,10 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
       file_url,
       output_data,
       created_at,
+      language,
       content_jobs!inner (
         topic,
         category,
-        language,
         status,
         aspect_ratio
       )
@@ -193,7 +193,15 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
     completed_at: row.created_at as string,
     topic:        (row.content_jobs as { topic: string })?.topic ?? 'Untitled',
     category:     (row.content_jobs as { category: string })?.category ?? '',
-    language:     (row.content_jobs as { language: string })?.language ?? '',
+    // This row's OWN language ('EN'/'FR', worker/src/db.ts's
+    // upsertVideoGeneratedContent) — not content_jobs.language, which is
+    // the job's requested intent and is literally the string 'BOTH' for a
+    // two-language job, identical on both of its rows. Grouping EN/FR into
+    // one toggled card (dashboard/page.tsx's MiniVideoCardGroup, library/
+    // LibraryContent.tsx's VideoCardGroup) keys off this field, so reading
+    // the job-level value here silently collapsed both rows into a single
+    // 'EN' bucket and dropped the FR video from grouping entirely.
+    language:     (row.language as string | null) ?? (row.content_jobs as { language?: string })?.language ?? '',
     status:       (row.content_jobs as { status: string })?.status ?? '',
     // Older jobs predate this column (supabase/migrations/20260912120000) —
     // '9:16' is also this app's default going forward, so it's the right
