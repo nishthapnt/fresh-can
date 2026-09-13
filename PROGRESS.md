@@ -7,9 +7,9 @@
 | Field | Value |
 |-------|-------|
 | **Project** | Fresh-CAN Content Automation Dashboard |
-| **Last Updated** | 2026-09-09 |
-| **Phase** | ✅ Blog + Image Pipeline Migration Complete — Video still on n8n |
-| **Progress** | █████████░ 90% |
+| **Last Updated** | 2026-09-14 |
+| **Phase** | ✅ Blog + Image + Video Pipeline Migration Complete — only social posting (+ image clarifying questions) remain on n8n |
+| **Progress** | ██████████ 95% |
 | **Blockers** | None. Note: `worker/` must be started manually (`npm run dev` inside `worker/`) — nothing runs it automatically. |
 
 ---
@@ -18,13 +18,13 @@
 
 - [x] Phase 1 — Project Setup (Next.js, Supabase, ShadCN, Tailwind)
 - [x] Phase 2 — Core pages built (dashboard, new, jobs, social, library)
-- [x] Phase 3 — n8n webhook integration wired (video/social only as of Phase 8)
+- [x] Phase 3 — n8n webhook integration wired (social + image_questions only as of Phase 9 — see below)
 - [x] Phase 4 — UI upgrade (skeletons, KPI trends, TopBar, empty/error states)
 - [ ] Phase 5 — Supabase tables confirmed + anon key connected
 - [ ] Phase 6 — End-to-end test with real n8n flows
 - [ ] Phase 7 — Deploy to production
 - [x] Phase 8 — Blog + image_post migrated off n8n onto `worker/` pipeline architecture (Session 5, 2026-09-09) — see `docs/IMPLEMENTATION_PLAN.md`, `ARCHITECTURE.MD`
-- [ ] Phase 9 — Video migration off n8n (not started — largest remaining migration: multi-language audio/captions/character-refs/FFmpeg render chain)
+- [x] Phase 9 — Video migration off n8n onto `worker/` pipeline architecture (Session 6, 2026-09-14) — script + character-ref + per-scene visuals (shared once per job) plus per-language narration/captions/render, live-verified end-to-end (real EN+FR run, both languages rendered successfully)
 
 ---
 
@@ -218,3 +218,55 @@
 - Backport permanent Supabase Storage upload to blog's hero/inline images (currently on KIE.ai's ~14-day ephemeral host)
 - Surface "stale" track state in the editor UI — after a visual regenerate, nothing currently tells the user a new image is waiting on re-approval
 - Video migration (Phase 9) — largest remaining piece, not started
+
+---
+
+### Session 6 — 2026-09-14
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Video pipeline — end-to-end live test, 2 real bugs found and fixed*
+- Ran a real, full end-to-end video generation (both EN and FR) against live provider APIs (OpenAI, KIE.ai, ElevenLabs, AssemblyAI, upload-post.com) — this is the first time video's worker pipeline (already built pre-session) was actually exercised start to finish.
+- **Bug 1 — scene clips exceeded Supabase Storage's upload size limit.** Root cause was two-fold: (a) a per-scene downscale pass had existed once, been removed on a wrong diagnosis (looked like a slow provider timeout; was actually an instant crash from submitting `{input0}` where the single-file API needs the bare `{input}`, masked by a separate case-sensitive status-matching bug in the poll code) — re-added with both underlying bugs fixed; (b) even after downscaling individual clips, the final concatenated render still used uncapped `-crf 23` (a quality target, not a size ceiling) and a real full-length script still exceeded the limit — replaced with an explicit bitrate cap (`-b:v/-maxrate/-bufsize 3500k`) on both re-encoding passes, sized against the empirically-confirmed real limit (~50-52MB, found by binary-searching real uploads).
+- **Bug 2 — the dashboard's video-duration selection never reached the script prompt.** `content_jobs` had no column for it, the job-creation insert never persisted it, and the script-generation prompt had no real target at all — the model was free to invent any runtime (a real run picked 90s against a 24-52s UI). Fixed end-to-end: new `video_duration_seconds` column (migration `20260914000000_video_duration_field.sql`), persisted on job creation, read by the worker, passed into the script prompt as an explicit target — worded so the model can run slightly short/long rather than truncate a scene's narration to force an exact match.
+- Also raised `VIDEO_POLL_TIMEOUT_MS` 180s→360s after live scene generations routinely exceeded the old window and burned through retry attempts (one scene exhausted all 5 retries and hard-failed the pipeline before this fix).
+- Re-ran the full EN+FR test after all four fixes — completed cleanly, both languages rendered successfully, well under the storage size limit.
+
+*Dashboard UI*
+- Grouped EN/FR video library items by `job_id` on both the dashboard home page and the library grid, so a BOTH-language job shows one card with an English/Français toggle (placed below the title, inside the card/modal) instead of two duplicate cards taking twice the grid space.
+- Found + fixed a real bug this depended on: `getVideoLibrary()` read `content_jobs.language` (the job's requested intent — literally `'BOTH'` on every row) instead of `generated_content.language` (each row's own real EN/FR value), which silently collapsed both languages into one bucket during grouping and would have dropped the FR video entirely.
+- Made video preview thumbnails a fixed square crop instead of following the clip's stored aspect ratio (a 9:16 video previously rendered as a tall, elongated card next to square image cards). Removed the now-unused `src/lib/aspectRatioClass.ts`.
+- Removed a duplicate Twitter/X platform checkbox in Social Approval (`PlatformSelector.tsx` listed them as two independently-selectable platforms since the rebrand) — collapsed to one option, matching the library page's own picker, which already had this right.
+
+*Audit — confirmed several real, live issues not yet fixed*
+- Social posting can get permanently stuck at `status='posting'` with no error, timeout, or retry surfaced anywhere in the UI — confirmed via 2 real rows stuck since 2026-07-01 with zero matching `social_platform_logs` rows. Only 1 post total has ever reached `'posted'` out of 558 jobs.
+- `WaitingCard`'s progress bar (shown before a video pipeline row exists) is a fake wall-clock timer (`elapsed/90*85`, capped at 85%) that never checks real backend status — unlike `GlobalProgressBar` (fixed in an earlier session), which genuinely polls `content_pipelines`/`content_language_tracks`.
+- RLS is defined but not actually enabled on `content_jobs`/`generated_content` — the anon key shipped to every browser has effectively unrestricted read/write on both tables today (previously noted in `docs/IMPLEMENTATION_PLAN.md` Phase 1, confirmed still true).
+- Corrected stale comments/docs that had drifted out of sync with reality: a "M1 scope, character_ref not enqueued yet" comment in `video/approve/route.ts` (character-ref has been wired up and live since M2), a dangling reference to the now-deleted `aspectRatioClass.ts`, and this file's/`TASKS.md`'s/`docs/IMPLEMENTATION_PLAN.md`'s Phase 9 video-migration status (all said "not started"/"Deferred").
+
+**📁 Files Changed**
+- `worker/src/adapters/{avMerger,types}.ts` (+`.test.ts`) — `SceneClipScaler`/`buildScaleCommand`, bitrate cap on concat/caption passes
+- `worker/src/steps/video/generateSceneVisual.ts` — scaler wiring, raised poll timeout
+- `worker/src/steps/video/generateScript.ts`, `worker/src/prompts/core/composeText.ts` — duration propagation into the script prompt
+- `worker/src/index.ts` — `fetchJobInputs` reads `video_duration_seconds`
+- `worker/src/steps/video/videoPipeline.e2e.test.ts` — updated call sites for new params
+- `supabase/migrations/20260914000000_video_duration_field.sql` (new)
+- `src/app/dashboard/new/page.tsx` — persists `video_duration_seconds` on job creation
+- `src/app/dashboard/page.tsx`, `src/app/dashboard/library/LibraryContent.tsx` — EN/FR card grouping + toggle, square thumbnails
+- `src/services/contentService.ts` — `getVideoLibrary()` language field fix
+- `src/lib/aspectRatioClass.ts` (deleted — no longer used)
+- `src/components/PlatformSelector.tsx`, `src/types/content.ts` — Twitter/X dedup
+- `src/app/api/jobs/[jobId]/video/approve/route.ts` — stale comment fix
+
+**💡 Decisions Made**
+- Bitrate-cap the two full-video re-encoding passes rather than tighten CRF further — CRF has no size ceiling by design (it tracks perceptual quality, not bytes), so any sufficiently long/complex script could always find a way back over the storage limit; a bitrate cap ties size to duration, which is bounded by the app's own scene-count/length rules.
+- Duration is passed to the script prompt as a target, not a hard cap, and the model is explicitly told it's fine to run short/long rather than truncate narration — avoids trading one bug (ignored duration) for another (awkwardly cut-off videos).
+- Committed as 3 separate commits (video pipeline fixes; dashboard card grouping + language fix + square crop; Twitter/X dedup) rather than one, since they're independent, separately-revertable concerns.
+
+**⭐ Pick Up Next Session**
+- Fix social posting getting permanently stuck at `status='posting'` — needs either a timeout/retry mechanism or at minimum a visible failure state instead of silent "No platform activity yet"
+- Fix `WaitingCard`'s fake progress timer to poll real status the same way `GlobalProgressBar` does
+- Enable RLS on `content_jobs`/`generated_content` (carefully — confirm no existing anon-key read path breaks first)
+- Everything still open from Session 5 (KIE.ai negative-prompt investigation, blog e2e test flakiness, blog image permanent storage backport, stale-track UI indicator) remains open

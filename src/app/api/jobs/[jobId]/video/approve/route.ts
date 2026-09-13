@@ -32,9 +32,13 @@ const UNIQUE_VIOLATION = '23505'
 // those types have no pre-generation approval gate. This is the ONLY place
 // video's language tracks get created; the worker does not create them.
 //
-// M1 scope: this route only performs the state transition + track creation.
-// It does not yet enqueue generate_character_ref (M2) — a track created
-// here simply sits at 'waiting_on_shared' until that step exists.
+// This route only performs the state transition + track creation — it
+// does not itself enqueue generate_character_ref. A track created here
+// sits at 'waiting_on_shared' until the worker's own poll loop picks the
+// now-'approved' pipeline up and runs generate_character_ref, then
+// generate_scene_visual, on its own (worker/src/index.ts, worker/src/
+// steps/video/{generateCharacterRef,generateSceneVisual}.ts) — both fully
+// built and live-verified end-to-end as of 2026-09-14.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> },

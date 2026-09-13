@@ -57,9 +57,12 @@ const SCALE_POLL_INTERVAL_MS = 5000
 const SCALE_POLL_TIMEOUT_MS = 3 * 60_000
 
 // Standard delivery resolution per aspect ratio — what TikTok/Reels/Shorts
-// (and this app's own preview players, src/lib/aspectRatioClass.ts) all
-// treat as the real display size regardless of how many more pixels a
-// generated clip happens to natively carry.
+// (and this app's own video playback modals — dashboard/page.tsx's and
+// library/LibraryContent.tsx's "Watch" dialogs, which play at the clip's
+// real aspect ratio; their grid-card thumbnails crop to a fixed square
+// instead and don't factor into this) treat as the real display size
+// regardless of how many more pixels a generated clip happens to natively
+// carry.
 const SCALE_TARGETS: Record<'9:16' | '1:1' | '16:9', { width: number; height: number }> = {
   '9:16': { width: 1080, height: 1920 },
   '1:1': { width: 1080, height: 1080 },

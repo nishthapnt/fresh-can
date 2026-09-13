@@ -1,6 +1,8 @@
 # Implementation Plan
 
-Status values: Pending · In Progress · Blocked · Deferred · Completed. Nothing has been implemented yet — every item below starts Pending.
+Status values: Pending · In Progress · Blocked · Deferred · Completed.
+
+**This document is a historical planning snapshot, not a live status tracker** — it was written before any of Phase 1+ existed and was never updated once work moved past Blog's M4 (2026-09-14 note). Blog, Image, and Video have all since been fully built and cut over off n8n — see `PROGRESS.md`'s session log for what actually shipped and when. Individual status cells below are corrected where they were flatly wrong; the surrounding prose is left as the historical record it is.
 
 ## Phase 0 — Isolated hotfix
 
@@ -84,10 +86,12 @@ Shared (pipeline-scoped, once regardless of EN/FR/BOTH): `generate_outline` → 
 | M2 | Single-language (EN) async generation, end-to-end, worker calling OpenAI for outline+copy | **Completed (mocked provider)** — e2e-tested against real DB; real OpenAI call still needs `OPENAI_API_KEY` |
 | M3 | Shared hero/inline image generation + reuse | **Completed (mocked provider)** — 2-item fan-in, per-asset retry/backoff, e2e-tested; real KIE.ai call still needs a key and un-verified endpoint shape |
 | M4 | Second language track / BOTH — two independent tracks, never a literal `'BOTH'` value | **Completed** — verified live via the actual API route, not just unit tests |
-| M5 | Draft editor wired to new backend, reusing existing `BlogTabContent` UI | Pending |
-| M6 | Per-language approval | Pending — route scaffolded (`tracks/[lang]/approve/`), handler not written |
-| M7 | Failure, retry, and regeneration (visuals-only / copy-only / full) | Pending — route scaffolded (`tracks/[lang]/retry/`, `regenerate/`), handlers not written |
-| M8 | Library cutover; remove the old synchronous trigger-route blog path | Blocked on Phase 1 migration |
+| M5 | Draft editor wired to new backend, reusing existing `BlogTabContent` UI | **Completed** (Session 5, 2026-09-09) |
+| M6 | Per-language approval | **Completed** (Session 5, 2026-09-09) |
+| M7 | Failure, retry, and regeneration (visuals-only / copy-only / full) | **Completed** (Session 5, 2026-09-09) — real copy-only regen live-verified |
+| M8 | Library cutover; remove the old synchronous trigger-route blog path | **Completed** (Session 5, 2026-09-09) — old blog/image_post n8n paths structurally removed, not just unused |
+
+**Note (2026-09-14):** the M5-M8 rows above sat as "Pending"/"Blocked" for a long time after they actually shipped — this table was never updated once work moved past M4. Treat `PROGRESS.md`'s session log as the current source of truth for status going forward; this file predates Blog's full build-out and was never maintained as a living document past that point.
 
 ### M0 detail (completed)
 
@@ -105,8 +109,10 @@ New `worker/` package (own `package.json`/`tsconfig.json`/Vitest config, deploya
 
 | Phase | Status |
 |---|---|
-| Image migration | Deferred |
-| Video migration | Deferred |
+| Image migration | **Completed** (Session 5, 2026-09-09) — built from scratch on this same architecture, live-verified, n8n path removed |
+| Video migration | **Completed** (Session 6, 2026-09-14) — script/character-ref/per-scene-visuals shared once per job, per-language narration/captions/render, live-verified end-to-end (real EN+FR run) |
+
+This plan was never expanded with Image/Video-specific detail the way Phase 2 covers Blog (see `ARCHITECTURE.MD`/`docs/DATABASE_DESIGN.md` for the target shape both were built against instead, and `PROGRESS.md`'s Session 5/6 entries for what actually shipped).
 
 ## Explicitly not in scope for this plan
 - No migration SQL is written until the Phase 1 migration itself is reviewed and approved separately.

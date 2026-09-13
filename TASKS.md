@@ -8,7 +8,9 @@
 - [ ] Stabilize `worker/src/steps/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness)
 - [ ] Backport permanent Supabase Storage upload (`fc-image-posts` pattern) to blog's hero/inline images
 - [ ] Surface "stale" track state in the job detail UI after a visual regenerate (currently silent — user must know to re-click Approve)
-- [ ] Video migration off n8n (Phase 9 — largest remaining piece, not started)
+- [ ] Fix social posting getting permanently stuck at status='posting' with no error/timeout/retry surfaced — confirmed live via 2 real stuck rows since 2026-07-01 (Session 6, 2026-09-14)
+- [ ] `WaitingCard`'s progress bar (`src/app/dashboard/jobs/[job_id]/page.tsx`) is a fake wall-clock timer (`elapsed/90*85`, capped 85%) that never checks real backend status — unlike `GlobalProgressBar`, which was fixed to poll real pipeline/track state (Session 6, 2026-09-14)
+- [ ] Enable RLS on `content_jobs`/`generated_content` (defined but not actually enforced — anon key has effectively unrestricted read/write on both today)
 - [ ] Deploy to Vercel (or chosen host)
 
 ---
@@ -58,13 +60,14 @@
 - [ ] Seed dev data for testing
 
 ### 🔗 Integrations
-- [x] n8n webhooks fire on form submit — now video/social only; blog/image_post moved to `worker/` (Session 5, 2026-09-09)
-- [x] n8n callback API receives events and updates DB (video/social)
+- [x] n8n webhooks fire on form submit — now social + image_questions only; blog/image_post/video all moved to `worker/` (Session 5 2026-09-09 for blog/image_post; Session 6 2026-09-14 for video)
+- [x] n8n callback API receives events and updates DB (social)
 - [x] Supabase Realtime subscribed on job detail page
 - [x] Blog pipeline fully migrated off n8n onto `worker/` (Session 5, 2026-09-09)
 - [x] Image_post pipeline fully migrated off n8n onto `worker/` (Session 5, 2026-09-09)
-- [ ] Verify n8n webhook URLs are live and responding (video/social)
-- [ ] Test social platform posting via n8n
+- [x] Video pipeline fully migrated off n8n onto `worker/` (Session 6, 2026-09-14) — script, character-ref, per-scene visuals, per-language narration/captions/render all live-verified end-to-end (EN+FR)
+- [ ] Verify n8n webhook URLs are live and responding (social, image_questions)
+- [ ] Test social platform posting via n8n — confirmed BROKEN, not just untested: 2 `social_posts` rows stuck at status='posting' since 2026-07-01 with zero `social_platform_logs` rows and no error surfaced in the UI; only 1 post total has ever reached 'posted' out of 558 jobs
 
 ### 🧪 Testing
 - [ ] Manual QA pass on full flow
@@ -93,6 +96,9 @@
 - [x] Blog pipeline rebuilt on `worker/` architecture, off n8n — routes, worker steps, copy-only regeneration, live-verified EN/FR/BOTH (Session 5, 2026-09-09)
 - [x] Image_post pipeline built on the same architecture from scratch — routes, worker steps, permanent storage, context (location/scene notes/Q&A) wiring, live-verified (Session 5, 2026-09-09)
 - [x] Full n8n cutover for blog + image_post — old webhook paths structurally removed, not just unused (Session 5, 2026-09-09)
+- [x] Video pipeline built on `worker/` architecture, off n8n — script/character-ref/per-scene-visuals shared once per job, per-language narration/captions/render; found + fixed live during end-to-end testing: scene clips exceeding Supabase's upload size limit (per-clip downscale + bitrate cap instead of uncapped CRF), KIE.ai video-poll timeout too short (180s→360s), and the dashboard's video-duration selection never reaching the script prompt (Session 6, 2026-09-14)
+- [x] Dashboard: EN/FR video jobs shown as one card with a language toggle instead of two duplicate cards, on both the dashboard home page and the library grid; fixed an underlying bug where the library's own video query read the job's requested language instead of each row's real language, which silently dropped one language from grouping (Session 6, 2026-09-14)
+- [x] Removed duplicate Twitter/X platform checkbox in social approval (Session 6, 2026-09-14)
 
 ---
 
