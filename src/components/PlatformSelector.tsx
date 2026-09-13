@@ -6,8 +6,7 @@ import type { PlatformType } from '@/types/content'
 const platforms: { id: PlatformType; label: string }[] = [
   { id: 'instagram', label: 'Instagram' },
   { id: 'facebook', label: 'Facebook' },
-  { id: 'twitter', label: 'Twitter' },
-  { id: 'x', label: 'X (formerly Twitter)' },
+  { id: 'twitter', label: 'X / Twitter' },
 ]
 
 interface PlatformSelectorProps {

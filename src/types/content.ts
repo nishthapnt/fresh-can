@@ -17,7 +17,7 @@ export type SocialStatus =
 
 export type ContentType = 'image_post' | 'video' | 'blog'
 
-export type PlatformType = 'instagram' | 'facebook' | 'twitter' | 'x'
+export type PlatformType = 'instagram' | 'facebook' | 'twitter'
 
 export type Language = 'EN' | 'FR' | 'BOTH'
 
