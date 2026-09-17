@@ -80,8 +80,8 @@ NEXT_PUBLIC_SUPABASE_URL=https://jbrktjnscnzmhwupojiu.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase → Settings → API>
 SUPABASE_SERVICE_ROLE_KEY=<from Supabase → Settings → API>
 N8N_SOCIAL_WEBHOOK=<n8n social webhook>
-N8N_IMAGE_QUESTIONS_WEBHOOK=<n8n image_questions webhook — still used, see below>
-# Blog + image_post + video generation — no n8n webhook, these run on worker/ instead
+# Blog + image_post + video generation, and the image_post clarifying-questions
+# step — no n8n webhook, these run on worker/ (or OpenAI direct) instead
 OPENAI_API_KEY=<from platform.openai.com>
 KIE_API_KEY=<from kie.ai>
 ELEVENLABS_API_KEY=<from elevenlabs.io — video narration>
@@ -113,13 +113,15 @@ UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render>
 
 ---
 
-## 🌐 N8N WEBHOOK URLS (social only — blog, image_post, and video generation moved off n8n)
+## 🌐 N8N WEBHOOK URLS (social only — everything else has moved off n8n)
 
 | Type | URL |
 |------|-----|
 | Social posting | `N8N_SOCIAL_WEBHOOK` |
-| Image clarifying questions (`image_questions`) | still via n8n — no worker equivalent, unrelated to generation |
 | Callback (inbound, social) | `POST /api/webhooks/n8n-callback` |
+
+Image clarifying questions (`image_questions`) moved off n8n too — now
+`POST /api/jobs/[jobId]/image/questions` (OpenAI direct, see below).
 
 ## 🤖 BLOG + IMAGE_POST + VIDEO PIPELINE (no n8n)
 

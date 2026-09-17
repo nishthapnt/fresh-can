@@ -5,6 +5,7 @@ import {
   type ImageJobRef,
   type ImagePollResult,
 } from './types.js'
+import { kieSubmitLimiter } from '../lib/kieRateLimiter.js'
 
 /**
  * KIE.ai `nano-banana-2` — a different underlying model than Flux Kontext,
@@ -26,6 +27,7 @@ export class NanoBananaImageGenerator implements ImageGenerator {
   ) {}
 
   async submit(input: ImageGenerationInput): Promise<ImageJobRef> {
+    await kieSubmitLimiter.acquire()
     const res = await this.fetchImpl(`${this.baseUrl}/api/v1/jobs/createTask`, {
       method: 'POST',
       headers: {

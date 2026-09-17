@@ -40,3 +40,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local scratch / one-off debug scripts (session cookies, manual test runs)
+/cookies.txt
+/resume_watch.mjs
+/run_full_video_test.mjs
+/run_full_video_test2.mjs
+/watch_test_job.mjs
+/verify_parallel_video_test_tmp.mjs
+/approve_and_watch_tmp.mjs
+
+# local Supabase CLI cache
+/supabase/.temp/

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { DEFAULT_VOICE_ID } from '@/lib/videoVoices'
 
 export type ContentType = 'video' | 'image_post' | 'blog'
 export type ScriptType  = 'SOLUTION' | 'COMMUNITY'
@@ -38,6 +39,12 @@ interface FormFields {
   image_style:     ImageStyle
   content_angle:   ContentAngle
   aspect_ratio:    AspectRatio
+  // video only. ElevenLabs voice_id for each language's narration — see
+  // src/lib/videoVoices.ts's curated list. Defaults to the voice already in
+  // use before this was user-selectable, so an unedited job's narration
+  // never changes.
+  voice_id_en:     string
+  voice_id_fr:     string
 }
 
 interface GenState {
@@ -70,6 +77,8 @@ const FORM_DEFAULTS: FormFields = {
   image_style:     'photo',
   content_angle:   'auto',
   aspect_ratio:    '9:16',
+  voice_id_en:     DEFAULT_VOICE_ID.EN,
+  voice_id_fr:     DEFAULT_VOICE_ID.FR,
 }
 
 const GEN_DEFAULTS: GenState = {
@@ -85,7 +94,7 @@ function pickPersisted(s: NewContentStore): FormFields & GenState {
     video_duration: s.video_duration, language: s.language,
     content_types: s.content_types, province: s.province, city: s.city,
     scene_notes: s.scene_notes, image_style: s.image_style, content_angle: s.content_angle,
-    aspect_ratio: s.aspect_ratio,
+    aspect_ratio: s.aspect_ratio, voice_id_en: s.voice_id_en, voice_id_fr: s.voice_id_fr,
     status: s.status, pendingJobId: s.pendingJobId, generatedAt: s.generatedAt,
   }
 }

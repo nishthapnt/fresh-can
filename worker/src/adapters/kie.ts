@@ -9,6 +9,7 @@ import {
   type VideoJobRef,
   type VideoPollResult,
 } from './types.js'
+import { kieSubmitLimiter } from '../lib/kieRateLimiter.js'
 
 /**
  * KIE.ai image generation — Flux Kontext submit + poll, verified against the
@@ -25,6 +26,7 @@ export class KieImageGenerator implements ImageGenerator {
   ) {}
 
   async submit(input: ImageGenerationInput): Promise<ImageJobRef> {
+    await kieSubmitLimiter.acquire()
     const res = await this.fetchImpl(`${this.baseUrl}/api/v1/flux/kontext/generate`, {
       method: 'POST',
       headers: {
@@ -109,6 +111,7 @@ export class KieVideoGenerator implements VideoGenerator {
   ) {}
 
   async submit(input: VideoGenerationInput): Promise<VideoJobRef> {
+    await kieSubmitLimiter.acquire()
     const res = await this.fetchImpl(`${this.baseUrl}/api/v1/jobs/createTask`, {
       method: 'POST',
       headers: {

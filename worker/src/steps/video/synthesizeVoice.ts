@@ -42,6 +42,12 @@ export async function runSynthesizeVoice(
   jobId: string,
   voiceSynthesizer: VoiceSynthesizer,
   uploader: VideoStorageUploader,
+  // User-selected per job (supabase/migrations/20260915000000,
+  // content_jobs.voice_id_en/voice_id_fr) — overrides the fixed brand
+  // default when present. Undefined/null falls back to
+  // BRAND_PROFILE.videoVoiceIds, preserving today's behavior for any
+  // caller (e.g. tests) that doesn't pass one.
+  voiceIdOverride?: string | null,
   backoffBaseDelayMs = 5000,
 ): Promise<{ ran: boolean }> {
   if (track.status !== 'generating') return { ran: false }
@@ -50,7 +56,7 @@ export async function runSynthesizeVoice(
   const localizeReady = await hasSucceededStep(client, { contentLanguageTrackId: track.id }, 'localize_script', generation)
   if (!localizeReady) return { ran: false }
 
-  const voiceId = BRAND_PROFILE.videoVoiceIds?.[track.language]
+  const voiceId = voiceIdOverride ?? BRAND_PROFILE.videoVoiceIds?.[track.language]
 
   const scenes = await getVideoScenes(client, contentPipelineId)
   const audioRows = await getVideoSceneAudioRows(client, track.id, generation)
@@ -79,7 +85,7 @@ export async function runSynthesizeVoice(
     anyRan = true
 
     if (!voiceId) {
-      const message = `No ElevenLabs voice id configured for language "${track.language}" — see BRAND_PROFILE.videoVoiceIds`
+      const message = `No ElevenLabs voice id configured for language "${track.language}" — see content_jobs.voice_id_en/voice_id_fr or BRAND_PROFILE.videoVoiceIds`
       await recordStepAttempt(client, {
         contentLanguageTrackId: track.id,
         stepName,

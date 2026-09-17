@@ -7,7 +7,26 @@ export class ProviderCallError extends Error {
     public readonly httpStatus: number | null,
     public readonly detail: string,
   ) {
-    super(`${provider} call failed (status ${httpStatus ?? 'n/a'}): ${detail}`)
+    // `detail` is typed as string, but every call site derives it from an
+    // untrusted JSON response cast (`as { msg?: string }` etc.) — TypeScript
+    // doesn't validate that at runtime, and a real KIE.ai error response was
+    // observed (2026-09-14) sending `msg` as a nested object, not a string.
+    // Interpolating that directly used to silently render as "[object
+    // Object]", discarding the actual error detail. JSON.stringify keeps it
+    // readable; String(...) is only a last-resort fallback for the rare
+    // value (e.g. one with a circular reference) that JSON.stringify itself
+    // throws on.
+    const safeDetail =
+      typeof detail === 'string'
+        ? detail
+        : (() => {
+            try {
+              return JSON.stringify(detail)
+            } catch {
+              return String(detail)
+            }
+          })()
+    super(`${provider} call failed (status ${httpStatus ?? 'n/a'}): ${safeDetail}`)
     this.name = 'ProviderCallError'
   }
 }

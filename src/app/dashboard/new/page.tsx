@@ -23,10 +23,12 @@ import {
   Image,
   FileText,
   Sparkles,
+  Volume2,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useNewContentStore } from '@/stores/newContentStore'
 import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle, AspectRatio } from '@/stores/newContentStore'
+import { VIDEO_VOICES } from '@/lib/videoVoices'
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ interface FormData {
   image_style:     ImageStyle
   content_angle:   ContentAngle
   aspect_ratio:    AspectRatio
+  voice_id_en:     string
+  voice_id_fr:     string
 }
 
 type Phase = 'idle' | 'creating' | 'awaiting_questions' | 'triggering'
@@ -201,6 +205,98 @@ function FL({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string
   )
 }
 
+// A grid of selectable voice cards — one radio-style choice per language,
+// visually matching "What to Generate"'s content-type cards (border-2,
+// green when selected) — plus a "play preview" button on each card using
+// ElevenLabs' own free, pre-generated preview_url (src/lib/videoVoices.ts),
+// no API call needed, just an <audio> element. A card's preview button is
+// disabled (not hidden) when that voice has no preview yet, since the
+// curated list starts out with placeholder entries until real ElevenLabs
+// voice IDs are swapped in.
+function VoiceCardGroup({
+  label,
+  value,
+  onChange,
+  voices,
+  disabled,
+}: {
+  label: string
+  value: string
+  onChange: (id: string) => void
+  voices: { id: string; name: string; gender: 'male' | 'female'; previewUrl: string }[]
+  disabled: boolean
+}) {
+  const [playingId, setPlayingId] = useState<string | null>(null)
+
+  const handlePreview = (e: React.MouseEvent, voice: { id: string; previewUrl: string }) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!voice.previewUrl) return
+    const audio = new window.Audio(voice.previewUrl)
+    setPlayingId(voice.id)
+    const clear = () => setPlayingId((cur) => (cur === voice.id ? null : cur))
+    audio.addEventListener('ended', clear)
+    audio.play().catch(clear)
+  }
+
+  return (
+    <div className="space-y-2">
+      <FL>{label} <span className="text-red-500">*</span></FL>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {voices.map((v) => {
+          const selected = value === v.id
+          const playing = playingId === v.id
+          return (
+            <label
+              key={v.id}
+              className={`flex cursor-pointer flex-col gap-2 rounded-xl border-2 p-3 transition-all ${
+                selected
+                  ? 'border-green-500 bg-green-50/50'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+            >
+              <input
+                type="radio"
+                name={`voice-${label}`}
+                className="sr-only"
+                checked={selected}
+                onChange={() => onChange(v.id)}
+                disabled={disabled}
+              />
+              <div className="flex items-center justify-between">
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
+                    selected ? 'border-green-500 bg-green-500' : 'border-gray-300'
+                  }`}
+                >
+                  {selected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => handlePreview(e, v)}
+                  disabled={disabled || !v.previewUrl}
+                  className={`flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                    v.previewUrl
+                      ? 'border-gray-300 text-gray-600 hover:bg-gray-100'
+                      : 'border-gray-200 text-gray-300'
+                  }`}
+                  title={v.previewUrl ? 'Play preview' : 'No preview available for this voice yet'}
+                >
+                  <Volume2 className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} />
+                </button>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">{v.name}</p>
+                <p className="text-xs capitalize text-gray-500">{v.gender}</p>
+              </div>
+            </label>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function NewContentPage() {
@@ -210,7 +306,8 @@ export default function NewContentPage() {
 
   const {
     topic, keywords, category, target_audience, script_type, video_duration,
-    language, content_types, province, city, scene_notes, image_style, content_angle, aspect_ratio, status, pendingJobId,
+    language, content_types, province, city, scene_notes, image_style, content_angle, aspect_ratio,
+    voice_id_en, voice_id_fr, status, pendingJobId,
     restoreSession, setField, toggleType, startGeneration, clearOnCancel,
   } = useNewContentStore()
 
@@ -366,6 +463,13 @@ export default function NewContentPage() {
         // all — confirmed live 2026-09-13: a real run picked 90s of total
         // runtime, nearly double this dropdown's own 52s ceiling.
         video_duration_seconds: Number(video_duration),
+        // video only — user-selected narration voice per language (src/lib/
+        // videoVoices.ts's curated list), read by the worker (fetchJobInputs)
+        // and passed to synthesize_voice as an override of the fixed brand
+        // default — supabase/migrations/20260915000000. Defaults match that
+        // brand default exactly, so an unedited job's voice never changes.
+        voice_id_en:     voice_id_en,
+        voice_id_fr:     voice_id_fr,
       })
       .select()
       .single()
@@ -380,6 +484,7 @@ export default function NewContentPage() {
       topic, keywords, category, target_audience,
       script_type, video_duration, language, content_types,
       province, city, scene_notes, image_style, content_angle, aspect_ratio,
+      voice_id_en, voice_id_fr,
     }
 
     // ── If image_post wasn't selected, nothing changes — same flow as before ──
@@ -410,13 +515,10 @@ export default function NewContentPage() {
       return
     }
 
-    const qRes = await fetch('/api/n8n/trigger', {
+    const qRes = await fetch(`/api/jobs/${job.id}/image/questions`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'image_questions',
-        payload: buildPayload(job.id, formSnapshot, 'image_post'),
-      }),
+      body:    JSON.stringify({}),
     })
 
     if (qRes.redirected && qRes.url.includes('/login')) {
@@ -923,6 +1025,26 @@ export default function NewContentPage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {(language === 'EN' || language === 'BOTH') && (
+                <VoiceCardGroup
+                  label="English Narration Voice"
+                  value={voice_id_en}
+                  onChange={(v) => setField('voice_id_en', v)}
+                  voices={VIDEO_VOICES.EN}
+                  disabled={isSubmitting}
+                />
+              )}
+
+              {(language === 'FR' || language === 'BOTH') && (
+                <VoiceCardGroup
+                  label="French Narration Voice"
+                  value={voice_id_fr}
+                  onChange={(v) => setField('voice_id_fr', v)}
+                  voices={VIDEO_VOICES.FR}
+                  disabled={isSubmitting}
+                />
+              )}
 
             </CardContent>
           </Card>

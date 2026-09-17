@@ -104,6 +104,27 @@ Status: 400 / 404 / 500
 
 ---
 
+### Jobs — Image
+
+#### `POST /api/jobs/[jobId]/image/questions`
+**Auth:** Requires session (gated by `src/proxy.ts`)
+**Description:** Generates 2-3 clarifying questions (topic/scene detail gaps) to show before image_post generation. Reads job inputs directly from `content_jobs` and calls OpenAI (`gpt-4o-mini`) directly — replaces the old n8n `image_questions` webhook, which no longer exists.
+
+**Request Body:** none
+
+**Response (success):**
+```json
+{ "questions": [{ "id": 1, "question": "string", "options": ["string"], "placeholder": "string?" }] }
+```
+
+**Response (error):**
+```json
+{ "error": "Job not found" }
+```
+Status: 404 / 500 / 502
+
+---
+
 ## n8n Outbound Webhooks (called by this app, not routes)
 
 These are fired from the frontend — documented here for reference.
@@ -139,7 +160,7 @@ These are fired from the frontend — documented here for reference.
 ```
 
 ### Social Post Approved
-**URL:** `https://n8n.srv1712072.hstgr.cloud/webhook/social-post`
+**URL:** `N8N_SOCIAL_WEBHOOK` (see `.env.example` — not hardcoded here)
 **Method:** POST
 **Payload:**
 ```json
@@ -163,3 +184,4 @@ These are fired from the frontend — documented here for reference.
 | 2026-06-15 | Created | POST /api/webhooks/n8n-callback |
 | 2026-07-17 | Created | POST /api/auth/login |
 | 2026-07-17 | Created | POST /api/auth/logout |
+| 2026-09-14 | Created (replaces n8n `image_questions` webhook) | POST /api/jobs/[jobId]/image/questions |

@@ -3,15 +3,12 @@ import { NextRequest, NextResponse } from 'next/server'
 // blog, image_post, AND video generation/approval no longer go through n8n —
 // all three run on the worker/pipeline architecture now
 // (src/app/api/jobs/[jobId]/{blog,image,video}/, worker/). image_questions
-// stays here: it's a quick synchronous clarifying-Q&A call with no worker
-// equivalent, unrelated to the generation pipeline that was migrated.
-// social is the only content type still unmigrated.
-type WebhookType =
-  | 'image_questions'
-  | 'social'
+// was the last other n8n consumer of this route; it now runs on
+// .../image/questions/route.ts (OpenAI direct). social is the only content
+// type still on n8n.
+type WebhookType = 'social'
 const WEBHOOK_URLS: Record<WebhookType, string | undefined> = {
-  image_questions: process.env.N8N_IMAGE_QUESTIONS_WEBHOOK,
-  social:          process.env.N8N_SOCIAL_WEBHOOK,
+  social: process.env.N8N_SOCIAL_WEBHOOK,
 }
 
 export async function POST(req: NextRequest) {
@@ -44,34 +41,18 @@ export async function POST(req: NextRequest) {
   const bodyStr = JSON.stringify(payload)
 
   try {
-    // 'social' is fire-and-forget — no timeout, result comes back later via
-    // /api/webhooks/n8n-callback. 'image_questions' is NOT fire-and-forget —
-    // n8n responds immediately with the actual question list, which the
-    // frontend needs right away to render the Q&A step, so it gets a real
-    // timeout instead of waiting indefinitely.
+    // Fire-and-forget — no timeout, result comes back later via
+    // /api/webhooks/n8n-callback, so n8n's immediate HTTP status here is
+    // ignored: a non-2xx doesn't mean the workflow itself failed.
     const n8nRes = await fetch(url, {
       method: 'POST',
       headers: reqHeaders,
       body: bodyStr,
-      ...(type === 'image_questions' ? { signal: AbortSignal.timeout(15000) } : {}),
     })
 
-    if (type === 'image_questions') {
-      if (!n8nRes.ok) {
-        const text = await n8nRes.text().catch(() => '')
-        return NextResponse.json({ error: `n8n returned ${n8nRes.status}: ${text}` }, { status: 502 })
-      }
-      const data = await n8nRes.json().catch(() => null)
-      if (!data) {
-        return NextResponse.json({ error: 'Invalid response from n8n' }, { status: 502 })
-      }
-      return NextResponse.json(data)
-    }
-
-    // 'social' — ignore n8n's HTTP status here; the real result comes via callback.
     if (!n8nRes.ok) {
       const text = await n8nRes.text().catch(() => '')
-      console.log(`[n8n-trigger] ${type} returned ${n8nRes.status} (workflow may still complete): ${text}`)
+      console.error(`[n8n-trigger] ${type} returned ${n8nRes.status} (workflow may still complete): ${text}`)
     }
     return NextResponse.json({ success: true })
   } catch (err) {

@@ -32,9 +32,9 @@ function resolveRequestedLanguages(
 const UNIQUE_VIOLATION = '23505'
 
 // Call this AFTER image_questions has been answered — that clarifying-Q&A
-// step is unchanged and still goes through n8n (src/app/dashboard/new/page.tsx).
-// This route only creates the pipeline/tracks; the worker does the actual
-// photo + caption generation.
+// step now runs on .../image/questions/route.ts (OpenAI direct, no n8n) —
+// see src/app/dashboard/new/page.tsx. This route only creates the
+// pipeline/tracks; the worker does the actual photo + caption generation.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> },

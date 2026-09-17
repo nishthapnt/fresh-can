@@ -92,13 +92,20 @@ interface JobInputs {
   // cap — see that prompt's own header for why the script can run slightly
   // short or long of this instead of truncating a scene's narration.
   videoDurationSeconds: number
+  // video-only — user-selected per job (supabase/migrations/20260915000000),
+  // one per language, passed to synthesize_voice as an override of
+  // BRAND_PROFILE.videoVoiceIds (worker/src/prompts/brand/fresh-can.ts).
+  // Column default matches that brand-profile value exactly, so an
+  // unedited job's narration voice never changes.
+  voiceIdEn: string
+  voiceIdFr: string
 }
 
 async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<JobInputs> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language, aspect_ratio, video_duration_seconds',
+      'topic, keywords, category, target_audience, province, city, scene_notes, image_answers, image_style, content_angle, script_type, language, aspect_ratio, video_duration_seconds, voice_id_en, voice_id_fr',
     )
     .eq('id', jobId)
     .single()
@@ -120,6 +127,8 @@ async function fetchJobInputs(client: SupabaseClient, jobId: string): Promise<Jo
     jobLanguage: (data.language as string | null) ?? 'EN',
     aspectRatio: (data.aspect_ratio as '9:16' | '1:1' | '16:9' | null) ?? '9:16',
     videoDurationSeconds: (data.video_duration_seconds as number | null) ?? 36,
+    voiceIdEn: (data.voice_id_en as string | null) ?? 'epkQ8pqDcY2DxhmFi8xl',
+    voiceIdFr: (data.voice_id_fr as string | null) ?? 'n2pCwUKS6q9Iur03Rten',
   }
 }
 
@@ -408,16 +417,19 @@ async function tickTracks(
     return
   }
 
-  for (const track of (tracks ?? []) as TrackRow[]) {
+  // Runs one track's full step chain — same body the old sequential
+  // for-loop ran per track, just extracted so it can be launched
+  // concurrently by the grouping below.
+  const processTrack = async (track: TrackRow): Promise<void> => {
     try {
       const { data: pipeline, error: pErr } = await client
         .from('content_pipelines')
         .select('*')
         .eq('id', track.content_pipeline_id)
         .single()
-      if (pErr || !pipeline) continue
+      if (pErr || !pipeline) return
       if (!PIPELINE_CONTENT_TYPES.includes(pipeline.content_type as (typeof PIPELINE_CONTENT_TYPES)[number])) {
-        continue
+        return
       }
 
       const jobInputs = await fetchJobInputs(client, pipeline.job_id)
@@ -481,6 +493,8 @@ async function tickTracks(
           .eq('id', track.id)
           .single()
         if (afterLocalize) {
+          const trackLanguage = (afterLocalize as TrackRow).language
+          const voiceIdOverride = trackLanguage === 'FR' ? jobInputs.voiceIdFr : jobInputs.voiceIdEn
           await runSynthesizeVoice(
             client,
             afterLocalize as TrackRow,
@@ -488,6 +502,7 @@ async function tickTracks(
             pipeline.job_id,
             voiceSynthesizer,
             videoUploader,
+            voiceIdOverride,
           )
         }
 
@@ -518,6 +533,28 @@ async function tickTracks(
     } catch (err) {
       console.error(`[worker] track ${track.id} tick failed:`, err)
     }
+  }
+
+  // Group by pipeline so a job's own language tracks (e.g. EN/FR) run
+  // concurrently — each is an independent, claim-guarded chain with no
+  // reason to wait on its sibling (measured live: FR sat idle through
+  // EN's entire localize->voice->transcribe->render chain, including EN's
+  // render, before even starting its own localize step). Groups (i.e.
+  // different jobs) still run one at a time — this stays scoped to "a
+  // job's own languages shouldn't serialize," not a general fan-out across
+  // every unrelated job ticked this pass.
+  const groups = new Map<string, TrackRow[]>()
+  for (const track of (tracks ?? []) as TrackRow[]) {
+    const group = groups.get(track.content_pipeline_id)
+    if (group) {
+      group.push(track)
+    } else {
+      groups.set(track.content_pipeline_id, [track])
+    }
+  }
+
+  for (const group of groups.values()) {
+    await Promise.allSettled(group.map(processTrack))
   }
 }
 

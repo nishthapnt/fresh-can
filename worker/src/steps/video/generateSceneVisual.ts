@@ -69,46 +69,79 @@ const SCALE_TARGETS: Record<'9:16' | '1:1' | '16:9', { width: number; height: nu
   '16:9': { width: 1920, height: 1080 },
 }
 
+/** A poll() call throwing (connection reset, "fetch failed", etc.) means the
+ *  STATUS CHECK failed, not the generation itself — the KIE job submitted
+ *  earlier is still running server-side. Swallowing it and retrying the same
+ *  poll, rather than letting it propagate as a step failure, avoids
+ *  discarding a perfectly good in-flight job and paying for a brand-new
+ *  generation on retry — confirmed live (2026-09-14): concurrent scene
+ *  submissions produced bursts of transient "fetch failed" poll errors
+ *  (also seen hitting plain Supabase calls the same session, so this looks
+ *  like local network/egress flakiness under concurrent connections, not a
+ *  KIE-side rejection) that were previously restarting whole scenes from
+ *  scratch for no reason. `result.status === 'failed'` (an explicit KIE
+ *  failure response) and the deadline-based timeout below are untouched —
+ *  only "the poll request itself didn't complete" now retries in place. */
+async function pollUntilDone<
+  TResult extends { status: 'ready' } | { status: 'pending' } | { status: 'failed'; detail: string },
+>(
+  poll: () => Promise<TResult>,
+  timeoutMs: number,
+  intervalMs: number,
+  logLabel: string,
+): Promise<Extract<TResult, { status: 'ready' }> | { failed: true; detail: string } | { timedOut: true }> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    let result: TResult
+    try {
+      result = await poll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[${logLabel}] transient poll error, retrying same job: ${message}`)
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      continue
+    }
+    if (result.status === 'ready') return result as Extract<TResult, { status: 'ready' }>
+    if (result.status === 'failed') return { failed: true, detail: result.detail }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  return { timedOut: true }
+}
+
 async function pollImageUntilDone(
   imageGenerator: ImageGenerator,
   jobRef: { providerRef: string },
 ): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true }> {
-  const deadline = Date.now() + IMAGE_POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const result = await imageGenerator.poll(jobRef)
-    if (result.status === 'ready') return { fileUrl: result.fileUrl }
-    if (result.status === 'failed') return { failed: true, detail: result.detail }
-    await new Promise((resolve) => setTimeout(resolve, IMAGE_POLL_INTERVAL_MS))
-  }
-  return { timedOut: true }
+  return pollUntilDone(
+    () => imageGenerator.poll(jobRef),
+    IMAGE_POLL_TIMEOUT_MS,
+    IMAGE_POLL_INTERVAL_MS,
+    'generate_scene_visual:image',
+  )
 }
 
 async function pollVideoUntilDone(
   videoGenerator: VideoGenerator,
   jobRef: { providerRef: string },
 ): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true }> {
-  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const result = await videoGenerator.poll(jobRef)
-    if (result.status === 'ready') return { fileUrl: result.fileUrl }
-    if (result.status === 'failed') return { failed: true, detail: result.detail }
-    await new Promise((resolve) => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS))
-  }
-  return { timedOut: true }
+  return pollUntilDone(
+    () => videoGenerator.poll(jobRef),
+    VIDEO_POLL_TIMEOUT_MS,
+    VIDEO_POLL_INTERVAL_MS,
+    'generate_scene_visual:clip',
+  )
 }
 
 async function pollScaleUntilDone(
   scaler: SceneClipScaler,
   jobRef: { providerRef: string },
 ): Promise<{ fileBuffer: Buffer } | { failed: true; detail: string } | { timedOut: true }> {
-  const deadline = Date.now() + SCALE_POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const result = await scaler.poll(jobRef)
-    if (result.status === 'ready') return { fileBuffer: result.fileBuffer }
-    if (result.status === 'failed') return { failed: true, detail: result.detail }
-    await new Promise((resolve) => setTimeout(resolve, SCALE_POLL_INTERVAL_MS))
-  }
-  return { timedOut: true }
+  return pollUntilDone(
+    () => scaler.poll(jobRef),
+    SCALE_POLL_TIMEOUT_MS,
+    SCALE_POLL_INTERVAL_MS,
+    'generate_scene_visual:scale',
+  )
 }
 
 /** Kling 2.6 only accepts "5" or "10" — round the scene's planned budget to
@@ -425,20 +458,32 @@ async function refreshVisualsProgress(
  * makes "EN and FR share the identical scene visuals" a structural fact,
  * not a convention.
  *
- * Each scene's image/clip step does its own real, blocking submit+poll
- * (up to 60s for an image, 180s for a clip — see pollImageUntilDone/
- * pollVideoUntilDone above), so one call to this function can legitimately
- * run for many minutes working through every scene in this for loop
- * before ever returning. refreshVisualsProgress is called after EVERY
- * scene specifically because of that: without it, content_pipelines'
- * scenes_visuals_ready_count/current_step — which the dashboard's "Shared
- * production" card (src/app/dashboard/jobs/[job_id]/page.tsx) reads
- * verbatim — would stay frozen at whatever they were when this call
- * began until the ENTIRE loop finished, making a real, steadily-progressing
- * generation look completely stalled the whole time. Confirmed live: a
- * real 8-scene job sat at "generating character ref · 0/8 scenes ready"
- * for 16+ minutes while 7 of 8 scene clips actually succeeded underneath,
- * because the old code only wrote back once, after every scene was done.
+ * Scenes are mutually independent — every scene_image edits from the SAME
+ * shared character_ref (never from another scene's output), and a
+ * scene_video_clip only ever depends on its OWN scene's image. Nothing here
+ * reads or waits on a sibling scene. So instead of a sequential for-loop
+ * (measured live, 2026-09-13/14: ~20s/image + ~2min/clip, serialized across
+ * 6+ scenes — the single biggest contributor to a ~20min shared-visual
+ * phase), every scene's pending step (image or clip, whichever it needs
+ * next) is launched concurrently below. What actually paces the real KIE.ai
+ * traffic is kieRateLimiter (worker/src/lib/kieRateLimiter.ts), gating each
+ * adapter's .submit() against KIE's documented account-wide 20-requests/10s
+ * limit — not a hand-picked concurrency cap here, since polling (which
+ * dominates wall-clock time per scene) isn't rate-limited and shouldn't be
+ * serialized just because submission is paced.
+ *
+ * refreshVisualsProgress is attached to EVERY scene's task (not read back
+ * once after they all settle) for the same reason it used to run after
+ * every loop iteration: content_pipelines' scenes_visuals_ready_count/
+ * current_step — which the dashboard's "Shared production" card
+ * (src/app/dashboard/jobs/[job_id]/page.tsx) reads verbatim — needs to
+ * advance as each scene actually finishes, not only once the slowest one
+ * does. Concurrent tasks reading/writing the same lastPersistedCount/
+ * announcedInProgress closure variables can race and occasionally trigger
+ * a redundant write; that's fine — refreshVisualsProgress always recomputes
+ * readyCount fresh from the asset rows and its own claimPipeline call is
+ * already CAS-safe (see that function's header), so a stale local guard
+ * only costs an extra no-op write, never an incorrect one.
  */
 export async function runGenerateSceneVisual(
   client: SupabaseClient,
@@ -460,15 +505,16 @@ export async function runGenerateSceneVisual(
   let lastPersistedCount = pipeline.scenes_visuals_ready_count
   let announcedInProgress = pipeline.current_step === 'generating_scene_visuals'
 
-  let anyRan = false
-  for (const scene of scenes) {
-    const assets = await getVisualAssets(client, pipeline.id, generation)
+  const assets = await getVisualAssets(client, pipeline.id, generation)
+
+  const tasks = scenes.map(async (scene) => {
     const imageAsset = findAsset(assets, scene.id, 'scene_image')
     const clipAsset = findAsset(assets, scene.id, 'scene_video_clip')
 
+    let ran = false
     if (clipAsset?.status !== 'ready') {
       if (!imageAsset || imageAsset.status !== 'ready') {
-        const ran = await runSceneImageStep(
+        ran = await runSceneImageStep(
           client,
           pipeline,
           scene,
@@ -478,9 +524,8 @@ export async function runGenerateSceneVisual(
           backoffBaseDelayMs,
           aspectRatio,
         )
-        anyRan = anyRan || ran
       } else {
-        const ran = await runSceneVideoClipStep(
+        ran = await runSceneVideoClipStep(
           client,
           pipeline,
           scene,
@@ -491,7 +536,6 @@ export async function runGenerateSceneVisual(
           scaler,
           aspectRatio,
         )
-        anyRan = anyRan || ran
       }
     }
 
@@ -505,8 +549,12 @@ export async function runGenerateSceneVisual(
     )
     lastPersistedCount = refreshed.lastPersistedCount
     announcedInProgress = refreshed.announcedInProgress
-    if (refreshed.reachedReady) break // every scene done — nothing left for remaining iterations to find
-  }
+
+    return ran
+  })
+
+  const results = await Promise.allSettled(tasks)
+  const anyRan = results.some((result) => result.status === 'fulfilled' && result.value === true)
 
   return { ran: anyRan }
 }
