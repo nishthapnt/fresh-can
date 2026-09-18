@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -72,6 +73,17 @@ export async function POST(
   if (!updated) {
     return NextResponse.json({ error: 'Track status changed concurrently, retry not applied' }, { status: 409 })
   }
+
+  // image_post tracks are processed by Inngest now
+  // (src/inngest/functions/image.ts) — nothing polls for this 'generating'
+  // status change anymore. The CAS above (not this send) is what prevents a
+  // double-fire from a raced concurrent retry click, so updated_at (fresh on
+  // every successful CAS) is a safe, simple id suffix here.
+  await inngest.send({
+    id: `${updated.id}:image.track.process:retry-${updated.updated_at}`,
+    name: 'content/image.track.process',
+    data: { trackId: updated.id, pipelineId: pipeline.id, jobId },
+  })
 
   return NextResponse.json({ track: updated })
 }

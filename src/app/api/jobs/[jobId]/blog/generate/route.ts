@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 // Same pattern as the other server-side routes (draft/route.ts,
 // n8n/trigger/route.ts): prefer the service-role key, fall back to anon.
@@ -64,9 +65,13 @@ export async function POST(
   // Idempotency: a second call for the same job returns the existing
   // pipeline rather than erroring or creating a duplicate — covers both the
   // simple "called twice" case and, via the unique-violation catch below, a
-  // genuine race between two near-simultaneous requests.
+  // genuine race between two near-simultaneous requests. Sends the Inngest
+  // event again too (deterministic id, so Inngest dedupes a genuine repeat)
+  // — self-heals a pipeline stuck at 'created' if the very first call
+  // crashed after inserting the row but before the send below ever ran.
   const existing = await fetchPipelineWithTracks(supabase, jobId)
   if (existing) {
+    await sendBlogGenerateEvent(existing.pipeline.id as string, jobId)
     return NextResponse.json({ ...existing, created: false })
   }
 
@@ -79,7 +84,10 @@ export async function POST(
   if (pErr) {
     if (pErr.code === UNIQUE_VIOLATION) {
       const racedResult = await fetchPipelineWithTracks(supabase, jobId)
-      if (racedResult) return NextResponse.json({ ...racedResult, created: false })
+      if (racedResult) {
+        await sendBlogGenerateEvent(racedResult.pipeline.id as string, jobId)
+        return NextResponse.json({ ...racedResult, created: false })
+      }
     }
     return NextResponse.json({ error: pErr.message }, { status: 500 })
   }
@@ -99,7 +107,21 @@ export async function POST(
     return NextResponse.json({ error: tErr.message }, { status: 500 })
   }
 
+  await sendBlogGenerateEvent(pipeline.id, jobId)
+
   return NextResponse.json({ pipeline, tracks: tracks ?? [], created: true })
+}
+
+// Deterministic event id (not random) so a duplicate send for the same
+// pipeline — a client retry, or the self-heal call above — is deduped by
+// Inngest instead of starting a second concurrent run. Belt-and-suspenders
+// alongside blog.ts's own concurrency limit and claimPipeline's CAS.
+async function sendBlogGenerateEvent(pipelineId: string, jobId: string): Promise<void> {
+  await inngest.send({
+    id: `${pipelineId}:blog.generate`,
+    name: 'content/blog.generate',
+    data: { pipelineId, jobId },
+  })
 }
 
 async function fetchPipelineWithTracks(

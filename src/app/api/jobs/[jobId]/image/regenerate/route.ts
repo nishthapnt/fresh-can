@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -101,6 +102,17 @@ export async function POST(
     .in('status', ['ready', 'draft_ready'])
     .select()
   if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 })
+
+  // image_post runs on Inngest now (src/inngest/functions/image.ts) —
+  // nothing polls for this status change anymore, so this regen needs its
+  // own event. Scoped to this generation (not just pipeline.id) so it's a
+  // distinct event from the original content/image.generate send and isn't
+  // silently deduped by Inngest.
+  await inngest.send({
+    id: `${updatedPipeline.id}:image.generate:gen${updatedPipeline.current_generation}`,
+    name: 'content/image.generate',
+    data: { pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+  })
 
   return NextResponse.json({ pipeline: updatedPipeline, staleTracks: staleTracks ?? [] })
 }

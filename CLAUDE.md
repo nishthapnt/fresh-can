@@ -7,7 +7,7 @@
 | Field | Value |
 |---|---|
 | **Project Name** | Fresh-CAN Content Automation Dashboard |
-| **Description** | AI-powered dashboard: one form triggers Image Post, Video, and Blog content generation. All three run on an in-repo worker/pipeline architecture (`worker/`, `src/app/api/jobs/[jobId]/{blog,image,video}/`) — n8n is only left for social posting. See `docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD`. |
+| **Description** | AI-powered dashboard: one form triggers Image Post, Video, Blog, and Social content generation. All four run on Inngest (`src/inngest/functions/`, calling pipeline step logic in `src/server/pipeline/`) triggered from `src/app/api/jobs/[jobId]/{blog,image,video}/` and `src/app/api/social/post/`. n8n is fully retired; the old always-on polling worker (`worker/`) was removed once every content type migrated. See `docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD`. |
 | **Type** | ✅ Dashboard  ✅ Full-Stack |
 | **Start Date** | 2026-06-15 |
 | **Status** | ✅ In Progress |
@@ -31,7 +31,7 @@
 | **State** | React hooks + Supabase Realtime | realtime on job detail page |
 | **Database** | Supabase (PostgreSQL) | project: `jbrktjnscnzmhwupojiu` |
 | **API** | Next.js API Routes (REST) | |
-| **Automation** | n8n webhook (social only) + in-repo worker (blog/image_post/video) | `worker/` polls Supabase directly, no queue |
+| **Automation** | Inngest (all content types) | `src/inngest/functions/` — event-driven, no polling worker, no n8n |
 | **Auth** | Fixed ID/password, HMAC-signed session cookie | `src/proxy.ts` gates all routes; login at `/login` |
 
 ---
@@ -42,11 +42,24 @@
 src/
 ├── app/
 │   ├── dashboard/             ← KPI + recent jobs grid
-│   │   ├── new/               ← Input form → fires n8n
+│   │   ├── new/               ← Input form → creates job + pipeline(s)
 │   │   ├── jobs/[job_id]/     ← Draft editor (tabbed)
 │   │   │   └── social/        ← Caption approval + posting
 │   │   └── library/           ← Content library grid
-│   └── api/webhooks/n8n-callback/  ← Receives n8n events
+│   └── api/
+│       ├── inngest/           ← Inngest route handler (serve())
+│       ├── jobs/[jobId]/{blog,image,video}/  ← generate/approve/cancel/regenerate/status
+│       └── social/post/       ← creates social_posts row, fires content/social.publish
+│
+├── inngest/
+│   ├── client.ts              ← Inngest client
+│   └── functions/             ← blog.ts, image.ts, video.ts, social.ts
+│
+├── server/
+│   └── pipeline/              ← step/adapter/db/prompts logic Inngest functions call
+│       ├── steps/{blog,image,video,social}/
+│       ├── adapters/          ← OpenAI, KIE, ElevenLabs, AssemblyAI, upload-post.com
+│       └── db.ts              ← CAS claim/retry helpers, all Supabase writes for pipelines
 │
 ├── components/
 │   ├── layout/                ← Sidebar, DashboardLayout, TopBar
@@ -79,14 +92,15 @@ src/
 NEXT_PUBLIC_SUPABASE_URL=https://jbrktjnscnzmhwupojiu.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase → Settings → API>
 SUPABASE_SERVICE_ROLE_KEY=<from Supabase → Settings → API>
-N8N_SOCIAL_WEBHOOK=<n8n social webhook>
+INNGEST_EVENT_KEY=<from Inngest dashboard>
+INNGEST_SIGNING_KEY=<from Inngest dashboard>
 # Blog + image_post + video generation, and the image_post clarifying-questions
-# step — no n8n webhook, these run on worker/ (or OpenAI direct) instead
+# step — all run on Inngest (src/inngest/functions/) or OpenAI direct
 OPENAI_API_KEY=<from platform.openai.com>
 KIE_API_KEY=<from kie.ai>
 ELEVENLABS_API_KEY=<from elevenlabs.io — video narration>
 ASSEMBLYAI_API_KEY=<from assemblyai.com — video caption timing>
-UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render>
+UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render + social posting>
 ```
 
 ---
@@ -113,30 +127,35 @@ UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render>
 
 ---
 
-## 🌐 N8N WEBHOOK URLS (social only — everything else has moved off n8n)
+## 🌐 N8N — FULLY RETIRED
 
-| Type | URL |
-|------|-----|
-| Social posting | `N8N_SOCIAL_WEBHOOK` |
-| Callback (inbound, social) | `POST /api/webhooks/n8n-callback` |
+n8n is no longer used anywhere in this app. Every content type (blog,
+image_post, video, social) runs on Inngest. `N8N_SOCIAL_WEBHOOK`,
+`N8N_WEBHOOK_SECRET`, and `/api/webhooks/n8n-callback` have all been removed.
+Image clarifying questions (`image_questions`) run at
+`POST /api/jobs/[jobId]/image/questions` (OpenAI direct).
 
-Image clarifying questions (`image_questions`) moved off n8n too — now
-`POST /api/jobs/[jobId]/image/questions` (OpenAI direct, see below).
+## 🤖 BLOG + IMAGE_POST + VIDEO + SOCIAL PIPELINE (Inngest)
 
-## 🤖 BLOG + IMAGE_POST + VIDEO PIPELINE (no n8n)
+All four content types run on Inngest (`src/inngest/functions/{blog,image,video,social}.ts`,
+served from `src/app/api/inngest/route.ts`), calling pipeline step/adapter/db
+logic in `src/server/pipeline/`. API routes under
+`src/app/api/jobs/[jobId]/{blog,image,video}/` and `src/app/api/social/post/`
+create/update Supabase rows and send the corresponding Inngest event — there
+is no polling loop or queue. Video is the newest and most complex of the
+four: a shared script+scene plan and per-scene visuals (character-ref +
+KIE.ai image/video generation) are generated ONCE per job regardless of
+language, then localization/narration audio (ElevenLabs)/caption timing
+(AssemblyAI)/final render (upload-post.com FFmpeg) run once per requested
+language — see `ARCHITECTURE.MD` §4.2/§6/§10.1 for why that split matters
+(it's what stops EN/FR from ever getting different visuals). Social has no
+per-post claim/CAS of its own (see `src/inngest/functions/social.ts`'s own
+header) — a function-level concurrency limit of 1 preserves the same
+single-process safety the old worker's tick loop relied on. See
+`docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD` for the full design.
 
-All three run on `worker/` (an always-on Node process polling `content_pipelines`/
-`content_language_tracks` in Supabase directly — no queue) plus API routes
-under `src/app/api/jobs/[jobId]/{blog,image,video}/`. Video is the newest and
-most complex of the three: a shared script+scene plan and per-scene visuals
-(character-ref + KIE.ai image/video generation) are generated ONCE per job
-regardless of language, then localization/narration audio (ElevenLabs)/
-caption timing (AssemblyAI)/final render (upload-post.com FFmpeg) run once
-per requested language — see `ARCHITECTURE.MD` §4.2/§6/§10.1 for why that
-split matters (it's what stops EN/FR from ever getting different visuals).
-See `docs/IMPLEMENTATION_PLAN.md` and `ARCHITECTURE.MD` for the full design.
-Start the worker with `npm run dev` inside `worker/` — nothing else runs it
-automatically.
+There is no standalone worker process anymore — `npm run dev` at the repo
+root is the only thing to start.
 
 ---
 

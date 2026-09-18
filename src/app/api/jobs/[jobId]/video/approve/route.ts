@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -30,15 +31,13 @@ const UNIQUE_VIOLATION = '23505'
 // content_language_track row per requested language, all in this one call —
 // unlike blog/image's /generate, which creates tracks immediately since
 // those types have no pre-generation approval gate. This is the ONLY place
-// video's language tracks get created; the worker does not create them.
+// video's language tracks get created.
 //
-// This route only performs the state transition + track creation — it
-// does not itself enqueue generate_character_ref. A track created here
-// sits at 'waiting_on_shared' until the worker's own poll loop picks the
-// now-'approved' pipeline up and runs generate_character_ref, then
-// generate_scene_visual, on its own (worker/src/index.ts, worker/src/
-// steps/video/{generateCharacterRef,generateSceneVisual}.ts) — both fully
-// built and live-verified end-to-end as of 2026-09-14.
+// Video is on Inngest now (src/inngest/functions/video.ts) — this route
+// sends content/video.approve (shared: generate_character_ref then
+// generate_scene_visual) and one content/video.track.render per track it
+// just created, rather than relying on a poll loop to discover the status
+// change.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> },
@@ -72,6 +71,9 @@ export async function POST(
 
   // Idempotency: already approved (or further along) — return the existing
   // tracks instead of erroring, same pattern as blog/image's /generate.
+  // Resends both events too (stable ids, so a genuine repeat is deduped by
+  // Inngest) — self-heals if the original approval crashed after the CAS
+  // claim/track insert below but before its own sends ran.
   if (pipeline.status !== 'draft_ready') {
     if (pipeline.status === 'created' || pipeline.status === 'drafting') {
       return NextResponse.json(
@@ -83,6 +85,7 @@ export async function POST(
       .from('content_language_tracks')
       .select('*')
       .eq('content_pipeline_id', pipeline.id)
+    await sendVideoApproveEvents(pipeline.id, jobId, tracks ?? [])
     return NextResponse.json({ pipeline, tracks: tracks ?? [], created: false })
   }
 
@@ -116,6 +119,7 @@ export async function POST(
       .from('content_language_tracks')
       .select('*')
       .eq('content_pipeline_id', pipeline.id)
+    await sendVideoApproveEvents(pipeline.id, jobId, tracks ?? [])
     return NextResponse.json({ pipeline: current ?? pipeline, tracks: tracks ?? [], created: false })
   }
 
@@ -136,10 +140,43 @@ export async function POST(
         .from('content_language_tracks')
         .select('*')
         .eq('content_pipeline_id', claimed.id)
+      await sendVideoApproveEvents(claimed.id, jobId, racedTracks ?? [])
       return NextResponse.json({ pipeline: claimed, tracks: racedTracks ?? [], created: false })
     }
     return NextResponse.json({ error: tErr.message }, { status: 500 })
   }
 
+  await sendVideoApproveEvents(claimed.id, jobId, tracks ?? [])
+
   return NextResponse.json({ pipeline: claimed, tracks: tracks ?? [], created: true })
+}
+
+// Sends the shared visuals event once, plus one per-track render event —
+// NOT chained (the shared visuals function sends nothing itself here,
+// unlike blog/image's hand-off) since localize_script/synthesize_voice/
+// transcribe_audio don't wait on shared visuals at all; only render does
+// (gated internally in src/inngest/functions/video.ts). Stable ids (no
+// generation suffix) so a duplicate call — including the idempotent/raced
+// paths above — is deduped by Inngest rather than starting a second run;
+// video/regenerate/route.ts sends its OWN generation-scoped ids for actual
+// regenerations.
+async function sendVideoApproveEvents(
+  pipelineId: string,
+  jobId: string,
+  tracks: Array<{ id: string }>,
+): Promise<void> {
+  await inngest.send({
+    id: `${pipelineId}:video.approve`,
+    name: 'content/video.approve',
+    data: { pipelineId, jobId },
+  })
+  if (tracks.length > 0) {
+    await inngest.send(
+      tracks.map((track) => ({
+        id: `${track.id}:video.track.render`,
+        name: 'content/video.track.render' as const,
+        data: { trackId: track.id, pipelineId, jobId },
+      })),
+    )
+  }
 }

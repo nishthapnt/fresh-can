@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 // Same pattern as blog/generate/route.ts: prefer the service-role key — the
 // new pipeline tables have RLS actually enforced.
@@ -63,9 +64,13 @@ export async function POST(
   const requestedLanguages = resolveRequestedLanguages(job.language as string, body.requestedLanguages)
 
   // Idempotency: a second call for the same job returns the existing
-  // pipeline rather than erroring or creating a duplicate.
+  // pipeline rather than erroring or creating a duplicate. Sends the Inngest
+  // event again too (deterministic id, so Inngest dedupes a genuine repeat)
+  // — self-heals a pipeline stuck at 'created' if the very first call
+  // crashed after inserting the row but before the send below ever ran.
   const existing = await fetchPipelineWithTracks(supabase, jobId)
   if (existing) {
+    await sendImageGenerateEvent(existing.pipeline.id as string, jobId)
     return NextResponse.json({ ...existing, created: false })
   }
 
@@ -78,7 +83,10 @@ export async function POST(
   if (pErr) {
     if (pErr.code === UNIQUE_VIOLATION) {
       const racedResult = await fetchPipelineWithTracks(supabase, jobId)
-      if (racedResult) return NextResponse.json({ ...racedResult, created: false })
+      if (racedResult) {
+        await sendImageGenerateEvent(racedResult.pipeline.id as string, jobId)
+        return NextResponse.json({ ...racedResult, created: false })
+      }
     }
     return NextResponse.json({ error: pErr.message }, { status: 500 })
   }
@@ -98,7 +106,21 @@ export async function POST(
     return NextResponse.json({ error: tErr.message }, { status: 500 })
   }
 
+  await sendImageGenerateEvent(pipeline.id, jobId)
+
   return NextResponse.json({ pipeline, tracks: tracks ?? [], created: true })
+}
+
+// Deterministic event id (not random) so a duplicate send for the same
+// pipeline — a client retry, or the self-heal call above — is deduped by
+// Inngest instead of starting a second concurrent run. Belt-and-suspenders
+// alongside image.ts's own concurrency limit and claimPipeline's CAS.
+async function sendImageGenerateEvent(pipelineId: string, jobId: string): Promise<void> {
+  await inngest.send({
+    id: `${pipelineId}:image.generate`,
+    name: 'content/image.generate',
+    data: { pipelineId, jobId },
+  })
 }
 
 async function fetchPipelineWithTracks(

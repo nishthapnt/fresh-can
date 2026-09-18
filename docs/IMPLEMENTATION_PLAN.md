@@ -114,6 +114,57 @@ New `worker/` package (own `package.json`/`tsconfig.json`/Vitest config, deploya
 
 This plan was never expanded with Image/Video-specific detail the way Phase 2 covers Blog (see `ARCHITECTURE.MD`/`docs/DATABASE_DESIGN.md` for the target shape both were built against instead, and `PROGRESS.md`'s Session 5/6 entries for what actually shipped).
 
+## Inngest migration — worker → event-driven (2026-09-18)
+
+**Status: Completed.** The always-on polling worker (`worker/`, described throughout the phases above) has been fully replaced by Inngest for every content type, so the whole app can run on Vercel + Supabase with no separate always-on process. Unlike the phases above, this section was written and kept accurate as the work happened, not left stale.
+
+### Why
+
+`worker/`'s poll loop (5s tick, single long-running Node process) can't run on Vercel — there's no way to keep a serverless function alive indefinitely. Inngest replaces the discovery/orchestration layer only: every step function in `src/server/pipeline/steps/**` is unchanged, called from Inngest functions instead of a tick loop.
+
+### Architecture
+
+- API routes (`src/app/api/jobs/[jobId]/{blog,image,video}/**`, `src/app/api/social/post/`) still just read/write Supabase — the only change is they now also `inngest.send(...)` the corresponding event instead of leaving the worker to discover the status change on its next tick.
+- `src/inngest/functions/{blog,image,video,social}.ts` — one Inngest function per event, calling the unchanged step functions in `src/server/pipeline/steps/**` inside `step.run`/`step.sleep` retry loops that replicate the worker's old poll-and-recheck behavior (each step function's own `isReadyToRetry`/`MAX_ATTEMPTS` gating is untouched).
+- `src/server/pipeline/` — everything that was `worker/src/{steps,adapters,db.ts,env.ts,lib,prompts}` moved here unchanged (content, not logic) after a real Turbopack build proved cross-folder relative imports into `worker/` don't resolve (`.js`-suffixed NodeNext-style imports aren't remapped to `.ts` by Turbopack the way `tsc`'s own bundler resolution tolerates). Import extensions were stripped from the moved files' mutual imports to match root's bundler resolution; no logic changed. `worker/`'s own separate `@supabase/supabase-js` install was removed at the same time — it had drifted to a different resolved version than root's, causing a real `SupabaseClient` type mismatch once code was shared between the two packages.
+
+### Events
+
+| Event | Sent from | Handles |
+|---|---|---|
+| `content/blog.generate` | `blog/generate`, `blog/regenerate` (visual scope) | outline, then hero+inline visuals |
+| `content/blog.track.process` | blog.generate's own hand-off once shared work succeeds, `blog/regenerate` (copy scope), `blog/tracks/[lang]/retry` | copy, then finalize_draft |
+| `content/image.generate` | `image/generate`, `image/regenerate` | generate_ad_copy (infographic style only), then photo |
+| `content/image.track.process` | image.generate's hand-off, `image/tracks/[lang]/retry` | caption, then finalize_image_content |
+| `content/video.generate` | `video/generate`, `video/regenerate` (script scope) | script + scene plan only — stops at `draft_ready`, mirrors the approval gate |
+| `content/video.approve` | `video/approve`, `video/regenerate` (visuals scope) | character_ref, then per-scene visuals |
+| `content/video.track.render` | `video/approve`, `video/regenerate` (both scopes) | localize_script → synthesize_voice → transcribe_audio (concurrent with shared visuals, not gated on them) → waits for shared visuals to reach `ready` → render |
+| `content/social.publish` | `social/post` | a global submit+poll sweep — **not** scoped to the triggering post (see Concurrency below) |
+
+Blog/image send the per-track event from inside the shared Inngest function once the shared work succeeds, mirroring the worker's own "tickTracks re-checks status" hand-off. Video sends the shared and per-track events directly from the route instead, since localize/synthesize/transcribe never waited on shared visuals to begin with — only render does, gated internally on the pipeline reaching `ready`.
+
+### Concurrency & idempotency
+
+- `claimPipeline`/`claimTrack`'s CAS (`db.ts`, unchanged) is still required — it protects against duplicate *events* (a client retry, a race between an idempotent-generate-route path and the original send), which Inngest's own step memoization doesn't cover on its own.
+- Every route sends a deterministic event id (`${pipelineId}:blog.generate`, generation- or timestamp-suffixed for regenerate/retry) so a genuine duplicate send is deduped by Inngest instead of starting a second run.
+- Every Inngest function also sets a `concurrency` limit scoped to the relevant id (`pipelineId`/`trackId`) as a second guard — except `content/social.publish`, which uses a **global** `concurrency: { limit: 1 }` instead: `runSubmitSocialPosts`/`runPollSocialPosts` (reused unchanged) have no per-post claim of their own — "not yet submitted" is inferred purely from the absence of a `social_platform_logs` row, safe today only because the old worker was strictly single-process and sequential. The global limit preserves that exact property rather than trying to force a per-post model onto functions that were never written that way.
+- The provider_ref-persist-before-poll pattern already inside the KIE-based steps is untouched and remains the actual defense against double-billing on a retry — nothing about this migration replaces or duplicates it.
+
+### Known limitation: video render duration
+
+`runRenderLanguageTrack` can take up to ~20 minutes per pass (concat, mux, caption) with no resumable checkpoint in between — unlike the KIE steps, it never persists a provider ref before polling. It's wrapped in the same single-`step.run` pattern as every other step for consistency; a pathologically slow render risks the Vercel platform killing the step before it finishes (Inngest would then retry the whole render from scratch — expensive, but no less safe than the old worker doing the same thing after a crash mid-render, which `STALE_CLAIM_MS` already assumed could happen). Fixing this durably would mean modifying `renderLanguageTrack.ts` itself to persist per-pass state — not done, since this migration deliberately left pipeline step logic untouched everywhere.
+
+### Cutover order (as executed)
+
+1. Installed Inngest, `src/inngest/client.ts`, `/api/inngest` route (no functions registered yet). A spike proved cross-folder imports into `worker/` fail under Turbopack — see Architecture above — which is why `src/server/pipeline/` exists.
+2. Blog cut over; `blog` removed from `worker/src/index.ts`'s dispatch and its content-type filter.
+3. Image cut over; `image_post` removed the same way. (This step found and fixed a gap from step 2: `blog/regenerate` and `blog/tracks/[lang]/retry` reset pipeline/track status expecting the worker's poll loop to notice — since blog had already left that loop, both routes were silently orphaning rows until fixed to send events themselves.)
+4. Social cut over (it was already mid-migration off n8n before this work started — see the git history around `worker/src/adapters/socialPublisher.ts`); `tickSocial` removed.
+5. Video cut over (three events, not two, because of the approval gate blog/image don't have); `video` removed. The worker was now empty, so `worker/src/index.ts` was reduced to a one-line deprecation stub rather than left full of dead imports and no-op loops.
+6. `worker/` deleted entirely, once confirmed nothing in `src/` imported anything from it. Its brand-asset upload tooling (`assets/fresh-can/*.png`, `scripts/upload-brand-asset.ts`) was never part of the runtime pipeline, so it wasn't touched by steps 2-5 — moved to the repo root in this step rather than deleted, since it's a real, still-useful admin workflow.
+
+Verified after every step: `npx tsc --noEmit`, `npm run build` (a real Turbopack build, not just typecheck), `npx vitest run` (full suite, against live Supabase), and a direct `tsx` boot of whatever remained of the worker. Test baseline held steady throughout at 244/245 passing (243/245 once the video e2e suite's own runtime crossed into the same run as an unrelated timeout — see below), with exactly one pre-existing, unrelated failure the whole time: `kie.test.ts`'s Kling video model/params expectation mismatch, which predates this migration (only import paths changed in that file). One additional flake surfaced during Phase 4/5: `videoPipeline.e2e.test.ts`'s M5 test needs ~62s against live Supabase under real network latency, over the suite's 45s default — confirmed via a longer-timeout re-run (passed cleanly at 120s), not a regression from this work.
+
 ## Explicitly not in scope for this plan
 - No migration SQL is written until the Phase 1 migration itself is reviewed and approved separately.
 - No worker code is written in this pass.

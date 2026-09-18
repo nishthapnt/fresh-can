@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -94,6 +95,17 @@ async function regenerateVisual(
     .select()
   if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 })
 
+  // Blog runs on Inngest now (src/inngest/functions/blog.ts) — nothing polls
+  // for this 'generating' status change anymore, so this regen needs its own
+  // event. Scoped to this generation (not just pipeline.id) so it's a
+  // distinct event from the original content/blog.generate send and isn't
+  // silently deduped by Inngest.
+  await inngest.send({
+    id: `${updatedPipeline.id}:blog.generate:gen${updatedPipeline.current_generation}`,
+    name: 'content/blog.generate',
+    data: { pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+  })
+
   return NextResponse.json({ pipeline: updatedPipeline, staleTracks: staleTracks ?? [] })
 }
 
@@ -152,6 +164,18 @@ async function regenerateCopy(
     .select()
     .single()
   if (uErr) return NextResponse.json({ error: uErr.message }, { status: 500 })
+
+  // Same reasoning as regenerateVisual's send above — blog tracks are
+  // processed by Inngest now, so this needs an explicit event.
+  await inngest.send({
+    id: `${updatedTrack.id}:blog.track.process:gen${updatedTrack.master_generation_used}`,
+    name: 'content/blog.track.process',
+    data: {
+      trackId: updatedTrack.id,
+      pipelineId: pipeline.id as string,
+      jobId: pipeline.job_id as string,
+    },
+  })
 
   return NextResponse.json({ track: updatedTrack })
 }

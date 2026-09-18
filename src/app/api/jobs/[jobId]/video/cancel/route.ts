@@ -32,12 +32,15 @@ async function markJobFailedIfNotAlreadyTerminal(
 }
 
 // Reuses the existing 'failed' status rather than adding a new 'cancelled'
-// value (no migration needed) — the worker's own polling queries
-// (worker/src/index.ts's tickPipelines/tickTracks) already exclude
-// 'failed' pipelines/tracks entirely, so this is a genuine, immediate stop,
-// not just a UI-side hide. last_error is set to a distinguishing message so
-// the dashboard (and anyone reading pipeline_steps/content_pipelines later)
-// can tell "the user stopped this" apart from a real provider failure.
+// value (no migration needed). Video is on Inngest now
+// (src/inngest/functions/video.ts): its retry loops re-fetch the
+// pipeline/track row and check for 'failed' between every step, so this
+// still stops it — at the same granularity as before (a step already in
+// flight, e.g. mid-KIE-poll or mid-render, still runs to completion; only
+// the NEXT step is skipped). last_error is set to a distinguishing message
+// so the dashboard (and anyone reading pipeline_steps/content_pipelines
+// later) can tell "the user stopped this" apart from a real provider
+// failure.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> },

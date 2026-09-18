@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { inngest } from '@/inngest/client'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -103,6 +104,25 @@ async function regenerateScript(
     .select()
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
 
+  // Video runs on Inngest now (src/inngest/functions/video.ts) — nothing
+  // polls for these status changes anymore. Generation-scoped ids (not just
+  // pipeline/track id) so this regen's events are distinct from the
+  // original send and aren't deduped away.
+  await inngest.send({
+    id: `${updatedPipeline.id}:video.generate:gen${newGeneration}`,
+    name: 'content/video.generate',
+    data: { pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+  })
+  if (resetTracks && resetTracks.length > 0) {
+    await inngest.send(
+      resetTracks.map((track) => ({
+        id: `${track.id}:video.track.render:gen${newGeneration}`,
+        name: 'content/video.track.render' as const,
+        data: { trackId: track.id, pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+      })),
+    )
+  }
+
   return NextResponse.json({ pipeline: updatedPipeline, tracks: resetTracks ?? [] })
 }
 
@@ -195,6 +215,24 @@ async function regenerateVisuals(
     .eq('content_pipeline_id', pipeline.id as string)
     .select()
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
+
+  // Video runs on Inngest now (src/inngest/functions/video.ts) — nothing
+  // polls for these status changes anymore. Generation-scoped ids so this
+  // regen's events are distinct from the original approval's sends.
+  await inngest.send({
+    id: `${updatedPipeline.id}:video.approve:gen${newGeneration}`,
+    name: 'content/video.approve',
+    data: { pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+  })
+  if (resetTracks && resetTracks.length > 0) {
+    await inngest.send(
+      resetTracks.map((track) => ({
+        id: `${track.id}:video.track.render:gen${newGeneration}`,
+        name: 'content/video.track.render' as const,
+        data: { trackId: track.id, pipelineId: updatedPipeline.id, jobId: updatedPipeline.job_id },
+      })),
+    )
+  }
 
   return NextResponse.json({ pipeline: updatedPipeline, tracks: resetTracks ?? [] })
 }

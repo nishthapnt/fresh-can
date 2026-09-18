@@ -29,8 +29,13 @@ async function markJobFailedIfNotAlreadyTerminal(
 
 // Same pattern as video/cancel/route.ts — reuses the existing 'failed'
 // status rather than adding a new 'cancelled' value (no migration needed).
-// worker/src/index.ts's tickPipelines/tickTracks queries already exclude
-// 'failed' pipelines/tracks entirely, so this is a genuine, immediate stop.
+// Blog is on Inngest now (src/inngest/functions/blog.ts): its retry loops
+// re-fetch the pipeline/track row and check for 'failed' between every
+// step, so this still stops it — at the same granularity as before (a
+// step already in flight, e.g. mid-KIE-poll, still runs to completion; only
+// the NEXT step is skipped). Not a true Inngest cancelOn signal (which
+// could interrupt mid-step) — that's a possible future improvement, not
+// required for parity with the old worker-poll-exclusion behavior.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> },
