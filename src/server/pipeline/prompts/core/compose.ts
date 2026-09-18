@@ -106,15 +106,25 @@ function infographicTextLayer(brand: BrandProfile, headline: string, subtitle: s
 /** Appends the correct trailing text-instruction block for the job's style
  *  — the one shared decision point every composer routes through, so
  *  'infographic' can never accidentally fall through to a plain noText
- *  instruction (which would contradict the headline/subtitle just built). */
-function textLayerFor(brand: BrandProfile, job: StyleInputs, referenceImageUrl: string | undefined): string {
+ *  instruction (which would contradict the headline/subtitle just built).
+ *  `noTextVariant` lets a caller swap in a different no-reference-image
+ *  instruction than the blanket brand.noTextInstruction — see
+ *  composeBlogImage's non-container branch, where the scene hint may
+ *  already have told the model the truck can appear in the background, so
+ *  a flat "no logos anywhere" here would directly contradict it. */
+function textLayerFor(
+  brand: BrandProfile,
+  job: StyleInputs,
+  referenceImageUrl: string | undefined,
+  noTextVariant: string = brand.noTextInstruction,
+): string {
   if (job.imageStyle === 'infographic') {
     if (!job.headline || !job.subtitle) {
       throw new Error('composeImage: imageStyle "infographic" requires both headline and subtitle')
     }
     return infographicTextLayer(brand, job.headline, job.subtitle)
   }
-  return referenceImageUrl ? brand.noNewTextInstruction : brand.noTextInstruction
+  return referenceImageUrl ? brand.noNewTextInstruction : noTextVariant
 }
 
 // Generic fallback for a non-container blog scene whose category has no
@@ -123,13 +133,36 @@ function textLayerFor(brand: BrandProfile, job: StyleInputs, referenceImageUrl: 
 // Fresh-CAN's own five.
 const DEFAULT_NON_CONTAINER_HINT =
   'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
-  '— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting. The Fresh-CAN ' +
-  'truck or wordmark may appear naturally in the background if it plausibly fits the scene — if it does, it ' +
-  'is always this exact maroon-red with its white "Fresh [maple leaf icon] CAN" wordmark, never any other ' +
-  'color or logo — but never force it in and never let it become the main subject.'
+  '— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting. If the ' +
+  'Fresh-CAN truck plausibly fits the scene, it must be built to its real, correct structure — a white box ' +
+  'truck with a dark maroon-red steel cargo container and a white "Fresh [maple leaf icon] CAN" wordmark on ' +
+  "the container's rear header bar only — never any other vehicle shape, color, or logo, never forced in, and " +
+  'never the main subject. Every other vehicle in the scene must stay completely unbranded — never place the ' +
+  'Fresh-CAN wordmark or logo on it.'
 
 function nonContainerSceneHint(brand: BrandProfile, category: string): string {
   return brand.categoryVisualHints?.[category] ?? DEFAULT_NON_CONTAINER_HINT
+}
+
+// The trailing text-instruction used by composeBlogImage's non-container
+// branch instead of the blanket brand.noTextInstruction. That blanket
+// instruction ("no logos, no watermarks... anywhere") directly contradicts
+// nonContainerSceneHint/categoryVisualHints, which explicitly permits the
+// brand's real vehicle to appear in the background — sending both in one
+// prompt is exactly the kind of contradiction that leaves the model free to
+// invent an off-model result (e.g. the wordmark on the wrong vehicle
+// shape). This keeps the same "don't invent text" framing but carves out
+// one exact exception, built from containerDescriptor so it can't drift
+// into a shorthand, and restates the no-other-vehicle rule as the very last
+// thing the model reads.
+function backgroundBrandingInstruction(brand: BrandProfile): string {
+  return (
+    'Photorealistic, natural lighting, documentary style. Absolutely no invented text, words, letters, ' +
+    'captions, titles, or typography anywhere in the image. The only exception is branding: if the ' +
+    `${brand.name} vehicle naturally fits the scene, it must be built to this exact structure — ` +
+    `${brand.containerDescriptor} — showing only its own real wordmark exactly as just described. Every ` +
+    'other vehicle in the image must stay completely unbranded — never place this wordmark or logo on it.'
+  )
 }
 
 // Added 2026-09-18: the showSubject branch below used to push ONLY the
@@ -216,7 +249,8 @@ function composeBlogImage(
     parts.push(nonContainerSceneHint(brand, job.category))
   }
 
-  parts.push(textLayerFor(brand, job, referenceImageUrl))
+  const noTextVariant = showSubject ? undefined : backgroundBrandingInstruction(brand)
+  parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariant))
 
   return { prompt: parts.join(' '), referenceImageUrl }
 }

@@ -4,6 +4,39 @@
 // prompts/index.ts. Nothing else in the worker needs to change.
 import type { BrandProfile } from '../types'
 
+// Pulled out of the object literal below (containerDescriptor's own value,
+// verbatim) so BACKGROUND_TRUCK_CLAUSE can splice in the real, full
+// structure rather than a shorthand "maroon-red + wordmark" summary. That
+// shorthand was the actual gap that let a background truck come out as some
+// other vehicle shape wearing the wordmark — this constant is what
+// containerDescriptor below is assigned from, so the two can never drift
+// apart the way earlier hand-copied summaries did.
+const CONTAINER_DESCRIPTOR =
+  'The Fresh-CAN mobile grocery store: a white box truck with a dark maroon-red steel cargo container ' +
+  'mounted on back — always this exact maroon-red. The cab is plain white — no decals, stickers, ' +
+  'logos, or text of any kind; all branding is on the container only. A steel header bar on the ' +
+  'container\'s rear face bears a white "Fresh [maple leaf icon] CAN" wordmark, never distorted — the ' +
+  'vehicle\'s only text. The container\'s only entrance is a black-frame glass double door at the rear, ' +
+  'flush at bumper height — no external staircase, no doors on the sides. Keep this structure, color, ' +
+  'and logo placement identical every time — a fixed brand element, not a creative choice.'
+
+// Added 2026-09-18 after a real bad generation: a categoryVisualHints entry
+// telling the model the truck "may appear in the background" with only a
+// color+wordmark summary — combined with textLayerFor's noTextInstruction
+// ("no logos anywhere") in the same prompt whenever no reference photo is
+// attached — is a direct contradiction that left the model free to invent
+// some other vehicle shape and put the wordmark on it, or skip the wordmark
+// but still browbeat some random car into looking "branded". This clause
+// closes both gaps: it pins the truck to its real, full structure (not a
+// shorthand) when it does appear, and explicitly rules out the wordmark/logo
+// leaking onto any other vehicle in frame. See core/compose.ts's
+// composeBlogImage for the matching fix to the noText contradiction itself.
+const BACKGROUND_TRUCK_CLAUSE =
+  'If the Fresh-CAN truck fits naturally in this scene, it must be built to this exact structure — ' +
+  `${CONTAINER_DESCRIPTOR} — never any other vehicle shape, color, or logo, and never as the main subject. ` +
+  'Every other vehicle in the scene — any other truck, van, or car — must stay completely unbranded; never ' +
+  'place the Fresh-CAN wordmark or logo on it.'
+
 export const BRAND_PROFILE: BrandProfile = {
   name: 'Fresh-CAN',
 
@@ -86,33 +119,24 @@ export const BRAND_PROFILE: BrandProfile = {
   categoryVisualHints: {
     'Food Desert Education':
       'A wide, natural-light documentary photo of a real Canadian residential neighbourhood street, or a ' +
-      'sparse, half-empty grocery store aisle — conveying limited access to fresh food. The Fresh-CAN truck ' +
-      'may appear at a distance in the background if the street setting plausibly includes it — if it does, ' +
-      'it is always this exact maroon-red with its white "Fresh [maple leaf icon] CAN" wordmark, never any ' +
-      'other color or logo — but never as the main subject — this scene is about the food desert itself, ' +
-      'not the truck.',
+      'sparse, half-empty grocery store aisle — conveying limited access to fresh food. ' +
+      `${BACKGROUND_TRUCK_CLAUSE} This scene is about the food desert itself, not the truck.`,
     'AI & Mobile Technology':
       "A close-up, natural-light photo of a person's hands holding a smartphone. Since this scene is " +
       "specifically about using the app, the real Fresh-CAN app interface and wordmark may be visible on " +
       "the phone screen — warm and approachable, not a generic unbranded app mockup.",
     'Community Impact':
       'A warm, candid documentary photo of a small group of neighbours, or a family together outdoors in a ' +
-      'Canadian residential neighbourhood — genuine expressions, natural light. The Fresh-CAN truck or ' +
-      'wordmark may appear naturally in the background if it fits the setting — the truck is always this ' +
-      'exact maroon-red, and the wordmark always reads white "Fresh [maple leaf icon] CAN", never any ' +
-      'other color or logo — but never as the main subject.',
+      'Canadian residential neighbourhood — genuine expressions, natural light. ' +
+      `${BACKGROUND_TRUCK_CLAUSE}`,
     'Customer Stories':
       'A warm, candid portrait-style photo of a single person or family in a home kitchen or their own ' +
-      'neighbourhood — genuine expression, natural light. The Fresh-CAN truck or wordmark may appear ' +
-      'naturally in the background if it fits the setting — the truck is always this exact maroon-red, and ' +
-      'the wordmark always reads white "Fresh [maple leaf icon] CAN", never any other color or logo — but ' +
-      'never as the main subject.',
+      'neighbourhood — genuine expression, natural light. ' +
+      `${BACKGROUND_TRUCK_CLAUSE}`,
     'Fresh Produce & Local Farms':
       'A vibrant, close-up natural-light photo of fresh, colourful local produce — vegetables and fruit — ' +
-      'in a wooden crate or at a farm stand, some held in human hands. A Fresh-CAN branded crate, bag, or ' +
-      'distant truck may appear naturally if it fits a farm-stand or market setting — if the truck appears, ' +
-      'it is always this exact maroon-red with its white "Fresh [maple leaf icon] CAN" wordmark, never any ' +
-      'other color or logo — but never as the main subject — keep focus on the produce itself.',
+      'in a wooden crate or at a farm stand, some held in human hands. ' +
+      `${BACKGROUND_TRUCK_CLAUSE} Keep focus on the produce itself.`,
   },
 
   // Verified against real reference photos on 2026-09-10
@@ -143,14 +167,7 @@ export const BRAND_PROFILE: BrandProfile = {
   // — all requested after a review of what the prompt was still leaving
   // ambiguous, not in response to an observed bad generation like the
   // other constraints here.
-  containerDescriptor:
-    'The Fresh-CAN mobile grocery store: a white box truck with a dark maroon-red steel cargo container ' +
-    'mounted on back — always this exact maroon-red. The cab is plain white — no decals, stickers, ' +
-    'logos, or text of any kind; all branding is on the container only. A steel header bar on the ' +
-    'container\'s rear face bears a white "Fresh [maple leaf icon] CAN" wordmark, never distorted — the ' +
-    'vehicle\'s only text. The container\'s only entrance is a black-frame glass double door at the rear, ' +
-    'flush at bumper height — no external staircase, no doors on the sides. Keep this structure, color, ' +
-    'and logo placement identical every time — a fixed brand element, not a creative choice.',
+  containerDescriptor: CONTAINER_DESCRIPTOR,
 
   // Verified against real reference photos on 2026-09-10
   // (assets/fresh-can/freshcan_interior_1.png, _2.png).

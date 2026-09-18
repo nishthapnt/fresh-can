@@ -90,16 +90,18 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     expect(hero.prompt).not.toContain('about "')
   })
 
-  it('omits the container descriptor/reference image for a topic unrelated to visiting the unit, using a non-container scene instead', () => {
+  it('omits the forced reference image for a topic unrelated to visiting the unit, using a non-container scene instead', () => {
     // Reversed 2026-09-11 — blog hero/inline used to ALWAYS show the truck
     // regardless of topic, which made every image look like "the truck from
     // one of a handful of fixed angles." Now gated the same way
     // composePhotoPrompt already was (isContainerRelevant), so a topic with
     // no visit/facility signal gets a real, non-branded, topic-grounded
-    // scene with no reference photo instead.
+    // scene with no reference photo instead. The container descriptor may
+    // still appear in text (see the "permits the truck/wordmark as an
+    // incidental background element" test below) — that's the conditional
+    // exception, not a forced reference-photo edit.
     const job = { pipelineId: 'pipeline-3', topic: 'Community garden fundraiser', category: 'Community Impact' }
     const hero = composeHeroPrompt(testBrand, job)
-    expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
     expect(hero.referenceImageUrl).toBeUndefined()
   })
 
@@ -111,8 +113,13 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   })
 
   it('uses the strict no-text instruction when no reference photos are configured at all', () => {
+    // Container-relevant topic (showSubject: true) with an empty photo pool
+    // — the one case that still falls through to the blanket
+    // noTextInstruction, since there's no background-truck exception to
+    // reconcile it with (see the non-container describe block below for
+    // that case instead).
     const brandWithNoPhotos: BrandProfile = { ...testBrand, referenceImages: { exterior: [], interior: [] } }
-    const job = { pipelineId: 'pipeline-5', topic: 'Anything', category: 'Anything' }
+    const job = { pipelineId: 'pipeline-5', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
     expect(composeHeroPrompt(brandWithNoPhotos, job).prompt).toContain('NO TEXT INSTRUCTION')
     expect(composeInlinePrompt(brandWithNoPhotos, job).prompt).toContain('NO TEXT INSTRUCTION')
     expect(composeHeroPrompt(brandWithNoPhotos, job).prompt).not.toContain('NO NEW TEXT INSTRUCTION')
@@ -239,7 +246,7 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   })
 
   it('defaults to "photo" style (no text) when imageStyle is omitted', () => {
-    const job = { pipelineId: 'pipeline-info-3', topic: 'A day at Fresh-CAN', category: 'Community Impact' }
+    const job = { pipelineId: 'pipeline-info-3', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
     const hero = composeHeroPrompt(testBrand, job)
     expect(hero.prompt).toMatch(/NO( NEW)? TEXT INSTRUCTION/)
   })
@@ -250,11 +257,10 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
       categoryVisualHints: { 'Fresh Produce & Local Farms': 'THE FIXED PRODUCE VISUAL HINT' },
     }
 
-    it("uses the brand's category-specific visual hint when one is configured", () => {
+    it("uses the brand's category-specific visual hint when one is configured, with no forced reference image", () => {
       const job = { pipelineId: 'pipeline-hint-1', topic: 'Seasonal harvest highlights', category: 'Fresh Produce & Local Farms' }
       const hero = composeHeroPrompt(hintBrand, job)
       expect(hero.prompt).toContain('THE FIXED PRODUCE VISUAL HINT')
-      expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
       expect(hero.referenceImageUrl).toBeUndefined()
     })
 
@@ -262,15 +268,33 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
       const job = { pipelineId: 'pipeline-hint-2', topic: 'Community garden fundraiser', category: 'Community Impact' }
       const hero = composeHeroPrompt(testBrand, job) // testBrand defines no categoryVisualHints at all
       expect(hero.prompt).toContain('Photorealistic documentary-style photo')
-      expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(hero.referenceImageUrl).toBeUndefined()
     })
 
-    it('permits the Fresh-CAN truck/wordmark as an incidental background element, but never as the forced main subject', () => {
+    it('permits the Fresh-CAN truck as an incidental background element, but never as the forced main subject', () => {
       const job = { pipelineId: 'pipeline-hint-brand', topic: 'Community garden fundraiser', category: 'Community Impact' }
       const hero = composeHeroPrompt(testBrand, job)
       expect(hero.prompt).toContain('Fresh-CAN truck')
-      expect(hero.prompt).toContain('never')
-      expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(hero.prompt).toContain('never the main subject')
+      expect(hero.referenceImageUrl).toBeUndefined()
+    })
+
+    it('never sends the blanket "no logos anywhere" instruction alongside a hint that permits the truck in the background', () => {
+      // Regression test for the actual bug: nonContainerSceneHint/
+      // categoryVisualHints tells the model the truck's wordmark may
+      // appear, while the OLD trailing instruction (brand.noTextInstruction)
+      // unconditionally said "no logos, no watermarks... anywhere" — a
+      // direct contradiction in the same prompt that left the model free to
+      // invent an off-model result, e.g. putting the wordmark on the wrong
+      // vehicle. The fixed prompt must never contain that blanket phrase in
+      // a non-container scene, and must instead spell out the truck's
+      // correct structure plus an explicit "every other vehicle stays
+      // unbranded" rule.
+      const job = { pipelineId: 'pipeline-no-contradiction', topic: 'Community garden fundraiser', category: 'Community Impact' }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION')
+      expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(hero.prompt).toMatch(/other vehicle.*unbranded/i)
       expect(hero.referenceImageUrl).toBeUndefined()
     })
 
