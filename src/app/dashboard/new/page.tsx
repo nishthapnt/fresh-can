@@ -329,6 +329,7 @@ export default function NewContentPage() {
 
     if (!topic.trim())              return setError('Topic is required')
     if (!keywords.trim())           return setError('Keywords are required')
+    if (!scene_notes.trim())        return setError('Your Scene Idea is required')
     if (content_types.length === 0) return setError('Select at least one content type')
 
     setPhase('creating')
@@ -343,7 +344,7 @@ export default function NewContentPage() {
         language,
         content_types,
         status:          'pending',
-        scene_notes:     scene_notes || null,
+        scene_notes:     scene_notes.trim(),
         // Read directly by the worker (worker/src/prompts) when building
         // image prompts for whatever this job generates (blog hero/inline
         // and/or image_post photo) — supabase/migrations/20260910000000.
@@ -759,12 +760,9 @@ export default function NewContentPage() {
               </p>
             </div>
 
-            {/* ── Custom scene / story idea (optional) ──────────────── */}
+            {/* ── Custom scene / story idea (required) ──────────────── */}
             <div className="space-y-1.5">
-              <FL htmlFor="scene_notes">
-                Your Scene Idea{' '}
-                <span className="text-xs font-normal text-gray-400">(optional)</span>
-              </FL>
+              <FL htmlFor="scene_notes">Your Scene Idea <span className="text-red-500">*</span></FL>
               <Textarea
                 id="scene_notes"
                 value={scene_notes}
@@ -774,8 +772,9 @@ export default function NewContentPage() {
                 rows={4}
               />
               <p className="text-xs text-gray-400">
-                Leave blank to use the default story. If filled, it shapes the Image Post photo&apos;s scene
-                and lightly influences the Blog post&apos;s angle and images — not used for Video.
+                This is the creative brief the Image Post photo and the Blog post&apos;s angle and images are
+                built around — not used for Video. Fresh-CAN&apos;s own brand details only shape how the truck,
+                interior, and voice must look or sound if they appear; they don&apos;t decide what the scene is.
               </p>
             </div>
 

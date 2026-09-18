@@ -38,14 +38,17 @@ export function composeOutlineSystemPrompt(brand: BrandProfile, category: string
     '(max 6 words, a punchy standalone version of the title, suitable for rendering on an image) and ' +
     '"subtitle" (2-5 words) — these are only used if the post\'s image style calls for on-image text, but ' +
     'always include them.' +
-    // Optional, non-binding — the dashboard's "Your Scene Idea" field
-    // (content_jobs.scene_notes), previously only used by image_post's
-    // photo prompt. Framed as light inspiration, not a brief to follow
-    // literally, so it doesn't override the topic-driven outline above.
+    // The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
+    // required going forward (see src/app/dashboard/new's submit
+    // validation), so this is normally always present. It's the creative
+    // brief this outline is built around; the brand mission/voice/category
+    // guidance in brandContext() above is a fixed constraint on tone and
+    // accuracy, never a competing angle. Absent only for a pre-existing job
+    // created before the field became required.
     (sceneNotes
-      ? `\n\nThe user optionally shared this story idea when creating the post: "${sceneNotes}". Let it ` +
-        'lightly inform the outline\'s angle where it naturally fits — e.g. one section built around it — ' +
-        'without forcing it into every section or treating it as a rigid requirement.'
+      ? `\n\nBuild this outline around the user's own creative idea for the post: "${sceneNotes}". Treat the ` +
+        'brand mission, voice, and category guidance above as fixed constraints on tone and accuracy — ' +
+        'never as the angle itself. The scene idea decides what this post is actually about.'
       : '')
   )
 }
@@ -54,9 +57,10 @@ export interface CopySystemPromptOptions {
   language: string
   category: string
   regenInstructions?: string | null
-  /** The dashboard's optional "Your Scene Idea" field (content_jobs.
-   *  scene_notes) — same light-inspiration treatment as
-   *  composeOutlineSystemPrompt's, not a brief to follow literally. */
+  /** The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
+   *  same required-creative-brief treatment as
+   *  composeOutlineSystemPrompt's, still typed optional/nullable for a
+   *  pre-existing job created before the field became required. */
   sceneNotes?: string | null
 }
 
@@ -105,9 +109,9 @@ export function composeCopySystemPrompt(brand: BrandProfile, opts: CopySystemPro
     'For "seo": meta_description must be 140-160 characters; focus_keyword must appear in post_title, in ' +
     'the introduction, and in exactly one section heading or h3 — never repeated beyond that.' +
     (opts.sceneNotes
-      ? `\n\nThe user optionally shared this story idea when creating the post: "${opts.sceneNotes}". Let it ` +
-        'lightly inform the copy\'s angle or a supporting detail where it naturally fits, without forcing it ' +
-        'in or letting it override the outline structure above.'
+      ? `\n\nThe copy must stay true to the user's own creative idea for this post: "${opts.sceneNotes}". The ` +
+        'brand mission and voice guidance above is a fixed constraint on tone and accuracy, never the angle — ' +
+        'follow the outline\'s sections above, which were already built around this same idea.'
       : '') +
     (opts.regenInstructions ? `\n\nThe user asked for this rewrite: ${opts.regenInstructions}` : '')
   )

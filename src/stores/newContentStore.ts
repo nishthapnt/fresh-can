@@ -32,7 +32,7 @@ interface FormFields {
   video_duration:  string
   language:        Language
   content_types:   ContentType[]
-  scene_notes:     string   // optional custom scene/story idea from user
+  scene_notes:     string   // required creative brief for the post's scene/story — see page.tsx's validation
   image_style:     ImageStyle
   content_angle:   ContentAngle
   aspect_ratio:    AspectRatio

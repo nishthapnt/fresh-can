@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { composeHeroPrompt, composeInlinePrompt, composePhotoPrompt } from './compose'
+import { composeHeroPrompt, composeInlinePrompt, composePhotoPrompt, composeSceneImagePrompt, composeCharacterRefPrompt } from './compose'
 import type { BrandProfile } from '../types'
+import { BRAND_PROFILE } from '../brand/fresh-can'
 
 const testBrand: BrandProfile = {
   name: 'Test Brand',
@@ -78,6 +79,24 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     }
     const hero = composeHeroPrompt(testBrand, job)
     expect(hero.prompt).toContain('Neighbours Grow Together')
+  })
+
+  it('treats the scene idea as the creative brief the image is built around, not light inspiration', () => {
+    // Regression test: scene_notes flipped from "For light inspiration
+    // only... without contradicting or replacing" to being the thing the
+    // scene is built around, with brand details reframed as constraints on
+    // what must look correct if they appear.
+    const job = {
+      pipelineId: 'pipeline-scene-brief',
+      topic: 'Community garden fundraiser',
+      category: 'Community Impact',
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    }
+    const hero = composeHeroPrompt(testBrand, job)
+    expect(hero.prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(hero.prompt).toContain('creative direction for the image')
+    expect(hero.prompt).toContain('never as the reason this scene exists')
+    expect(hero.prompt).not.toContain('For light inspiration only')
   })
 
   it('omits the headline clause entirely when none is given (backward compatible)', () => {
@@ -354,5 +373,71 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('Visit test.example.com')
     expect(photo.prompt).not.toContain('NO TEXT INSTRUCTION')
     expect(photo.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
+  })
+
+  it('tells the model the reference photo is a shape/color guide, never a literal copy', () => {
+    // Regression test: composePhotoPrompt's showSubject branch always
+    // attaches a real reference photo as a Flux Kontext edit source, which
+    // defaults toward reproducing its input verbatim unless told otherwise.
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    expect(photo.prompt).toContain('only as a guide')
+    expect(photo.prompt).toContain('never as a literal photo to copy')
+  })
+
+  it('tells the model brand details are constraints, not the point of the photo, so it does not read as an ad', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    expect(photo.prompt).toContain('never as the reason this scene exists')
+    expect(photo.prompt).toContain('never a posed, polished advertisement')
+  })
+})
+
+describe('composeSceneImagePrompt', () => {
+  const baseJob = {
+    pipelineId: 'pipeline-scene-image-1',
+    sceneNumber: 1,
+    visualDescription: 'A family unloading groceries from the Fresh-CAN truck at dusk',
+    shotNotes: 'Slow push-in',
+    characterRefUrl: 'https://example.com/character-ref.jpg',
+  }
+
+  it('always attaches the character-ref photo as the edit source', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
+  })
+
+  it('tells the model the character-ref photo is a guide, not a literal copy — every scene reuses the same photo', () => {
+    // Regression test: every scene in a video reuses the SAME characterRefUrl
+    // as its edit source, so without this instruction the model has nothing
+    // pushing it to build THIS scene's actual visual_description instead of
+    // just reproducing the character-ref's own plain reference shot.
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('only as a guide')
+    expect(scene.prompt).toContain('never as a literal photo to copy')
+    expect(scene.prompt).toContain(baseJob.visualDescription)
+  })
+
+  it('includes shot notes and regen instructions when given', () => {
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, regenInstructions: 'warmer lighting' })
+    expect(scene.prompt).toContain('Slow push-in')
+    expect(scene.prompt).toContain('warmer lighting')
+  })
+})
+
+describe('composeCharacterRefPrompt', () => {
+  it('attaches an exterior reference photo when one is configured', () => {
+    const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-1' })
+    expect(ref.referenceImageUrl).toBe('https://example.com/exterior.jpg')
+    expect(ref.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+  })
+})
+
+describe('Fresh-CAN brand containerDescriptor', () => {
+  it('explicitly forbids doors on the sides of the truck, not just a buried mention', () => {
+    // The old wording ("no external staircase, no doors on the sides")
+    // was a trailing clause inside a much longer descriptive sentence —
+    // easy for the model to under-weight. This locks in the standalone,
+    // emphatic "NEVER render a door... on either side" rewrite.
+    expect(BRAND_PROFILE.containerDescriptor).toMatch(/NEVER render a door.*either side/i)
+    expect(BRAND_PROFILE.containerDescriptor).toContain('ONLY entrance')
   })
 })

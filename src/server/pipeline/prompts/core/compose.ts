@@ -31,12 +31,13 @@ interface BlogImageJob extends StyleInputs {
   pipelineId: string
   topic: string
   category: string
-  /** The dashboard's optional "Your Scene Idea" free-text field
-   *  (content_jobs.scene_notes) — previously only threaded into
-   *  image_post's photo prompt (see PhotoJob.scene below), never into blog.
-   *  Folded in here as a light, non-binding influence on mood/setting, not
-   *  a scene description to follow literally the way image_post's `scene`
-   *  is. */
+  /** The dashboard's "Your Scene Idea" free-text field (content_jobs.
+   *  scene_notes) — required going forward (see src/app/dashboard/new's
+   *  submit validation), so this is normally always present for a new job.
+   *  Still typed optional/nullable here to keep composing safe for any
+   *  pre-existing job created before the field became required. When
+   *  present, it's the creative brief the scene is built around — see
+   *  SCENE_IS_CREATIVE_BRIEF — not a light, non-binding influence. */
   sceneNotes?: string | null
 }
 
@@ -44,9 +45,12 @@ interface PhotoJob extends StyleInputs {
   pipelineId: string
   topic: string
   category: string
-  /** Scene descriptors already assembled by the caller (scene notes +
-   *  clarifying-question answers, or a topic/category fallback) — see
-   *  worker/src/index.ts photoScene() for how these are gathered today. */
+  /** Scene descriptors already assembled by the caller — required Your
+   *  Scene Idea text plus any clarifying-question answers, or a topic/
+   *  category fallback for a pre-existing job with no scene_notes — see
+   *  src/inngest/functions/image.ts's photoScene(). This is the creative
+   *  brief the photo is built around (see SCENE_IS_CREATIVE_BRIEF), not one
+   *  of several interchangeable descriptors. */
   scene: string
   regenInstructions?: string | null
 }
@@ -165,6 +169,35 @@ function backgroundBrandingInstruction(brand: BrandProfile): string {
   )
 }
 
+// Shared by every composer below that attaches a real truck/character-ref
+// photo as a Flux Kontext edit source. Edit-mode defaults toward
+// reproducing its input when the surrounding prompt doesn't give it
+// something genuinely new to build — confirmed live (2026-09-18, see
+// containerSceneContext below) as near-verbatim reproduction of the
+// reference photo's own background/composition. Spelling out that the
+// photo is a STRUCTURAL guide (shape/color/logo placement) rather than a
+// source to copy wholesale is what stops that — kept as one shared
+// constant so this framing can't drift between call sites.
+const REFERENCE_IS_GUIDE_NOT_COPY =
+  "Use the attached reference photo only as a guide for the vehicle's correct shape, structure, and " +
+  'color — never as a literal photo to copy. Do not reproduce that exact photo\'s own background, framing, ' +
+  'composition, or any people in it; build a genuinely new scene around the vehicle instead.'
+
+// The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) is now
+// a required creative brief for both image_post's photo and blog's
+// hero/inline images — it decides the actual subject, setting, and story.
+// Everything else in these prompts (containerDescriptor, interiorDescriptor,
+// categoryVisualHints, moods, etc.) is brand CONTEXT — fixed constraints on
+// what a Fresh-CAN element must look like if it appears — not a competing
+// creative direction. Without this instruction the model defaults to
+// treating the branded subject as the point of the image, which is exactly
+// what makes generated content read as a Fresh-CAN advertisement instead of
+// an authentic moment.
+const SCENE_IS_CREATIVE_BRIEF =
+  'Treat every brand detail in this prompt as a fixed constraint on what must look or feel correct if it ' +
+  'appears — never as the reason this scene exists. The result must read as a genuine, candid moment from ' +
+  'real life, never a posed, polished advertisement or marketing photo.'
+
 // Added 2026-09-18: the showSubject branch below used to push ONLY the
 // truck/interior's fixed description plus the reference photo's own camera
 // framing — nothing telling the model to actually build a new scene around
@@ -180,7 +213,8 @@ function containerSceneContext(job: BlogImageJob): string {
     `Set this in a real, specific moment relevant to "${job.topic}" (${job.category}) — real people going ` +
     'about their day, a specific time of day, genuine surrounding environment (street, sky, pavement, ' +
     'nearby buildings or greenery as fits the setting). This must read as a new, lived-in scene built around ' +
-    "the subject above, never a plain, empty, studio-style reproduction of the reference photo's own background."
+    `the subject above, never a plain, empty, studio-style reproduction of the reference photo's own ` +
+    `background. ${REFERENCE_IS_GUIDE_NOT_COPY}`
   )
 }
 
@@ -219,17 +253,14 @@ function composeBlogImage(
   const showSubject = isContainerRelevant(`${job.topic} ${job.category}`, false)
 
   const parts = [topicLine, moodDetailFor(brand, job.pipelineId)]
-  // Optional, non-binding: the dashboard's "Your Scene Idea" field. Framed
-  // as inspiration rather than a literal scene to reproduce (unlike
-  // image_post's PhotoJob.scene, which composePhotoPrompt treats as the
-  // scene) — blog images are built from the topic/category/mood system
-  // above, and forcing an unrelated user story onto every hero/inline image
-  // would fight that rather than complement it.
+  // The dashboard's "Your Scene Idea" field — the creative brief this scene
+  // is built around (see SCENE_IS_CREATIVE_BRIEF above the type declaring
+  // this field). Absent only for a job created before the field became
+  // required; the topic/category/mood system above still carries those.
   if (job.sceneNotes) {
     parts.push(
-      `For light inspiration only, the user shared this idea when creating the post: "${job.sceneNotes}" — ` +
-        'let it subtly inform the mood or setting where it naturally fits, without contradicting or replacing ' +
-        'the scene described below.',
+      `This is the creative direction for the image — build a genuine, specific scene around this idea: ` +
+        `"${job.sceneNotes}". ${SCENE_IS_CREATIVE_BRIEF}`,
     )
   }
   let referenceImageUrl: string | undefined
@@ -326,6 +357,12 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // consistent across all of one video's scenes, same reasoning as
     // composeBlogImage's hero/inline pairing.
     moodDetailFor(brand, job.pipelineId),
+    // Every scene reuses the SAME characterRefUrl as its edit source — the
+    // same "edit-mode reproduces its input verbatim" risk containerSceneContext
+    // was fixed for, except worse here: without this, every one of a video's
+    // scenes could come out looking like the character-ref's own plain
+    // reference shot instead of that scene's actual visual_description.
+    REFERENCE_IS_GUIDE_NOT_COPY,
     // Always the "reference photo attached" instruction — a scene_image
     // generation ALWAYS has characterRefUrl attached, never the
     // no-reference-image branch other composers have.
@@ -361,6 +398,7 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
   const parts = [
     `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
     moodDetailFor(brand, job.pipelineId),
+    SCENE_IS_CREATIVE_BRIEF,
   ]
 
   let referenceImageUrl: string | undefined
@@ -376,8 +414,8 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
     // here since it's harmless when job.scene is already rich.
     parts.push(
       'This must depict a real, specific moment — genuine people/action and surrounding environment as ' +
-        "described above — never a plain, empty, studio-style reproduction of the reference photo's own " +
-        'background.',
+        `described above — never a plain, empty, studio-style reproduction of the reference photo's own ` +
+        `background. ${REFERENCE_IS_GUIDE_NOT_COPY}`,
     )
     const reference = pickReferenceFrom(brand.referenceImages.exterior, `${job.pipelineId}:photo`)
     if (reference) {

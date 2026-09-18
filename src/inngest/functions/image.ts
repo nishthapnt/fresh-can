@@ -97,8 +97,10 @@ function resolveImageStyle(raw: string | null): ImageStyle {
   return raw === 'infographic' ? 'infographic' : 'photo'
 }
 
-/** Same as worker/src/index.ts's own photoScene() — scene notes + clarifying
- *  question answers, falling back to a topic/category description. */
+/** scene_notes ("Your Scene Idea") is required going forward (see
+ *  src/app/dashboard/new's submit validation) plus any clarifying-question
+ *  answers; the topic/category fallback below only fires for a pre-existing
+ *  job created before the field became required. */
 function photoScene(job: ImageJobFields): string {
   const descriptors: string[] = []
   if (job.scene_notes) descriptors.push(job.scene_notes)

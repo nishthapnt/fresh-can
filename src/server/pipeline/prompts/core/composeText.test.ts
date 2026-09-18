@@ -51,6 +51,22 @@ describe('composeOutlineSystemPrompt', () => {
     expect(prompt).toContain('exactly 3 to 5 section headings')
     expect(prompt).toContain('concrete and specific to this exact topic')
   })
+
+  it('treats the scene idea as the creative brief the outline is built around, not light inspiration', () => {
+    // Regression test: scene_notes flipped from "let it lightly inform...
+    // without forcing it" to being the thing the outline is built around,
+    // with brand mission/voice reframed as a tone/accuracy constraint.
+    const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category', 'A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('decides what this post is actually about')
+    expect(prompt).not.toContain('lightly inform')
+    expect(prompt).not.toContain('optionally shared')
+  })
+
+  it('omits the scene-idea clause entirely when none is given (pre-existing job with no scene_notes)', () => {
+    const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category')
+    expect(prompt).not.toContain('creative idea for the post')
+  })
 })
 
 describe('composeCopySystemPrompt', () => {
@@ -98,6 +114,18 @@ describe('composeCopySystemPrompt', () => {
     const prompt = composeCopySystemPrompt(testBrand, { language: 'EN', category: 'Test Category' })
     expect(prompt).toContain('140-160 characters')
     expect(prompt).toContain('focus_keyword must appear in post_title')
+  })
+
+  it('treats the scene idea as a binding brief the copy must stay true to, not light inspiration', () => {
+    const prompt = composeCopySystemPrompt(testBrand, {
+      language: 'EN',
+      category: 'Test Category',
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('must stay true to')
+    expect(prompt).not.toContain('lightly inform')
+    expect(prompt).not.toContain('optionally shared')
   })
 })
 

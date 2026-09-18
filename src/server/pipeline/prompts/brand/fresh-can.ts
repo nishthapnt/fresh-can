@@ -17,8 +17,10 @@ const CONTAINER_DESCRIPTOR =
   'logos, or text of any kind; all branding is on the container only. A steel header bar on the ' +
   'container\'s rear face bears a white "Fresh [maple leaf icon] CAN" wordmark, never distorted — the ' +
   'vehicle\'s only text. The container\'s only entrance is a black-frame glass double door at the rear, ' +
-  'flush at bumper height — no external staircase, no doors on the sides. Keep this structure, color, ' +
-  'and logo placement identical every time — a fixed brand element, not a creative choice.'
+  'flush at bumper height, with no external staircase. NEVER render a door, hatch, window, or any other ' +
+  "opening on either side of the container, under any circumstance — the rear double door above is the " +
+  'vehicle\'s ONLY entrance, always. Keep this structure, color, and logo placement identical every time ' +
+  '— a fixed brand element, not a creative choice.'
 
 // Added 2026-09-18 after a real bad generation: a categoryVisualHints entry
 // telling the model the truck "may appear in the background" with only a
