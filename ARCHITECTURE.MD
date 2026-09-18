@@ -71,7 +71,7 @@
 ## 2. Current Pipeline Breakdown
 
 ### 2.1 Job creation (`/dashboard/new`) `[SOURCE]`
-- User fills a form (topic, keywords, category, target audience, language EN/FR/BOTH, content types to generate, optional province/city, optional free-text "scene notes", and for video: script type + duration).
+- User fills a form (topic, keywords, category, target audience, language EN/FR/BOTH, content types to generate, optional free-text "scene notes", and for video: script type + duration).
 - Browser **inserts directly into Supabase** (`content_jobs`, status `pending`) using the anon key — bypassing any API route entirely for job creation.
 - For each selected content type except `image_post`, the browser calls `POST /api/n8n/trigger` with `type` = `video` | `blog`, which server-side POSTs to the single n8n webhook.
 - If `image_post` is selected, the flow first requests **clarifying questions** from n8n (`type: image_questions`, this is the one call that is NOT fire-and-forget — the frontend waits for and renders n8n's JSON response), then submits the answers as a second call (`type: image_post`).

@@ -36,7 +36,9 @@ export default function SocialApprovalCard({
   const [posting, setPosting] = useState(false)
 
   // Fix #8 — re-sync form state when socialPost prop changes identity
-  // (e.g. null → real post after n8n sends back social data via realtime)
+  // (e.g. null → real post once the parent page's realtime subscription
+  // picks up the row the worker just wrote — src/app/dashboard/jobs/
+  // [job_id]/social/page.tsx, not n8n)
   useEffect(() => {
     setCaption(socialPost?.caption ?? '')
     setHashtags(socialPost?.hashtags ?? [])

@@ -369,17 +369,10 @@ export async function upsertSocialPost(
   return data as SocialPost
 }
 
-export async function updateSocialPostStatus(
-  postId: string,
-  status: string,
-): Promise<void> {
-  const { error } = await supabase
-    .from('social_posts')
-    .update({ status, updated_at: new Date().toISOString() })
-    .eq('id', postId)
-
-  if (error) throw new Error(error.message)
-}
+// social_posts.status is now written only by worker/src/db.ts's
+// rollupSocialPostStatus (ARCHITECTURE.MD §2.5 migration off n8n) — no
+// remaining caller writes it from the frontend or an API route, so there's
+// no updateSocialPostStatus export here anymore.
 
 // ─── Social Platform Logs ─────────────────────────────────────────────────────
 

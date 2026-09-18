@@ -41,8 +41,6 @@ interface FormData {
   video_duration:  string
   language:        Language
   content_types:   ContentType[]
-  province:        string
-  city:            string
   scene_notes:     string
   image_style:     ImageStyle
   content_angle:   ContentAngle
@@ -61,35 +59,6 @@ interface QuestionItem {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const VALID_PROVINCES = [
-  'British Columbia',
-  'Alberta',
-  'Saskatchewan',
-  'Manitoba',
-  'Ontario',
-  'Quebec',
-  'New Brunswick',
-  'Nova Scotia',
-  'Prince Edward Island',
-  'Newfoundland & Labrador',
-] as const
-
-type Province = typeof VALID_PROVINCES[number]
-
-const PROVINCES: { value: string; label: string }[] = [
-  { value: 'auto',                      label: 'Auto (Let AI Decide)' },
-  { value: 'British Columbia',          label: 'British Columbia' },
-  { value: 'Alberta',                   label: 'Alberta' },
-  { value: 'Saskatchewan',              label: 'Saskatchewan' },
-  { value: 'Manitoba',                  label: 'Manitoba' },
-  { value: 'Ontario',                   label: 'Ontario' },
-  { value: 'Quebec',                    label: 'Quebec' },
-  { value: 'New Brunswick',             label: 'New Brunswick' },
-  { value: 'Nova Scotia',               label: 'Nova Scotia' },
-  { value: 'Prince Edward Island',      label: 'Prince Edward Island' },
-  { value: 'Newfoundland & Labrador',   label: 'Newfoundland & Labrador' },
-]
 
 const CATEGORIES = [
   'Food Desert Education',
@@ -154,48 +123,6 @@ const CONTENT_TYPES: {
   },
 ]
 
-function buildLocationTargeting(province: string, city: string) {
-  if (!province || province === 'auto') {
-    return { mode: 'auto' as const, province: null, city: null }
-  }
-  // Whitelist check — silently fall back to auto if invalid value
-  const safeProvince: Province | null = (VALID_PROVINCES as readonly string[]).includes(province)
-    ? province as Province
-    : null
-  if (!safeProvince) return { mode: 'auto' as const, province: null, city: null }
-  const safeCity = city.trim() || null
-  return { mode: 'manual' as const, province: safeProvince, city: safeCity }
-}
-
-function buildPayload(
-  jobId: string,
-  form: FormData,
-  type: ContentType,
-  answers?: { question: string; answer: string }[],
-): Record<string, unknown> {
-  // NOTE: this field is named location_config (not location_targeting) —
-  // that's the exact field name the n8n workflow's sanitizer reads. Sending
-  // it under any other name means manual city/province selection gets
-  // silently ignored and the workflow always falls back to auto-rotation.
-  const location_config = buildLocationTargeting(form.province, form.city)
-  const base = {
-    job_id:              jobId,
-    topic:               form.topic,
-    keywords:            form.keywords,
-    category:            form.category,
-    target_audience:     form.target_audience,
-    language:            form.language,
-    brand:               'Fresh-CAN',
-    content_type:        type,
-    location_config,
-    scene_notes:         form.scene_notes,
-    ...(answers ? { answers } : {}),
-  }
-  if (type === 'video') {
-    return { ...base, script_type: form.script_type, video_duration: form.video_duration }
-  }
-  return base
-}
 
 function FL({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
   return (
@@ -306,7 +233,7 @@ export default function NewContentPage() {
 
   const {
     topic, keywords, category, target_audience, script_type, video_duration,
-    language, content_types, province, city, scene_notes, image_style, content_angle, aspect_ratio,
+    language, content_types, scene_notes, image_style, content_angle, aspect_ratio,
     voice_id_en, voice_id_fr, status, pendingJobId,
     restoreSession, setField, toggleType, startGeneration, clearOnCancel,
   } = useNewContentStore()
@@ -383,23 +310,11 @@ export default function NewContentPage() {
           return type
         }
 
-        const res = await fetch('/api/n8n/trigger', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type,
-            payload: buildPayload(jobId, formSnapshot, type),
-          }),
-        })
-        // Same auth-redirect gap as the blog branch above.
-        if (res.redirected && res.url.includes('/login')) {
-          throw new Error(`[${type}] Your session has expired — please log in again and resubmit.`)
-        }
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({}))
-          throw new Error(`[${type}] ${b.error ?? `HTTP ${res.status}`}`)
-        }
-        return type
+        // Unreachable: otherTypes only ever holds 'blog'/'video' (image_post
+        // is filtered out above, and ContentType has no fourth member), and
+        // both are handled above with an early return. Guards against a
+        // future ContentType addition silently falling through to nothing.
+        throw new Error(`[${type}] no generation route wired up for this content type`)
       }),
     )
     const failed = results
@@ -428,17 +343,6 @@ export default function NewContentPage() {
         language,
         content_types,
         status:          'pending',
-        // Persisted so the image_post worker pipeline can read them (it has
-        // no access to this browser's transient form state the way the old
-        // n8n webhook payload did) — supabase/migrations/20260909120000.
-        // 'auto' is the province dropdown's "let AI decide" sentinel value
-        // (newContentStore's default), not a real place name — must be
-        // treated as "no manual location" the same way buildLocationTargeting()
-        // already does for the n8n payload, or it gets fed to the caption
-        // prompt as if "auto" were an actual location (confirmed live: the
-        // word "auto" showing up baked into captions/hashtags).
-        province:        (province && province !== 'auto') ? province : null,
-        city:            city || null,
         scene_notes:     scene_notes || null,
         // Read directly by the worker (worker/src/prompts) when building
         // image prompts for whatever this job generates (blog hero/inline
@@ -446,8 +350,7 @@ export default function NewContentPage() {
         image_style:     image_style,
         // image_post only — read by generate_caption and (for infographic
         // style) generate_ad_copy so both stay cohesive — supabase/
-        // migrations/20260911000000. 'auto' is this dropdown's own "let AI
-        // decide" sentinel, same convention as province above — never
+        // migrations/20260911000000. 'auto' means let AI decide and is never
         // persisted as a literal value.
         content_angle:   (content_angle && content_angle !== 'auto') ? content_angle : null,
         // video only — read directly by the worker (worker/src/index.ts's
@@ -483,7 +386,7 @@ export default function NewContentPage() {
     const formSnapshot: FormData = {
       topic, keywords, category, target_audience,
       script_type, video_duration, language, content_types,
-      province, city, scene_notes, image_style, content_angle, aspect_ratio,
+      scene_notes, image_style, content_angle, aspect_ratio,
       voice_id_en, voice_id_fr,
     }
 
@@ -538,9 +441,8 @@ export default function NewContentPage() {
 
     if (questions.length === 0) {
       // Fallback: no questions came back — just generate straight away.
-      // image_post runs on the new pipeline/worker now (province/city/
-      // scene_notes were already persisted above; no answers to store since
-      // there were no questions).
+      // image_post runs on the new pipeline/worker now; scene_notes was
+      // already persisted above and there are no answers to store.
       const res = await fetch(`/api/jobs/${job.id}/image/generate`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -787,48 +689,6 @@ export default function NewContentPage() {
               </Select>
             </div>
 
-            {/* ── Province / City targeting ─────────────────────────── */}
-            <div className="space-y-1.5">
-              <FL>Target Province / City</FL>
-              <Select
-                value={province}
-                onValueChange={(v) => {
-                  if (!v) return
-                  setField('province', v)
-                  if (v === 'auto') setField('city', '')
-                }}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PROVINCES.map((p) => (
-                    <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-gray-400">
-                {province === 'auto'
-                  ? 'AI will rotate across all Canadian provinces automatically'
-                  : 'Optionally specify a city for more targeted content'}
-              </p>
-            </div>
-
-            {/* City text input — slides in when a province is selected */}
-            <div
-              className={`space-y-1.5 overflow-hidden transition-all duration-200 ${
-                province !== 'auto' ? 'max-h-24 opacity-100' : 'max-h-0 opacity-0'
-              }`}
-            >
-              <FL htmlFor="city">City <span className="text-xs font-normal text-gray-400">(optional)</span></FL>
-              <Input
-                id="city"
-                value={city}
-                onChange={(e) => setField('city', e.target.value)}
-                placeholder="e.g. Winnipeg, Halifax, Regina…"
-                disabled={isSubmitting || province === 'auto'}
-              />
-            </div>
-
             <div className="space-y-1.5">
               <FL>Target Audience <span className="text-red-500">*</span></FL>
               <Select
@@ -914,8 +774,8 @@ export default function NewContentPage() {
                 rows={4}
               />
               <p className="text-xs text-gray-400">
-                Leave blank to use the default story. If filled, this drives the opening
-                problem/story — the truck, QR-scan, and shelving shots stay the same.
+                Leave blank to use the default story. If filled, it shapes the Image Post photo&apos;s scene
+                and lightly influences the Blog post&apos;s angle and images — not used for Video.
               </p>
             </div>
 

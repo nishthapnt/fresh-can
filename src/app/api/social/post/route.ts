@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { upsertSocialPost } from '@/services/contentService'
 import type { ContentType, PlatformType } from '@/types/content'
 
+// Used to fire N8N_SOCIAL_WEBHOOK here — replaced by worker/src/steps/social/
+// publishPost.ts (ARCHITECTURE.MD §2.5 migration off n8n). upsertSocialPost
+// setting status='approved' IS the trigger now: the worker's tickSocial()
+// picks up any approved social_posts row with no social_platform_logs yet
+// on its next poll tick and calls upload-post.com directly, so this route's
+// only remaining job is validating input and writing that one row.
 export async function POST(req: NextRequest) {
   let body: unknown
   try {
@@ -10,13 +16,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { job_id, content_type, caption, hashtags, platforms, file_url } = body as {
+  const { job_id, content_type, caption, hashtags, platforms } = body as {
     job_id: string
     content_type: ContentType
     caption: string
     hashtags: string[]
     platforms: PlatformType[]
-    file_url: string | null
   }
 
   if (!job_id || !content_type || !caption || !platforms?.length) {
@@ -28,46 +33,6 @@ export async function POST(req: NextRequest) {
 
   try {
     await upsertSocialPost(job_id, content_type, caption, hashtags ?? [], platforms)
-
-    const webhookUrl = process.env.N8N_SOCIAL_WEBHOOK
-    if (!webhookUrl) {
-      return NextResponse.json({ error: 'Social posting is not configured yet.' }, { status: 503 })
-    }
-
-    const secret = process.env.N8N_WEBHOOK_SECRET ?? ''
-    let n8nResponse: Response
-    try {
-      n8nResponse = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-n8n-secret': secret,
-        },
-        body: JSON.stringify({
-          job_id,
-          content_type,
-          platforms,
-          caption,
-          hashtags: hashtags ?? [],
-          file_url: file_url ?? null,
-        }),
-        signal: AbortSignal.timeout(90000),
-      })
-    } catch (fetchErr) {
-      return NextResponse.json(
-        { error: 'Could not reach the posting workflow. Nothing was posted.' },
-        { status: 502 },
-      )
-    }
-
-    if (!n8nResponse.ok) {
-      const errText = await n8nResponse.text().catch(() => '')
-      return NextResponse.json(
-        { error: `Posting workflow responded with an error (${n8nResponse.status}): ${errText}` },
-        { status: 502 },
-      )
-    }
-
     return NextResponse.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

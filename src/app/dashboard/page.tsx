@@ -21,6 +21,7 @@ import type {
   ImageLibraryItem,
   BlogLibraryItem,
 } from '@/types/content'
+import StatusBadge from '@/components/StatusBadge'
 import { formatDateTime } from '@/lib/dateUtils'
 import {
   AlertCircle,
@@ -249,10 +250,17 @@ function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Vid
 }
 
 // ─── MiniImageCard ────────────────────────────────────────────────────────────
+// `variants` holds this job's EN and/or FR generated image (a BOTH-language
+// job has both) — same grouped-card-with-toggle pattern as MiniVideoCard.
 
-function MiniImageCard({ item }: { item: ImageLibraryItem }) {
+function MiniImageCard({ variants }: { variants: Partial<Record<'EN' | 'FR', ImageLibraryItem>> }) {
   const [open, setOpen] = useState(false)
-  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}.jpg`
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+  if (!item) return null
+
+  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}-${item.language}.jpg`
 
   return (
     <>
@@ -267,6 +275,11 @@ function MiniImageCard({ item }: { item: ImageLibraryItem }) {
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"
           />
+          {available.length > 1 && (
+            <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] font-medium text-white">
+              EN/FR
+            </span>
+          )}
         </div>
         <div className="p-3">
           <p className="line-clamp-2 text-xs font-semibold leading-snug text-gray-900">
@@ -282,6 +295,7 @@ function MiniImageCard({ item }: { item: ImageLibraryItem }) {
         <DialogContent className="w-[95vw] gap-0 overflow-hidden p-0 sm:max-w-2xl">
           <div className="flex max-h-[60vh] items-center justify-center overflow-hidden bg-gray-100">
             <img
+              key={item.id}
               src={item.image_url}
               alt={item.topic}
               className="max-h-[60vh] max-w-full object-contain"
@@ -290,7 +304,22 @@ function MiniImageCard({ item }: { item: ImageLibraryItem }) {
           <div className="flex items-start justify-between gap-3 p-4">
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold text-gray-900 sm:text-base">{item.topic}</h3>
-              <p className="mt-0.5 text-xs text-gray-500 sm:text-sm">{item.category} · {item.language}</p>
+              {available.length > 1 && (
+                <div className="mt-1.5 inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                  {available.map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setSelected(l)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {l === 'EN' ? 'English' : 'Français'}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1.5 text-xs text-gray-500 sm:text-sm">{item.category} · {item.language}</p>
             </div>
             <a href={item.image_url} download={filename}>
               <Button size="sm" variant="outline">
@@ -305,9 +334,15 @@ function MiniImageCard({ item }: { item: ImageLibraryItem }) {
 }
 
 // ─── MiniBlogCard ─────────────────────────────────────────────────────────────
+// `variants` holds this job's EN and/or FR generated post — same grouped-
+// card-with-toggle pattern as MiniVideoCard/MiniImageCard.
 
-function MiniBlogCard({ item }: { item: BlogLibraryItem }) {
+function MiniBlogCard({ variants }: { variants: Partial<Record<'EN' | 'FR', BlogLibraryItem>> }) {
   const [open, setOpen] = useState(false)
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+  if (!item) return null
 
   const od      = item.output_data
   const title   = od?.post_title   ?? od?.title   ?? item.topic
@@ -324,9 +359,14 @@ function MiniBlogCard({ item }: { item: BlogLibraryItem }) {
   return (
     <>
       <Card
-        className={`border bg-white shadow-sm transition-all hover:shadow-md${hasContent ? ' cursor-pointer' : ''}`}
+        className={`relative border bg-white shadow-sm transition-all hover:shadow-md${hasContent ? ' cursor-pointer' : ''}`}
         onClick={() => { if (hasContent) setOpen(true) }}
       >
+        {available.length > 1 && (
+          <span className="absolute right-2 top-2 rounded bg-gray-900/70 px-1 py-0.5 text-[10px] font-medium text-white">
+            EN/FR
+          </span>
+        )}
         <CardContent className="space-y-2 p-3">
           <div className="flex items-start gap-2">
             <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-amber-100 bg-amber-50">
@@ -363,12 +403,28 @@ function MiniBlogCard({ item }: { item: BlogLibraryItem }) {
             <div className="shrink-0 border-b p-4 sm:p-5">
               {heroUrl && (
                 <img
+                  key={item.id}
                   src={heroUrl}
                   alt={title}
                   className="mb-3 h-40 w-full rounded-lg object-cover"
                 />
               )}
               <h2 className="text-base font-bold leading-snug text-gray-900 sm:text-lg">{title}</h2>
+              {available.length > 1 && (
+                <div className="mt-1.5 inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                  {available.map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setSelected(l)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {l === 'EN' ? 'English' : 'Français'}
+                    </button>
+                  ))}
+                </div>
+              )}
               <p className="mt-1 text-xs text-gray-500 sm:text-sm">
                 {item.category} · {item.language}{readTime ? ` · ${readTime} read` : ''}
               </p>
@@ -378,11 +434,12 @@ function MiniBlogCard({ item }: { item: BlogLibraryItem }) {
             <div className="min-h-0 flex-1 overflow-y-auto">
               {htmlFinal ? (
                 <div
+                  key={item.id}
                   className="db-blog"
                   dangerouslySetInnerHTML={{ __html: htmlFinal }}
                 />
               ) : textFallback ? (
-                <div className="p-4 sm:p-5">
+                <div key={item.id} className="p-4 sm:p-5">
                   <p className="whitespace-pre-wrap text-sm leading-7 text-gray-800">{textFallback}</p>
                 </div>
               ) : null}
@@ -428,13 +485,14 @@ export default function DashboardPage() {
         getBlogLibrary(),
       ])
       setKpi(kpiData)
-      // Grouped by job_id below (videoGroups) so a BOTH-language job renders
-      // as one card with a toggle instead of two — sliced to the newest 4
-      // there, not here, since slicing raw EN/FR rows to 4 first could grab
-      // both rows of 2 jobs and leave less than 4 cards to show.
+      // Grouped by job_id below (videoGroups/imageGroups/blogGroups) so a
+      // BOTH-language job renders as one card with a toggle instead of two —
+      // sliced to the newest 4 there, not here, since slicing raw EN/FR rows
+      // to 4 first could grab both rows of 2 jobs and leave less than 4
+      // cards to show.
       setVideos(vids)
-      setImages(imgs.slice(0, 4))
-      setBlogs(blgs.slice(0, 4))
+      setImages(imgs)
+      setBlogs(blgs)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data')
     } finally {
@@ -463,7 +521,36 @@ export default function DashboardPage() {
     return order.slice(0, 4).map((jobId) => ({ jobId, variants: map.get(jobId)! }))
   }, [videos])
 
-  const hasAnyContent = videoGroups.length > 0 || images.length > 0 || blogs.length > 0
+  // Same grouping convention as videoGroups above.
+  const imageGroups = useMemo(() => {
+    const map = new Map<string, Partial<Record<'EN' | 'FR', ImageLibraryItem>>>()
+    const order: string[] = []
+    for (const item of images) {
+      if (!map.has(item.job_id)) {
+        map.set(item.job_id, {})
+        order.push(item.job_id)
+      }
+      const langKey = item.language === 'FR' ? 'FR' : 'EN'
+      map.get(item.job_id)![langKey] = item
+    }
+    return order.slice(0, 4).map((jobId) => ({ jobId, variants: map.get(jobId)! }))
+  }, [images])
+
+  const blogGroups = useMemo(() => {
+    const map = new Map<string, Partial<Record<'EN' | 'FR', BlogLibraryItem>>>()
+    const order: string[] = []
+    for (const item of blogs) {
+      if (!map.has(item.job_id)) {
+        map.set(item.job_id, {})
+        order.push(item.job_id)
+      }
+      const langKey = item.language === 'FR' ? 'FR' : 'EN'
+      map.get(item.job_id)![langKey] = item
+    }
+    return order.slice(0, 4).map((jobId) => ({ jobId, variants: map.get(jobId)! }))
+  }, [blogs])
+
+  const hasAnyContent = videoGroups.length > 0 || imageGroups.length > 0 || blogGroups.length > 0
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -570,20 +657,20 @@ export default function DashboardPage() {
           <SectionHeader
             icon={ImageIcon}
             title="Recent Images"
-            count={images.length}
+            count={imageGroups.length}
             color="bg-pink-50 text-pink-600"
             onViewAll={() => router.push('/dashboard/library')}
           />
           {loading ? (
             <MiniGridSkeleton type="image" />
-          ) : images.length === 0 ? (
+          ) : imageGroups.length === 0 ? (
             <SectionEmpty
               message="No images yet — create an image post request"
               onAction={() => router.push('/dashboard/new')}
             />
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-              {images.map((v) => <MiniImageCard key={v.id} item={v} />)}
+              {imageGroups.map((g) => <MiniImageCard key={g.jobId} variants={g.variants} />)}
             </div>
           )}
         </div>
@@ -593,20 +680,20 @@ export default function DashboardPage() {
           <SectionHeader
             icon={BookOpen}
             title="Recent Blog Posts"
-            count={blogs.length}
+            count={blogGroups.length}
             color="bg-amber-50 text-amber-600"
             onViewAll={() => router.push('/dashboard/library')}
           />
           {loading ? (
             <MiniGridSkeleton type="blog" />
-          ) : blogs.length === 0 ? (
+          ) : blogGroups.length === 0 ? (
             <SectionEmpty
               message="No blog posts yet — create a blog post request"
               onAction={() => router.push('/dashboard/new')}
             />
           ) : (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-4">
-              {blogs.map((v) => <MiniBlogCard key={v.id} item={v} />)}
+              {blogGroups.map((g) => <MiniBlogCard key={g.jobId} variants={g.variants} />)}
             </div>
           )}
         </div>

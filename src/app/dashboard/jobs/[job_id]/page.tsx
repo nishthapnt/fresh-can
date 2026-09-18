@@ -25,6 +25,7 @@ import {
   Clock,
   Sparkles,
   Hash,
+  StopCircle,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -583,6 +584,10 @@ function WaitingCard({
   onRefresh,
   onRetryWithInput,
   startedAt,
+  terminalError,
+  onCancel,
+  cancelling = false,
+  cancelError,
 }: {
   type: ContentType
   topic: string
@@ -591,6 +596,14 @@ function WaitingCard({
   onRefresh?: () => void
   onRetryWithInput?: () => void
   startedAt?: number | null
+  // Set when the pipeline has already stopped server-side (status ===
+  // 'failed') — either the user cancelled it or a provider genuinely
+  // failed. Distinguished by the exact 'Cancelled by user' marker the
+  // cancel routes write (see src/app/api/jobs/[jobId]/{blog,image}/cancel).
+  terminalError?: string | null
+  onCancel?: () => void
+  cancelling?: boolean
+  cancelError?: string | null
 }) {
   const [progress, setProgress] = useState(0)
 
@@ -604,6 +617,53 @@ function WaitingCard({
     const id = setInterval(update, 1500)
     return () => clearInterval(id)
   }, [startedAt])
+
+  const cancelControls = onCancel && (
+    <div className="flex flex-col items-center gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onCancel}
+        disabled={cancelling}
+        className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+      >
+        {cancelling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <StopCircle className="mr-1.5 h-3.5 w-3.5" />}
+        Stop generation
+      </Button>
+      {cancelError && <p className="max-w-xs text-xs text-red-600">{cancelError}</p>}
+    </div>
+  )
+
+  if (terminalError) {
+    const isCancelled = terminalError === 'Cancelled by user'
+    return (
+      <Card className="border bg-white shadow-sm">
+        <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
+          <div className={`flex h-16 w-16 items-center justify-center rounded-full ${isCancelled ? 'bg-gray-100' : 'bg-red-50'}`}>
+            {isCancelled
+              ? <StopCircle className="h-8 w-8 text-gray-400" />
+              : <AlertCircle className="h-8 w-8 text-red-400" />}
+          </div>
+          <div>
+            <p className="text-base font-semibold text-gray-800">
+              {isCancelled ? 'Generation stopped' : 'Generation failed'}
+            </p>
+            <p className="mt-1 text-sm text-gray-500">
+              {isCancelled
+                ? `You stopped the ${TYPE_LABELS[type].toLowerCase()} generation for “${topic}”.`
+                : terminalError}
+            </p>
+          </div>
+          {onRetryWithInput && (
+            <Button onClick={onRetryWithInput} className="bg-gray-900 hover:bg-gray-800 text-white">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Retry with Instructions
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
   if (timedOut) {
     return (
       <Card className="border bg-white shadow-sm">
@@ -636,6 +696,7 @@ function WaitingCard({
               </Button>
             )}
           </div>
+          {cancelControls}
         </CardContent>
       </Card>
     )
@@ -682,6 +743,7 @@ function WaitingCard({
             </p>
           </div>
         )}
+        {cancelControls}
       </CardContent>
     </Card>
   )
@@ -1563,6 +1625,64 @@ export default function JobDetailPage() {
     setVideoCancelling(false)
   }, [job_id, loadVideoStatus])
 
+  // Blog/image_post have no equivalent of videoStatus today (see that
+  // state's own doc comment) — this is the minimal slice of it (just the
+  // pipeline's status/last_error) needed to know whether generation has
+  // already stopped server-side, so the "Stop generation" button's result
+  // survives a page refresh instead of spinning forever.
+  const [blogPipelineStatus, setBlogPipelineStatus] = useState<{ status: string; last_error: string | null } | null>(null)
+  const [imagePipelineStatus, setImagePipelineStatus] = useState<{ status: string; last_error: string | null } | null>(null)
+
+  const loadBlogStatus = useCallback(async () => {
+    const res = await fetch(`/api/jobs/${job_id}/blog/status`)
+    if (!res.ok) { setBlogPipelineStatus(null); return }
+    const data = await res.json()
+    setBlogPipelineStatus({ status: data.pipeline.status, last_error: data.pipeline.last_error })
+  }, [job_id])
+
+  const loadImageStatus = useCallback(async () => {
+    const res = await fetch(`/api/jobs/${job_id}/image/status`)
+    if (!res.ok) { setImagePipelineStatus(null); return }
+    const data = await res.json()
+    setImagePipelineStatus({ status: data.pipeline.status, last_error: data.pipeline.last_error })
+  }, [job_id])
+
+  const [blogCancelling, setBlogCancelling] = useState(false)
+  const [blogCancelError, setBlogCancelError] = useState<string | null>(null)
+
+  const handleBlogCancel = useCallback(async () => {
+    if (!window.confirm('Stop generating this blog post? Progress so far is kept, but nothing further will be generated.')) return
+    setBlogCancelling(true)
+    setBlogCancelError(null)
+    const res = await fetch(`/api/jobs/${job_id}/blog/cancel`, { method: 'POST' })
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}))
+      setBlogCancelError(b.error ?? 'Failed to stop generation')
+      setBlogCancelling(false)
+      return
+    }
+    await loadBlogStatus()
+    setBlogCancelling(false)
+  }, [job_id, loadBlogStatus])
+
+  const [imageCancelling, setImageCancelling] = useState(false)
+  const [imageCancelError, setImageCancelError] = useState<string | null>(null)
+
+  const handleImageCancel = useCallback(async () => {
+    if (!window.confirm('Stop generating this image post? Progress so far is kept, but nothing further will be generated.')) return
+    setImageCancelling(true)
+    setImageCancelError(null)
+    const res = await fetch(`/api/jobs/${job_id}/image/cancel`, { method: 'POST' })
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}))
+      setImageCancelError(b.error ?? 'Failed to stop generation')
+      setImageCancelling(false)
+      return
+    }
+    await loadImageStatus()
+    setImageCancelling(false)
+  }, [job_id, loadImageStatus])
+
   // Timeout for long-running generation
   const [timedOut, setTimedOut] = useState(false)
 
@@ -1665,6 +1785,12 @@ export default function JobDetailPage() {
     if ((j.content_types as ContentType[])?.includes('video')) {
       loadVideoStatus()
     }
+    if ((j.content_types as ContentType[])?.includes('blog')) {
+      loadBlogStatus()
+    }
+    if ((j.content_types as ContentType[])?.includes('image_post')) {
+      loadImageStatus()
+    }
 
     if (!draftErr && draftRows) {
       const draftMap = new Map<string, ContentDraft>()
@@ -1738,7 +1864,7 @@ export default function JobDetailPage() {
     }
 
     setLoading(false)
-  }, [job_id, loadVideoStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [job_id, loadVideoStatus, loadBlogStatus, loadImageStatus]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -2273,6 +2399,10 @@ export default function JobDetailPage() {
             timedOut={false}
             onRefresh={() => loadData()}
             onRetryWithInput={() => setRegenDialog({ open: true, type })}
+            terminalError={imagePipelineStatus?.status === 'failed' ? imagePipelineStatus.last_error : null}
+            onCancel={handleImageCancel}
+            cancelling={imageCancelling}
+            cancelError={imageCancelError}
           />
         )
       }
@@ -2336,6 +2466,10 @@ export default function JobDetailPage() {
           }}
           onRetryWithInput={() => setRegenDialog({ open: true, type })}
           startedAt={type === 'blog' ? blogWaitStart : null}
+          terminalError={blogPipelineStatus?.status === 'failed' ? blogPipelineStatus.last_error : null}
+          onCancel={handleBlogCancel}
+          cancelling={blogCancelling}
+          cancelError={blogCancelError}
         />
       )
     }

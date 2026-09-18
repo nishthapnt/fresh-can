@@ -29,6 +29,45 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+// Success-path counterpart to the worker's markJobReadyIfAllContentComplete
+// (worker/src/db.ts) — can't import that directly, since worker/ is a
+// separate Node project from this Next.js app. Blog is the only content
+// type whose generated_content row is written here (approve-gated) rather
+// than automatically by the worker, so this is the one place in src/ that
+// needs its own copy of the same aggregate-completeness check. Deliberately
+// coarse (content-type presence, not per-language completeness) — see that
+// function's own comment for why. Never downgrades a job already at
+// 'ready'/'posted'/'failed'.
+async function markJobReadyIfAllContentComplete(
+  supabase: ReturnType<typeof getSupabase>,
+  jobId: string,
+): Promise<void> {
+  const { data: job, error } = await supabase
+    .from('content_jobs')
+    .select('status, content_types')
+    .eq('id', jobId)
+    .single()
+  if (error || !job) return
+  if (job.status === 'ready' || job.status === 'posted' || job.status === 'failed') return
+
+  const requested = (job.content_types as string[] | null) ?? []
+  if (requested.length === 0) return
+
+  const { data: rows, error: rowsErr } = await supabase
+    .from('generated_content')
+    .select('content_type')
+    .eq('job_id', jobId)
+  if (rowsErr) return
+
+  const completedTypes = new Set((rows ?? []).map((r) => r.content_type as string))
+  if (!requested.every((t) => completedTypes.has(t))) return
+
+  await supabase
+    .from('content_jobs')
+    .update({ status: 'ready', updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+}
+
 /**
  * Server-side mirror of LibraryContent.tsx's reconstructBlogHtml() —
  * html_final is normally computed client-side (blogEditToDraftData, via the
@@ -216,6 +255,8 @@ export async function POST(
     { onConflict: 'job_id,content_type,language' },
   )
   if (gErr) return NextResponse.json({ error: gErr.message }, { status: 500 })
+
+  await markJobReadyIfAllContentComplete(supabase, jobId)
 
   const { data: updatedTrack, error: uErr } = await supabase
     .from('content_language_tracks')

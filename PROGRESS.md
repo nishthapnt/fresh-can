@@ -184,7 +184,7 @@
 - New worker steps: `generatePhoto`, `generateCaption`, `finalizeImageContent`
 - New `adapters/storage.ts` — downloads KIE.ai's ephemeral photo and re-uploads to permanent Supabase Storage (`fc-image-posts` bucket, `{job_id}-final.jpg`, matching n8n's existing convention) — blog's hero/inline images still don't do this (follow-up)
 - Same 5 routes as blog: `image/generate`, `image/status`, `image/tracks/[lang]/{approve,retry}`, `image/regenerate`
-- Persisted previously-ephemeral context (`content_jobs.province/city/scene_notes/image_answers`) that the old n8n payload carried but never stored — worker now actually uses it in the photo/caption prompts. Verified live: a photo matched hand-written scene notes almost exactly, and a caption came out genuinely locally-relevant ("Lunenburg", `#LunenburgNS`)
+- Persisted previously-ephemeral image context (`content_jobs.scene_notes/image_answers`) that the old n8n payload carried but never stored — worker uses it in photo prompts. Province/city targeting was later removed; scene notes and clarifying answers remain supported.
 - Regenerate instructions verified live (requested film-noir black & white — got it)
 
 *Shared fixes*

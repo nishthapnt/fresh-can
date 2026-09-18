@@ -136,7 +136,6 @@ function PostModal({
           caption,
           hashtags: hashtags.split(/[\s,]+/).filter((h) => h.startsWith('#')),
           platforms,
-          file_url: target.media_url,
         }),
       })
       if (!res.ok) {
@@ -159,7 +158,7 @@ function PostModal({
               <CheckCircle2 className="h-8 w-8 text-green-600" />
             </div>
             <div>
-              <p className="text-base font-semibold text-gray-900">Sent to n8n!</p>
+              <p className="text-base font-semibold text-gray-900">Post queued!</p>
               <p className="mt-1 text-sm text-gray-500">
                 Posting to{' '}
                 {platforms
@@ -693,26 +692,55 @@ function VideoCard({
 }
 
 // ─── ImageCard ────────────────────────────────────────────────────────────────
+// `variants` holds this job's EN and/or FR generated image — a BOTH-language
+// job has both, and a language toggle (in the card body and the view modal)
+// switches which one this card/modal displays. Actions (View/Post/Save/
+// Delete) always act on whichever language is currently selected. Same
+// pattern as VideoCard.
 
 function ImageCard({
-  item,
+  variants,
   isLatest,
   isNew,
   isHighlighted,
   onDeleted,
 }: {
-  item: ImageLibraryItem
+  variants: Partial<Record<'EN' | 'FR', ImageLibraryItem>>
   isLatest: boolean
   isNew: boolean
   isHighlighted?: boolean
   onDeleted: (id: string) => void
 }) {
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+
   const [viewOpen, setViewOpen] = useState(false)
   const [postOpen, setPostOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
-  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}.jpg`
+
+  if (!item) return null
+
+  const filename = `${item.topic.slice(0, 40).replace(/\s+/g, '-').toLowerCase()}-${item.language}.jpg`
+
+  const LanguagePicker = ({ className = '' }: { className?: string }) =>
+    available.length > 1 ? (
+      <div className={`inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 ${className}`}>
+        {available.map((l) => (
+          <button
+            key={l}
+            onClick={() => setSelected(l)}
+            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {l === 'EN' ? 'English' : 'Français'}
+          </button>
+        ))}
+      </div>
+    ) : null
 
   const handleDelete = async () => {
     setDeleting(true)
@@ -751,6 +779,7 @@ function ImageCard({
         <CardContent className="space-y-3 p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
+            <LanguagePicker className="mt-1.5" />
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
               <span>{item.category}</span>
               {item.language && <><span className="text-gray-300">·</span><span>{item.language}</span></>}
@@ -810,13 +839,14 @@ function ImageCard({
         <DialogContent className="sm:max-w-3xl gap-0 p-0 flex flex-col max-h-[92vh] overflow-hidden">
           {/* Image — shrinks if tall, never overflows */}
           <div className="flex shrink-0 items-center justify-center overflow-hidden bg-gray-100" style={{ maxHeight: '60vh' }}>
-            <img src={item.image_url} alt={item.topic} className="max-h-[60vh] max-w-full object-contain" />
+            <img key={item.id} src={item.image_url} alt={item.topic} className="max-h-[60vh] max-w-full object-contain" />
           </div>
           {/* Scrollable info section */}
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="flex items-start justify-between gap-4 p-4">
               <div className="min-w-0 flex-1">
                 <h3 className="font-semibold leading-snug text-gray-900">{item.topic}</h3>
+                <LanguagePicker className="mt-1.5" />
                 <p className="mt-1 text-sm text-gray-500">{item.category}{item.language ? ` · ${item.language}` : ''}</p>
                 {item.caption && <p className="mt-1.5 text-sm leading-relaxed text-gray-700">{item.caption}</p>}
                 {item.hashtags.length > 0 && (
@@ -949,17 +979,27 @@ function reconstructBlogHtml(d: Record<string, unknown>): string {
 
 // ─── BlogCard ─────────────────────────────────────────────────────────────────
 
+// `variants` holds this job's EN and/or FR generated post — a BOTH-language
+// job has both, and a language toggle (below the title, both in the card
+// body and the read modal) switches which one this card/modal displays.
+// Actions (Read/Post/Link/Delete) always act on whichever language is
+// currently selected. Same pattern as VideoCard/ImageCard.
+
 function BlogCard({
-  item,
+  variants,
   isLatest,
   isNew,
   onDeleted,
 }: {
-  item: BlogLibraryItem
+  variants: Partial<Record<'EN' | 'FR', BlogLibraryItem>>
   isLatest: boolean
   isNew: boolean
   onDeleted: (id: string) => void
 }) {
+  const available = (['EN', 'FR'] as const).filter((l) => variants[l])
+  const [selected, setSelected] = useState<'EN' | 'FR'>(available[0] ?? 'EN')
+  const item = variants[selected] ?? variants[available[0]]
+
   const [readOpen, setReadOpen] = useState(false)
   const [postOpen, setPostOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -972,7 +1012,14 @@ function BlogCard({
   const [draftHtml, setDraftHtml]         = useState<string | null>(null)
   const [draftInline, setDraftInline]     = useState<{ url: string; alt: string } | null>(null)
   const [draftFetching, setDraftFetching] = useState(false)
-  const fetchDone = useRef(false) // prevents infinite re-fetch when draft also has no html_final
+  // Tracks which language's draft is currently loaded (or being loaded),
+  // not just a boolean — a language toggle switches `item.language` while
+  // the modal stays open, and the old boolean-ref version would never
+  // re-fetch for the newly selected language, silently showing the first
+  // language's content (or none) after a toggle.
+  const fetchedForLang = useRef<string | null>(null)
+
+  if (!item) return null
 
   const od = item.output_data
 
@@ -1012,10 +1059,17 @@ function BlogCard({
     }
   }
 
-  // When modal opens and html_final missing in generated_content → fetch from content_drafts once
+  // When modal opens and html_final missing in generated_content → fetch from
+  // content_drafts once per language. Re-fetches when the toggle switches to
+  // a language that hasn't been fetched yet (fetchedForLang tracks WHICH
+  // language, not just whether any fetch happened — a plain boolean would
+  // silently keep showing the first language's draft forever after a toggle).
   useEffect(() => {
-    if (!readOpen || od?.html_final || od?.post_content || fetchDone.current) return
-    fetchDone.current = true
+    if (!readOpen || od?.html_final || od?.post_content) return
+    if (fetchedForLang.current === item.language) return
+    fetchedForLang.current = item.language
+    setDraftHtml(null)
+    setDraftInline(null)
     setDraftFetching(true)
     supabase
       .from('content_drafts')
@@ -1041,9 +1095,26 @@ function BlogCard({
         }
         setDraftFetching(false)
       })
-  }, [readOpen, item.job_id, item.language]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [readOpen, item.job_id, item.language, od?.html_final, od?.post_content])
 
   useEffect(() => { setHeroLoaded(false); setHeroError(false) }, [validHero])
+
+  const LanguagePicker = ({ className = '' }: { className?: string }) =>
+    available.length > 1 ? (
+      <div className={`inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 ${className}`}>
+        {available.map((l) => (
+          <button
+            key={l}
+            onClick={() => setSelected(l)}
+            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              selected === l ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {l === 'EN' ? 'English' : 'Français'}
+          </button>
+        ))}
+      </div>
+    ) : null
 
   return (
     <>
@@ -1073,6 +1144,7 @@ function BlogCard({
         <CardContent className="space-y-3 p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{title}</h3>
+            <LanguagePicker className="mt-1.5" />
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
               <span>{item.category}</span>
               <span className="text-gray-300">·</span>
@@ -1143,6 +1215,7 @@ function BlogCard({
             {/* Header */}
             <div className="shrink-0 border-b px-6 py-4">
               <h2 className="text-xl font-bold leading-snug text-gray-900 mb-1.5">{title}</h2>
+              <LanguagePicker className="mb-1.5" />
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
                 <span className="font-medium text-gray-700">{item.category}</span>
                 <span className="text-gray-300">·</span>
@@ -1158,7 +1231,7 @@ function BlogCard({
             <div className="min-h-0 flex-1 overflow-y-auto">
               {/* Images preview — hero + inline side by side */}
               {(validHero || validInline) && (
-                <div className={`grid gap-3 px-6 pt-5 pb-0 ${validHero && validInline ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                <div key={item.id} className={`grid gap-3 px-6 pt-5 pb-0 ${validHero && validInline ? 'grid-cols-2' : 'grid-cols-1'}`}>
                   {validHero && (
                     <div>
                       <p className="mb-1 text-xs text-gray-400">Hero image</p>
@@ -1185,7 +1258,7 @@ function BlogCard({
               ) : htmlFinal ? (
                 <>
                   <style>{BLOG_CSS}</style>
-                  <div className="blog-render" dangerouslySetInnerHTML={{ __html: htmlFinal }} />
+                  <div key={item.id} className="blog-render" dangerouslySetInnerHTML={{ __html: htmlFinal }} />
                 </>
               ) : excerpt ? (
                 <div className="px-6 py-5">
@@ -1435,6 +1508,23 @@ function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
     return list
   }, [items, search, category, lang, sort])
 
+  // Group filtered items by job_id, so a "Both" job's EN and FR images
+  // become one card with a toggle, instead of two separate cards — same
+  // convention as VideoSection's own `grouped` above.
+  const grouped = useMemo(() => {
+    const map = new Map<string, Partial<Record<'EN' | 'FR', ImageLibraryItem>>>()
+    const order: string[] = []
+    for (const item of filtered) {
+      if (!map.has(item.job_id)) {
+        map.set(item.job_id, {})
+        order.push(item.job_id)
+      }
+      const langKey = item.language === 'FR' ? 'FR' : 'EN'
+      map.get(item.job_id)![langKey] = item
+    }
+    return order.map((jobId) => ({ jobId, variants: map.get(jobId)! }))
+  }, [filtered])
+
   const handleDeleted = useCallback((id: string) => {
     setItems((prev) => prev.filter((v) => v.id !== id))
   }, [])
@@ -1449,18 +1539,18 @@ function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
       )}
       {items.length === 0 ? (
         <EmptyState icon={ImageIcon} message="Submit an image post request to generate your first image" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
-      ) : filtered.length === 0 ? (
+      ) : grouped.length === 0 ? (
         <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all') }} />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filtered.map((item, i) => {
-            const isHighlighted = !!highlightJobId && item.job_id === highlightJobId
+          {grouped.map((g, i) => {
+            const isHighlighted = !!highlightJobId && g.jobId === highlightJobId
             return (
-              <div key={item.id} ref={isHighlighted ? highlightRef : undefined}>
+              <div key={g.jobId} ref={isHighlighted ? highlightRef : undefined}>
                 <ImageCard
-                  item={item}
+                  variants={g.variants}
                   isLatest={i === 0 && sort === 'desc'}
-                  isNew={newIds.has(item.id)}
+                  isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
                   isHighlighted={isHighlighted}
                   onDeleted={handleDeleted}
                 />
@@ -1522,6 +1612,23 @@ function BlogSection() {
     return list
   }, [items, search, category, lang, sort])
 
+  // Group filtered items by job_id, so a "Both" job's EN and FR posts
+  // become one card with a toggle, instead of two separate cards — same
+  // convention as VideoSection's own `grouped` above.
+  const grouped = useMemo(() => {
+    const map = new Map<string, Partial<Record<'EN' | 'FR', BlogLibraryItem>>>()
+    const order: string[] = []
+    for (const item of filtered) {
+      if (!map.has(item.job_id)) {
+        map.set(item.job_id, {})
+        order.push(item.job_id)
+      }
+      const langKey = item.language === 'FR' ? 'FR' : 'EN'
+      map.get(item.job_id)![langKey] = item
+    }
+    return order.map((jobId) => ({ jobId, variants: map.get(jobId)! }))
+  }, [filtered])
+
   const handleDeleted = useCallback((id: string) => {
     setItems((prev) => prev.filter((v) => v.id !== id))
   }, [])
@@ -1536,16 +1643,16 @@ function BlogSection() {
       )}
       {items.length === 0 ? (
         <EmptyState icon={FileText} message="Submit a blog post request to generate your first article" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
-      ) : filtered.length === 0 ? (
+      ) : grouped.length === 0 ? (
         <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all') }} />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((item, i) => (
+          {grouped.map((g, i) => (
             <BlogCard
-              key={item.id}
-              item={item}
+              key={g.jobId}
+              variants={g.variants}
               isLatest={i === 0 && sort === 'desc'}
-              isNew={newIds.has(item.id)}
+              isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
               onDeleted={handleDeleted}
             />
           ))}

@@ -8,12 +8,12 @@ import SocialApprovalCard from '@/components/SocialApprovalCard'
 import StatusBadge from '@/components/StatusBadge'
 import TopBar from '@/components/layout/TopBar'
 import { SocialPageSkeleton } from '@/components/skeletons/Skeleton'
+import { supabase } from '@/lib/supabase'
 import {
   getContentJob,
   getGeneratedContent,
   getSocialPostsForJob,
   upsertSocialPost,
-  updateSocialPostStatus,
   getPlatformLogsForPost,
 } from '@/services/contentService'
 import type {
@@ -136,6 +136,52 @@ export default function SocialPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Without this, the page only ever reflected whatever state existed the
+  // instant handleApprovePost's own load() ran — before the worker's
+  // tickSocial() (worker/src/steps/social/publishPost.ts) had done anything
+  // at all, since submission/polling now happen asynchronously in the
+  // worker instead of within the original request. A viewer would never
+  // see 'posting' → 'posted'/'failed' or a platform's error_message appear
+  // without manually refreshing the browser tab. Mirrors the same
+  // postgres_changes pattern src/app/dashboard/jobs/[job_id]/page.tsx
+  // already uses for content_drafts/content_jobs.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`social-watch-${job_id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'social_posts', filter: `job_id=eq.${job_id}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') return
+          const row = payload.new as SocialPost
+          setSocialPosts((prev) => {
+            const idx = prev.findIndex((p) => p.id === row.id)
+            if (idx === -1) return [...prev, row]
+            const next = [...prev]
+            next[idx] = row
+            return next
+          })
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'social_platform_logs', filter: `job_id=eq.${job_id}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') return
+          const row = payload.new as SocialPlatformLog
+          setPlatformLogs((prev) => {
+            const existing = prev[row.social_post_id] ?? []
+            const idx = existing.findIndex((l) => l.id === row.id)
+            const updated = idx === -1 ? [...existing, row] : existing.map((l, i) => (i === idx ? row : l))
+            return { ...prev, [row.social_post_id]: updated }
+          })
+        },
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [job_id])
+
   const getSocialPostForType = (type: ContentType): SocialPost | null =>
     socialPosts.find((p) => p.content_type === type) ?? null
 
@@ -148,32 +194,19 @@ export default function SocialPage() {
     hashtags: string[],
     platforms: PlatformType[],
   ) => {
-    const post = await upsertSocialPost(job_id, contentType, caption, hashtags, platforms)
-    await updateSocialPostStatus(post.id, 'posting')
-
-    // Fix #16 — use server-side proxy instead of exposing n8n URL in browser
-    const res = await fetch('/api/n8n/trigger', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'social',
-        payload: {
-          job_id,
-          social_post_id: post.id,
-          content_type: contentType,
-          caption,
-          hashtags,
-          platforms,
-          brand: 'Fresh-CAN',
-        },
-      }),
-    })
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.error ?? `Social webhook returned ${res.status}`)
-    }
-
+    // upsertSocialPost writes status='approved' — that IS the trigger now.
+    // worker/src/steps/social/publishPost.ts's tickSocial() picks up any
+    // approved social_posts row with no social_platform_logs yet on its
+    // next poll tick and calls upload-post.com directly (replaces the old
+    // n8n webhook + eager client-side 'posting' write, ARCHITECTURE.MD
+    // §2.5). Setting 'posting' here before any real work had started was
+    // itself a contributor to the confirmed-live stuck-forever bug
+    // (TASKS.md/PROGRESS.md) — a post could land at 'posting' with zero
+    // matching social_platform_logs rows if the webhook call below then
+    // failed or hung, with no way back. The worker is the only thing that
+    // writes 'posting' now, and only once it actually has a provider job
+    // ref to poll.
+    await upsertSocialPost(job_id, contentType, caption, hashtags, platforms)
     await load()
   }
 
@@ -274,31 +307,42 @@ export default function SocialPage() {
                     </h4>
                     <div className="space-y-2">
                       {(platformLogs[socialPost.id] ?? []).length === 0 ? (
-                        <p className="text-xs text-gray-400">No platform activity yet.</p>
+                        <p className="text-xs text-gray-400">
+                          {socialPost.status === 'approved'
+                            ? 'Approved — waiting for the next posting cycle (usually a few seconds).'
+                            : 'No platform activity yet.'}
+                        </p>
                       ) : (
                         (platformLogs[socialPost.id] ?? []).map((log) => (
                           <div
                             key={log.id}
-                            className="flex items-center justify-between rounded-lg border bg-white px-3 py-2.5 text-xs shadow-sm"
+                            className="rounded-lg border bg-white px-3 py-2.5 text-xs shadow-sm"
                           >
-                            <span className="font-medium capitalize text-gray-700">
-                              {log.platform}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              <StatusBadge
-                                status={log.status as Parameters<typeof StatusBadge>[0]['status']}
-                              />
-                              {log.post_url && (
-                                <a
-                                  href={log.post_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-blue-500 underline hover:text-blue-700"
-                                >
-                                  View post
-                                </a>
-                              )}
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium capitalize text-gray-700">
+                                {log.platform}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <StatusBadge
+                                  status={log.status as Parameters<typeof StatusBadge>[0]['status']}
+                                />
+                                {log.post_url && (
+                                  <a
+                                    href={log.post_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-500 underline hover:text-blue-700"
+                                  >
+                                    View post
+                                  </a>
+                                )}
+                              </div>
                             </div>
+                            {log.status === 'failed' && log.error_message && (
+                              <p className="mt-1.5 text-[11px] leading-snug text-red-600">
+                                {log.error_message}
+                              </p>
+                            )}
                           </div>
                         ))
                       )}

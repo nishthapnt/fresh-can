@@ -36,8 +36,6 @@ function buildUserPrompt(job: {
   keywords: string | null
   category: string
   target_audience: string
-  province: string | null
-  city: string | null
   scene_notes: string | null
 }): string {
   const lines = [
@@ -46,7 +44,6 @@ function buildUserPrompt(job: {
     `Category: ${job.category}`,
     `Target audience: ${job.target_audience}`,
   ]
-  if (job.province) lines.push(`Target location: ${job.province}${job.city ? `, ${job.city}` : ''}`)
   if (job.scene_notes) lines.push(`User's own scene idea: ${job.scene_notes}`)
   return lines.join('\n')
 }
@@ -105,7 +102,7 @@ export async function POST(
 
   const { data: job, error: jobErr } = await supabase
     .from('content_jobs')
-    .select('topic, keywords, category, target_audience, province, city, scene_notes')
+    .select('topic, keywords, category, target_audience, scene_notes')
     .eq('id', jobId)
     .single()
 

@@ -12,8 +12,7 @@ export type ImageStyle  = 'photo' | 'infographic'
 // for image_style: 'infographic', the on-image headline/subtitle — draw
 // from one of a known set of creative briefs instead of two independent,
 // unrelated guesses at the same topic. 'auto' ('let AI decide', the
-// default) is converted to null before persisting, same convention as
-// province's 'auto' sentinel.
+// default) is converted to null before persisting.
 export type ContentAngle = 'auto' | 'community_story' | 'behind_scenes' | 'fresh_produce' | 'stat_fact' | 'call_to_action'
 // video only. Passed straight through to Flux Kontext's aspectRatio param
 // for character-ref/scene-image generation — Kling image-to-video has no
@@ -33,8 +32,6 @@ interface FormFields {
   video_duration:  string
   language:        Language
   content_types:   ContentType[]
-  province:        string   // 'auto' or one of the 10 provinces
-  city:            string   // free-text, empty = omit
   scene_notes:     string   // optional custom scene/story idea from user
   image_style:     ImageStyle
   content_angle:   ContentAngle
@@ -71,8 +68,6 @@ const FORM_DEFAULTS: FormFields = {
   video_duration:  '36',
   language:        'EN',
   content_types:   ['video', 'image_post', 'blog'],
-  province:        'auto',
-  city:            '',
   scene_notes:     '',
   image_style:     'photo',
   content_angle:   'auto',
@@ -92,7 +87,7 @@ function pickPersisted(s: NewContentStore): FormFields & GenState {
     topic: s.topic, keywords: s.keywords, category: s.category,
     target_audience: s.target_audience, script_type: s.script_type,
     video_duration: s.video_duration, language: s.language,
-    content_types: s.content_types, province: s.province, city: s.city,
+    content_types: s.content_types,
     scene_notes: s.scene_notes, image_style: s.image_style, content_angle: s.content_angle,
     aspect_ratio: s.aspect_ratio, voice_id_en: s.voice_id_en, voice_id_fr: s.voice_id_fr,
     status: s.status, pendingJobId: s.pendingJobId, generatedAt: s.generatedAt,
@@ -120,18 +115,27 @@ export const useNewContentStore = create<NewContentStore>((set, get) => ({
     try {
       const raw = sessionStorage.getItem(SESSION_KEY)
       if (raw) {
-        const saved = JSON.parse(raw) as FormFields & GenState
-        set(saved)
-        return saved.status === 'pending' && !!saved.pendingJobId
+        const parsed = JSON.parse(raw) as Partial<FormFields & GenState> & {
+          province?: unknown
+          city?: unknown
+        }
+        delete parsed.province
+        delete parsed.city
+        set(parsed)
+        return parsed.status === 'pending' && !!parsed.pendingJobId
       }
       // One-time migration from old sessionStorage keys
       const oldForm    = sessionStorage.getItem('fc_new_form')
       const oldPending = sessionStorage.getItem('fc_pending_job')
       if (oldForm || oldPending) {
-        const form = oldForm ? (JSON.parse(oldForm) as Partial<FormFields>) : {}
+        const parsedForm = oldForm
+          ? (JSON.parse(oldForm) as Partial<FormFields> & { province?: unknown; city?: unknown })
+          : {}
+        delete parsedForm.province
+        delete parsedForm.city
         const pj   = oldPending ? (JSON.parse(oldPending) as { id?: string }) : {}
         const merged: FormFields & GenState = {
-          ...FORM_DEFAULTS, ...GEN_DEFAULTS, ...form,
+          ...FORM_DEFAULTS, ...GEN_DEFAULTS, ...parsedForm,
           status:       pj.id ? 'pending' : 'idle',
           pendingJobId: pj.id ?? null,
         }

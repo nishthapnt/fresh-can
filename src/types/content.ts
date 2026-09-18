@@ -117,6 +117,7 @@ export interface SocialPost {
 export interface SocialPlatformLog {
   id: string
   social_post_id: string
+  content_type: ContentType
   platform: PlatformType
   status: SocialStatus
   platform_post_id: string | null
@@ -137,21 +138,10 @@ export interface NewContentFormData {
   image_style: ImageStyle
 }
 
-// ─── n8n webhook payload types ────────────────────────────────────────────────
-// social posting is the only content type still on n8n (blog, image_post,
-// and video generation all moved to worker/) — so post_complete is the only
-// callback shape left.
-
-export interface N8nCallbackPostComplete {
-  job_id: string
-  content_type: ContentType
-  event: 'post_complete'
-  data: {
-    platform: PlatformType
-    platform_post_id: string
-    post_url: string
-  }
-}
+// n8n is no longer used anywhere in this app — blog/image_post/video moved
+// to worker/ first, and social posting (the last holdout) now runs on
+// worker/src/steps/social/publishPost.ts (ARCHITECTURE.MD §2.5). There's no
+// n8n webhook payload type left to declare here.
 
 // ─── Aggregated view types ────────────────────────────────────────────────────
 
@@ -254,3 +244,4 @@ export interface KPIData {
   ready_to_post: number
   posted_today: number
 }
+

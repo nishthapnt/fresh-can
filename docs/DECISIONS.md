@@ -37,3 +37,8 @@ Each entry: the decision, why it was made, and what it implies going forward. Tr
 ## 9. Video and Image migration to the new architecture is explicitly deferred
 **Reasoning:** Scope control — Blog is the proving ground; migrating three pipelines at once was rejected as too large and risky.
 **Consequences:** `ARCHITECTURE.MD`/`docs/DATABASE_DESIGN.md` describe the target shape generally (so Video/Image slot in later without a redesign), but no Video/Image migration work is scheduled or detailed yet.
+
+## 10. Remove province/city targeting from image-post jobs
+**Reasoning:** Province/city targeting is no longer part of the dashboard or prompt contract. It added location-specific behavior to the image-post flow without being required by the remaining content-generation requirements.
+
+**Consequences:** New jobs no longer collect or persist province/city. The worker and image clarifying/caption prompts no longer receive location context. Existing `content_jobs.province` and `content_jobs.city` values are permanently removed by migration; `scene_notes` and `image_answers` remain the supported image-context inputs.

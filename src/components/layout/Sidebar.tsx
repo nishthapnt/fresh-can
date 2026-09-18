@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -9,6 +10,7 @@ import {
   Share2,
   LogOut,
   X,
+  Zap,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -44,12 +46,40 @@ const navItems = [
   },
 ]
 
+type KieCreditsState =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; remaining: number }
+
 export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
+  const [kieCredits, setKieCredits] = useState<KieCreditsState>({ status: 'loading' })
 
   const isActive = (href: string, exact: boolean) =>
     exact ? pathname === href : pathname.startsWith(href)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCredits() {
+      try {
+        const res = await fetch('/api/kie/credits')
+        const body = await res.json()
+        if (!res.ok || typeof body.remaining !== 'number') throw new Error(body.error ?? 'Unknown error')
+        if (!cancelled) setKieCredits({ status: 'ready', remaining: body.remaining })
+      } catch {
+        if (!cancelled) setKieCredits({ status: 'error' })
+      }
+    }
+
+    loadCredits()
+    const interval = setInterval(loadCredits, 60_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' })
@@ -130,6 +160,25 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               </Link>
             )
           })}
+
+          {/* KIE credits — live balance only; KIE.ai's API has no "total" concept */}
+          <div className="mt-3 flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2.5">
+            <Zap className="h-4 w-4 flex-shrink-0 text-amber-500" />
+            {kieCredits.status === 'loading' && (
+              <div className="h-3.5 w-24 animate-pulse rounded bg-gray-200" />
+            )}
+            {kieCredits.status === 'error' && (
+              <p className="text-xs text-gray-400">KIE credits unavailable</p>
+            )}
+            {kieCredits.status === 'ready' && (
+              <p className="text-xs font-medium text-gray-600">
+                <span className="font-semibold text-gray-900">
+                  {kieCredits.remaining.toLocaleString()}
+                </span>{' '}
+                KIE credits
+              </p>
+            )}
+          </div>
         </nav>
 
         {/* Footer */}
