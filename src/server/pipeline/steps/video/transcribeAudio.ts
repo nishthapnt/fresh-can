@@ -10,6 +10,7 @@ import {
   getVideoScenes,
   getVideoSceneAudioRows,
   upsertVideoCaptions,
+  upsertVideoSceneAudio,
   type TrackRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
@@ -26,13 +27,17 @@ interface WordTiming {
 async function pollUntilDone(
   service: TranscriptionService,
   jobRef: { providerRef: string },
-): Promise<{ words: WordTiming[] } | { failed: true; detail: string } | { timedOut: true }> {
+): Promise<
+  | { words: WordTiming[]; audioDurationMs?: number }
+  | { failed: true; detail: string }
+  | { timedOut: true }
+> {
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
     const result = await service.poll(jobRef)
     if (result.status === 'ready') {
       const words = Array.isArray(result.timingData) ? (result.timingData as WordTiming[]) : []
-      return { words }
+      return { words, audioDurationMs: result.audioDurationMs }
     }
     if (result.status === 'failed') return { failed: true, detail: result.detail }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
@@ -48,12 +53,28 @@ async function pollUntilDone(
  *
  * No audio-concatenation service exists yet (that's render's job, M4), so
  * this transcribes each scene's audio SEPARATELY and stitches the resulting
- * word timings into one flat, cumulative-offset timeline — using each
- * scene's own video_scene_audio.duration_ms (synthesizeVoice's word-count
- * estimate) as the additive offset for the next scene. Output shape is
- * exactly the {text,start,end}[] array worker/src/adapters/avMerger.ts's
- * buildFfmpegCommand already expects for caption burn-in — no further
- * transformation needed at render time.
+ * word timings into one flat, cumulative-offset timeline — using
+ * AssemblyAI's own REAL measured duration of each scene's audio file
+ * (TranscriptionPollResult.audioDurationMs) as the additive offset for the
+ * next scene, falling back to video_scene_audio.duration_ms (synthesizeVoice's
+ * word-count ESTIMATE) only if a provider/mock doesn't report one. Using the
+ * estimate here unconditionally used to be the only option — that drifted
+ * captions out of sync with the real render's audio track (concatenated
+ * from these same real audio files in renderLanguageTrack.ts) whenever
+ * ElevenLabs' actual speaking pace differed from the flat words-per-second
+ * assumption behind the estimate, and the error compounded scene over
+ * scene. The real duration is already sitting in every poll() response
+ * this step already makes — no extra API call needed to use it. Output
+ * shape is exactly the {text,start,end}[] array worker/src/adapters/
+ * avMerger.ts's buildFfmpegCommand already expects for caption burn-in —
+ * no further transformation needed at render time.
+ *
+ * Also persists that same real duration back into
+ * video_scene_audio.duration_ms (overwriting the estimate) once known —
+ * renderLanguageTrack.ts's per-scene duration-match pass (M4) needs the
+ * REAL length of THIS scene's audio to decide how much to hold/trim the
+ * shared video clip by, and without this write it would still be reading
+ * the same stale estimate this function itself stopped trusting.
  *
  * On success, advances the track to 'awaiting_shared' (the literal DB
  * value, not ARCHITECTURE.MD's prose name "awaiting_visuals") — all
@@ -72,7 +93,25 @@ export async function runTranscribeAudio(
   const generation = track.master_generation_used
   const stepName = 'transcribe_captions'
   const alreadySucceeded = await hasSucceededStep(client, { contentLanguageTrackId: track.id }, stepName, generation)
-  if (alreadySucceeded) return { ran: false }
+  if (alreadySucceeded) {
+    // The step's own artifacts (video_captions, the succeeded pipeline_steps
+    // row) already exist, but track.status is still 'generating' — this
+    // step is the ONLY thing that ever advances a track to 'awaiting_shared'
+    // (see this function's own header), and that transition happens AFTER
+    // recordStepAttempt below, in the same try block. A crash/restart
+    // between those two writes — or any external process that resets
+    // track.status back without also rolling back the already-succeeded
+    // step record (confirmed live 2026-09-19 during a manual recovery) —
+    // would otherwise leave this track stuck at 'generating' forever: every
+    // future call hits this exact branch and returns before ever reaching
+    // the real claimTrack call. Catching up here, not just on the fresh-run
+    // path below, is what makes this step properly resumable rather than
+    // only resumable from a mid-run crash. claimTrack's CAS (WHERE status =
+    // 'generating') makes this a safe no-op if the transition already
+    // happened through the normal path.
+    await claimTrack(client, track.id, 'generating', 'awaiting_shared', { current_step: 'awaiting_shared' })
+    return { ran: false }
+  }
 
   const scenes = await getVideoScenes(client, contentPipelineId)
   if (scenes.length === 0) return { ran: false }
@@ -109,7 +148,27 @@ export async function runTranscribeAudio(
       for (const w of outcome.words) {
         combinedWords.push({ text: w.text, start: w.start + cumulativeOffsetMs, end: w.end + cumulativeOffsetMs })
       }
-      cumulativeOffsetMs += audio.duration_ms ?? 0
+      const realDurationMs = outcome.audioDurationMs ?? audio.duration_ms ?? 0
+      cumulativeOffsetMs += realDurationMs
+
+      // Persist the REAL measured duration back over synthesizeVoice.ts's
+      // word-count ESTIMATE (only when AssemblyAI actually reported one —
+      // never overwrite a real value with 0 if a provider/mock omits it).
+      // renderLanguageTrack.ts's per-scene duration-match pass (M4) reads
+      // this column to know how long THIS scene's audio really is — without
+      // this, it would still see the estimate, silently reintroducing the
+      // exact estimate-vs-reality drift this whole fix exists to close, just
+      // one step later in the pipeline than the caption-offset bug was.
+      if (outcome.audioDurationMs !== undefined && outcome.audioDurationMs !== audio.duration_ms) {
+        await upsertVideoSceneAudio(client, {
+          contentLanguageTrackId: track.id,
+          videoSceneId: scene.id,
+          generation,
+          status: audio.status as 'pending' | 'generating' | 'ready' | 'failed',
+          durationMs: outcome.audioDurationMs,
+          attemptNumber: audio.attempt_number,
+        })
+      }
     }
 
     await upsertVideoCaptions(client, {

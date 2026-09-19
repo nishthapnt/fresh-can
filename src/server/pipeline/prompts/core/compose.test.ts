@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { composeHeroPrompt, composeInlinePrompt, composePhotoPrompt, composeSceneImagePrompt, composeCharacterRefPrompt } from './compose'
+import {
+  composeHeroPrompt,
+  composeInlinePrompt,
+  composePhotoPrompt,
+  composeSceneImagePrompt,
+  composeSceneVideoPrompt,
+  composeCharacterRefPrompt,
+} from './compose'
 import type { BrandProfile } from '../types'
 import { BRAND_PROFILE } from '../brand/fresh-can'
 
@@ -14,7 +21,6 @@ const testBrand: BrandProfile = {
   interiorDescriptor: 'THE FIXED INTERIOR DESCRIPTION',
   noTextInstruction: 'NO TEXT INSTRUCTION',
   noNewTextInstruction: 'NO NEW TEXT INSTRUCTION',
-  logoDescriptor: 'THE FIXED LOGO DESCRIPTOR',
   ctaBarText: 'Visit test.example.com',
   typographyDescriptor: 'THE FIXED TYPOGRAPHY DESCRIPTOR',
   ctaBarColorDescriptor: 'THE FIXED CTA BAR COLOR DESCRIPTOR',
@@ -257,7 +263,7 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     expect(hero.referenceImageUrl).toBe('https://example.com/int-only.jpg')
   })
 
-  it('image_style "infographic" renders headline/subtitle/logo/CTA instead of the no-text instructions', () => {
+  it('image_style "infographic" renders headline/subtitle/CTA instead of the no-text instructions', () => {
     const job = {
       pipelineId: 'pipeline-info-1',
       topic: 'How to shop at Fresh-CAN',
@@ -269,7 +275,6 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     const hero = composeHeroPrompt(testBrand, job)
     expect(hero.prompt).toContain('Fresh Food, Closer To Home')
     expect(hero.prompt).toContain('A smarter way to shop')
-    expect(hero.prompt).toContain('THE FIXED LOGO DESCRIPTOR')
     expect(hero.prompt).toContain('Visit test.example.com')
     expect(hero.prompt).toContain('THE FIXED TYPOGRAPHY DESCRIPTOR')
     expect(hero.prompt).toContain('THE FIXED CTA BAR COLOR DESCRIPTOR')
@@ -384,7 +389,7 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('warmer colors, more optimistic tone')
   })
 
-  it('image_style "infographic" renders headline/subtitle/logo/CTA instead of the no-text instructions', () => {
+  it('image_style "infographic" renders headline/subtitle/CTA instead of the no-text instructions', () => {
     const photo = composePhotoPrompt(testBrand, {
       ...baseJob,
       scene: baseJob.topic,
@@ -394,7 +399,6 @@ describe('composePhotoPrompt', () => {
     })
     expect(photo.prompt).toContain('Fresh Food, Closer To Home')
     expect(photo.prompt).toContain('A smarter way to shop')
-    expect(photo.prompt).toContain('THE FIXED LOGO DESCRIPTOR')
     expect(photo.prompt).toContain('Visit test.example.com')
     expect(photo.prompt).not.toContain('NO TEXT INSTRUCTION')
     expect(photo.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
@@ -409,10 +413,10 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('never as a literal photo to copy')
   })
 
-  it('tells the model brand details are constraints, not the point of the photo, so it does not read as an ad', () => {
+  it('tells the model brand details are constraints, not the point of the photo, and never dictate style/mood/composition', () => {
     const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
     expect(photo.prompt).toContain('never as the reason this scene exists')
-    expect(photo.prompt).toContain('never a posed, polished advertisement')
+    expect(photo.prompt).toContain('never as a directive about the overall photographic style, mood, or composition')
   })
 
   it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
@@ -446,9 +450,77 @@ describe('composeSceneImagePrompt', () => {
     characterRefUrl: 'https://example.com/character-ref.jpg',
   }
 
-  it('always attaches the character-ref photo as the edit source', () => {
+  it('attaches the character-ref photo as the edit source when the scene is actually about the truck', () => {
     const scene = composeSceneImagePrompt(testBrand, baseJob)
     expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
+  })
+
+  it('does NOT attach the character-ref photo, containerDescriptor, or the wordmark instruction for a scene that has nothing to do with the truck', () => {
+    // Regression test: this composer used to ALWAYS attach the truck photo
+    // as the Flux Kontext edit source and ALWAYS inject containerDescriptor,
+    // for every scene — a real generation showed the truck hallucinated
+    // inside a family's own kitchen because of this. isContainerRelevant
+    // (defaultRelevant: false) now gates both on whether the scene's own
+    // text actually indicates the truck/unit is involved.
+    const scene = composeSceneImagePrompt(testBrand, {
+      ...baseJob,
+      visualDescription: 'A family is at home in their kitchen, finding the cupboards empty.',
+      shotNotes: 'medium close-up, natural light, focus on their worried expressions',
+    })
+    expect(scene.referenceImageUrl).toBeUndefined()
+    expect(scene.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+    expect(scene.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
+    expect(scene.prompt).toContain('does not involve the Fresh-CAN truck or mobile unit')
+    expect(scene.prompt).toContain('NO TEXT INSTRUCTION')
+  })
+
+  it('does NOT show the truck for an unrelated creative scene that happens to use generic words like "arrive"/"enter"/"door"/"visit"/"pick up"/"shop" — regression for false-positiving on ordinary narrative prose', () => {
+    // Video scenes are free-form narrative built around whatever creative
+    // idea the job asked for (e.g. "a mother and son walking down the
+    // road"), not blog/photo's short topic+category strings — reusing
+    // blog/photo's isContainerRelevant (tuned for generic action verbs
+    // implying a visit) against sentences like these would wrongly force
+    // the truck in. isVideoSceneAboutUnit only fires on an explicit,
+    // unambiguous mention of the unit itself.
+    const scenes = [
+      'A mother and son walk hand in hand down a quiet residential road, laughing together.',
+      'They arrive at the park and sit on a bench, watching the sunset.',
+      'She enters the house and hangs up her coat by the front door.',
+      'He picks up his backpack and waves goodbye before visiting his grandmother next door.',
+      'They window shop along the street, pointing out things they like.',
+    ]
+    for (const visualDescription of scenes) {
+      const scene = composeSceneImagePrompt(testBrand, { ...baseJob, visualDescription, shotNotes: null })
+      expect(scene.referenceImageUrl).toBeUndefined()
+      expect(scene.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(scene.prompt).toContain('does not involve the Fresh-CAN truck or mobile unit')
+    }
+  })
+
+  it('still shows the truck for a scene about arriving/parking/scanning in/browsing inside, even without the word "truck"', () => {
+    const scene = composeSceneImagePrompt(testBrand, {
+      ...baseJob,
+      visualDescription: 'The family approaches the unit, scanning the QR code with the app to enter.',
+      shotNotes: null,
+    })
+    expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
+    expect(scene.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+  })
+
+  it('never adds unscripted people beyond who the scene describes, regardless of whether the truck appears', () => {
+    const relevant = composeSceneImagePrompt(testBrand, baseJob)
+    const notRelevant = composeSceneImagePrompt(testBrand, {
+      ...baseJob,
+      visualDescription: 'A family cooks dinner together at home.',
+      shotNotes: null,
+    })
+    expect(relevant.prompt).toContain('no extra staff, workers, or bystanders')
+    expect(notRelevant.prompt).toContain('no extra staff, workers, or bystanders')
+  })
+
+  it('never adds unexplained props, vehicles, or signage beyond what the scene describes', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('no unexplained extras just to fill the frame')
   })
 
   it('tells the model the character-ref photo is a guide, not a literal copy — every scene reuses the same photo', () => {
@@ -462,6 +534,19 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain(baseJob.visualDescription)
   })
 
+  it("includes the brand's fixed containerDescriptor (structure/no-side-door rule), same as every other composer that can show the vehicle", () => {
+    // Regression test: this composer used to rely ENTIRELY on the character-ref
+    // image itself to anchor the vehicle's real structure, with no structural
+    // rule in the TEXT at all — unlike composeCharacterRefPrompt/composeBlogImage/
+    // composePhotoPrompt, which all splice in containerDescriptor. That gap let
+    // a side door get hallucinated: REFERENCE_IS_GUIDE_NOT_COPY explicitly tells
+    // the model to build a genuinely new scene around the vehicle rather than
+    // copy the reference photo, and nothing in the text ever ruled a side door
+    // out for that new interpretation.
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+  })
+
   it('includes shot notes and regen instructions when given', () => {
     const scene = composeSceneImagePrompt(testBrand, { ...baseJob, regenInstructions: 'warmer lighting' })
     expect(scene.prompt).toContain('Slow push-in')
@@ -473,6 +558,62 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
     expect(scene.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
   })
+
+  it('requires the depicted setting to be physically plausible and safe — regression for a real generation showing people eating dinner in the middle of a road', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('physically plausible and safe')
+    expect(scene.prompt).toContain('middle of a road')
+  })
+
+  it('asks for real cinematographic craft as a quality floor, without dictating a specific style', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('cinematographic craft')
+    expect(scene.prompt).toContain('elevating whatever mood or style the scene above calls for')
+  })
+
+  it('does not frame the scene as "a marketing video" — that framing itself primed a staged/ad look', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).not.toContain('marketing video')
+    expect(scene.prompt).toContain(`Scene ${baseJob.sceneNumber}: ${baseJob.visualDescription}`)
+  })
+
+  it('treats brand/vehicle details as a fixed constraint, never a directive on style — never the reason the scene exists', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('never as the reason this scene exists')
+  })
+})
+
+describe('composeSceneVideoPrompt', () => {
+  it('includes the visual description and shot notes', () => {
+    const prompt = composeSceneVideoPrompt({
+      visualDescription: 'A family unloading groceries from the Fresh-CAN truck at dusk',
+      shotNotes: 'Slow push-in',
+    })
+    expect(prompt).toContain('A family unloading groceries from the Fresh-CAN truck at dusk')
+    expect(prompt).toContain('Slow push-in')
+  })
+
+  it('steers camera motion away from staged product-reveal moves like orbits or hero push-ins', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('never a staged product-reveal move like a slow orbit or a dramatic hero push-in')
+  })
+
+  it('gives real cinematographic technique explicit positive permission, not just "subtle" motion', () => {
+    // Regression test: the original "Subtle, natural, observational motion"
+    // wording was in tension with composeVideoScriptSystemPrompt's newer
+    // cinematic-shot-variety instruction — this locks in that deliberate
+    // camera moves (pans, tilts, tracking, dolly, rack focus) are now
+    // explicitly welcomed, not discouraged by default.
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('pans, tilts, tracking, slow dolly, rack focus')
+  })
+
+  it('animates subject action, ambient environmental motion, and camera motion as three distinct layers, never camera as a substitute for scene action', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('three distinct layers')
+    expect(prompt).toContain('steam, wind, moving fabric, shifting light')
+    expect(prompt).toContain('Camera movement is never a substitute for actual subject or environmental motion')
+  })
 })
 
 describe('composeCharacterRefPrompt', () => {
@@ -480,6 +621,27 @@ describe('composeCharacterRefPrompt', () => {
     const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-1' })
     expect(ref.referenceImageUrl).toBe('https://example.com/exterior.jpg')
     expect(ref.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+  })
+
+  it('always uses the FIRST exterior reference photo — the one shared reference every scene locks onto, so cleanliness of the source matters more than per-pipeline variety', () => {
+    // Regression test: a real character-ref generation showed a duplicate,
+    // garbled second wordmark-like decal over an unexplained red blob
+    // graphic — most likely bleed-through from one of the OTHER reference
+    // photos (documented in fresh-can.ts as showing a real decorative
+    // graphic + URL text the model is told to disregard). Picking
+    // deterministically from index 0 regardless of pipelineId is what
+    // stops a rotation ever landing on one of those contaminated photos
+    // for this specific, singular use.
+    const refA = composeCharacterRefPrompt(multiAngleBrand, { pipelineId: 'pipeline-aaaa' })
+    const refB = composeCharacterRefPrompt(multiAngleBrand, { pipelineId: 'pipeline-zzzz-different' })
+    expect(refA.referenceImageUrl).toBe('https://example.com/back.jpg')
+    expect(refB.referenceImageUrl).toBe('https://example.com/back.jpg')
+  })
+
+  it('states there must be exactly one wordmark, no second or duplicate decal', () => {
+    const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-2' })
+    expect(ref.prompt).toContain('Exactly one "Fresh CAN" wordmark total')
+    expect(ref.prompt).toContain('no second or duplicate wordmark, decal, or graphic')
   })
 })
 
@@ -491,5 +653,51 @@ describe('Fresh-CAN brand containerDescriptor', () => {
     // emphatic "NEVER render a door... on either side" rewrite.
     expect(BRAND_PROFILE.containerDescriptor).toMatch(/NEVER render a door.*either side/i)
     expect(BRAND_PROFILE.containerDescriptor).toContain('ONLY entrance')
+  })
+
+  it('explicitly forbids doors/openings on the front face too — regression for a real generation showing a door there', () => {
+    // The old wording only named "either side" and the rear by name,
+    // relying on "the rear door is the ONLY opening" to implicitly rule
+    // out the front — the side-door bug already proved an implied
+    // "nowhere else" isn't reliable, so the front now gets the same
+    // explicit, named treatment.
+    expect(BRAND_PROFILE.containerDescriptor).toContain('front face')
+    expect(BRAND_PROFILE.containerDescriptor).toMatch(/NEVER render a door.*front face/i)
+  })
+
+  it('explicitly names a customer service window/hatch as forbidden — regression for a real generation showing an open service hatch to a customer', () => {
+    // The existing generic "never a door/hatch/window/vent on either side"
+    // wording was STILL violated by a real generation: an open service
+    // hatch appeared in a scene where a family approaches to shop. Naming
+    // this exact failure mode (a customer-facing serving window) directly,
+    // rather than trusting the generic wording to cover it by implication
+    // a second time, is the actual fix.
+    expect(BRAND_PROFILE.containerDescriptor).toContain('customer service window')
+    expect(BRAND_PROFILE.containerDescriptor).toContain('only place customers are ever served')
+  })
+
+  it('confines the logo to the side panels only, and explicitly rules out the front/rear/duplicates — regression for real reference photos actually showing it in 2-3 places at once', () => {
+    // Direct user feedback: "make sure the correct fresh-can logo is used
+    // and the logo is not used at random places — only on the side of the
+    // truck." Re-inspecting the real reference photos found they contradict
+    // the OLD wording here: the physical truck's actual wrap design shows a
+    // second small wordmark on the rear header bar AND a large wordmark on
+    // the front face, in addition to the correct side wordmark. Simplified
+    // to a single enforceable rule (side only, once each) rather than
+    // continuing to describe every real-but-inconsistent placement.
+    expect(BRAND_PROFILE.containerDescriptor).toMatch(/wordmark.*appears ONLY on\s+the two side panels/i)
+    expect(BRAND_PROFILE.containerDescriptor).toContain('nowhere else on the vehicle')
+    expect(BRAND_PROFILE.containerDescriptor).toContain('no wordmark, signage, or QR code')
+  })
+
+  it('the first exterior reference photo (character-ref\'s fixed source) shows the logo in exactly that correct side-only location', () => {
+    // composeCharacterRefPrompt always uses referenceImages.exterior[0] —
+    // this locks in that whichever photo occupies that slot actually
+    // matches the simplified brand rule above (a full side-profile view),
+    // rather than one that also shows the front or rear wordmark in the
+    // same frame.
+    const first = BRAND_PROFILE.referenceImages.exterior[0]
+    expect(first.framing).toContain('full profile view')
+    expect(first.framing).toContain('reproduce that exact wordmark faithfully, once')
   })
 })

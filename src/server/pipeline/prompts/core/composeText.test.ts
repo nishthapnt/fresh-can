@@ -4,6 +4,8 @@ import {
   composeCopySystemPrompt,
   composeCaptionSystemPrompt,
   composeAdCopySystemPrompt,
+  composeVideoScriptSystemPrompt,
+  composeLocalizeScriptSystemPrompt,
 } from './composeText'
 import type { BrandProfile } from '../types'
 
@@ -18,7 +20,6 @@ const testBrand: BrandProfile = {
   interiorDescriptor: 'INTERIOR',
   noTextInstruction: 'NO TEXT',
   noNewTextInstruction: 'NO NEW TEXT',
-  logoDescriptor: 'LOGO DESCRIPTOR',
   ctaBarText: 'Visit test.example.com',
   typographyDescriptor: 'TYPOGRAPHY DESCRIPTOR',
   ctaBarColorDescriptor: 'CTA BAR COLOR DESCRIPTOR',
@@ -214,5 +215,161 @@ describe('composeAdCopySystemPrompt', () => {
     })
     expect(prompt).toContain('A senior reaching a mobile unit at dusk')
     expect(prompt).toContain('this same moment')
+  })
+})
+
+describe('composeVideoScriptSystemPrompt', () => {
+  const baseOpts = { category: 'Test Category', scriptType: 'SOLUTION', targetDurationSeconds: 36 }
+
+  it('includes brand context, the category brief, and the target duration', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('TEST MISSION STATEMENT')
+    expect(prompt).toContain('TEST CATEGORY BRIEF')
+    expect(prompt).toContain('approximately 36')
+  })
+
+  it('requires the scene plan JSON shape generateScript.ts depends on', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    for (const field of ['scene_number', 'visual_description', 'shot_notes', 'narration_intent', 'target_duration_seconds']) {
+      expect(prompt).toContain(field)
+    }
+  })
+
+  it('tells the model narration_intent must stay semantic, never literal wording in one language', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('NEVER write it as a finished sentence in any one language')
+  })
+
+  it('unconditionally steers the video and its scenes away from reading as an ad or commercial', () => {
+    // This must hold even with no scene idea given (a pre-existing job) —
+    // it is the general anti-ad instruction, not scene-idea-dependent.
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('never scripted ad copy, a corporate promo, or a polished commercial')
+  })
+
+  it('requires every scene\'s setting to be physically plausible and safe — regression for a real generation showing people eating dinner in the middle of a road', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('physically plausible and safe')
+    expect(prompt).toContain('middle of an active road')
+  })
+
+  it('asks for real cinematographic shot variety and camera direction, as a quality bar rather than a style directive', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('wide establishing shots, medium shots, close-ups, over-the-shoulder, tracking shots')
+    expect(prompt).toContain('never a directive on what mood or overall style to use')
+  })
+
+  it('requires shot_notes to carry real camera direction, not default to empty', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('never left empty by default')
+  })
+
+  it('asks visual_description to include ambient environmental motion, not just the subject', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('steam rising, wind moving leaves or fabric, light shifting')
+  })
+
+  it('tells the model to creatively expand a brief idea instead of leaving it thin, without inventing unrelated content', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('expand it creatively into specific, vivid visual detail')
+    expect(prompt).toContain('never a generic or unrelated addition')
+  })
+
+  it('forbids inventing props/vehicles/people that serve no purpose in the story', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('Do not invent a prop, vehicle, building, or person that serves no purpose')
+    expect(prompt).toContain('if removing it would not harm the story, do not add it')
+  })
+
+  it('asks for continuity of characters/clothing/setting across scenes that share a moment', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('Maintain natural continuity across scenes')
+  })
+
+  it('tells the model the vehicle appearing in one scene is never a reason to carry it into a later scene, when a scene idea is given', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A family discovers a mobile grocery unit, then goes home to cook dinner',
+    })
+    expect(prompt).toContain('never a reason to carry it into a later scene')
+  })
+
+  it('treats a given scene idea as the creative brief the story and every scene are built around, leading the prompt rather than trailing at the very end', () => {
+    // Regression test: a real generation given a fully unrelated scene idea
+    // (a family's cozy autumn dinner, no Fresh-CAN mention at all) ignored
+    // it and wrote a generic Fresh-CAN mission/food-desert pitch instead —
+    // the old wording appended the scene idea as a single sentence AFTER
+    // the brand's full mission, category brief, and stats, which wasn't
+    // enough to override all that priming. The idea must now appear before
+    // (earlier in the string than) the brand's mission statement, and the
+    // category brief/statistics must be dropped entirely rather than
+    // presented as a second, competing angle.
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('background context for tone and brand accuracy only')
+    expect(prompt.indexOf('A senior reaching a mobile unit at dusk')).toBeLessThan(prompt.indexOf('TEST MISSION STATEMENT'))
+    expect(prompt).not.toContain('TEST CATEGORY BRIEF')
+    expect(prompt).not.toContain('1 in 5 test subjects prefer this fixture')
+  })
+
+  it('still carries voice/tone guidance (banned words) even when the category brief and stats are dropped for a given scene idea', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('TEST VOICE GUIDELINES')
+    expect(prompt).toContain('synergy')
+  })
+
+  it('uses neutralIdentityLine instead of the fuller missionStatement when both a scene idea and neutralIdentityLine are given', () => {
+    // Regression test: a real generation given a scene idea entirely
+    // unrelated to food deserts (a family's autumn dinner) still mentioned
+    // "food desert communities" — traced to missionStatement's own fuller,
+    // topic-adjacent framing being quoted verbatim as "background context."
+    // neutralIdentityLine exists specifically to avoid restating that kind
+    // of mission/topic language when the scene idea is what actually
+    // decides the story.
+    const brandWithNeutralLine = { ...testBrand, neutralIdentityLine: 'TEST NEUTRAL IDENTITY LINE' }
+    const prompt = composeVideoScriptSystemPrompt(brandWithNeutralLine, {
+      ...baseOpts,
+      sceneNotes: 'A cozy autumn family dinner',
+    })
+    expect(prompt).toContain('TEST NEUTRAL IDENTITY LINE')
+    expect(prompt).not.toContain('TEST MISSION STATEMENT')
+  })
+
+  it('falls back to missionStatement when neutralIdentityLine is not configured for the brand', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A cozy autumn family dinner',
+    })
+    expect(prompt).toContain('TEST MISSION STATEMENT')
+  })
+
+  it('omits the scene-idea clause entirely when none is given (pre-existing job with no scene_notes)', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).not.toContain("user's own creative idea")
+  })
+})
+
+describe('composeLocalizeScriptSystemPrompt', () => {
+  it('keeps "in {language}" so FR tracks produce a literal "in French" substring', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'French' })
+    expect(prompt).toContain('in French')
+  })
+
+  it('tells the model to write natural spoken narration, never scripted ad copy', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
+    expect(prompt).toContain('never as scripted ad copy or a voiceover that sounds like a commercial')
+  })
+
+  it('preserves the exact JSON schema field names localizeScript.ts depends on', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
+    for (const field of ['scene_number', 'narration_text']) {
+      expect(prompt).toContain(field)
+    }
   })
 })

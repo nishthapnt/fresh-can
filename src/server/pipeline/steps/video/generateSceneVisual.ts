@@ -15,6 +15,8 @@ import {
   type VisualAssetRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
+import { ASPECT_RATIO_RESOLUTIONS } from '../../lib/videoResolution'
+import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
 import { BRAND_PROFILE, composeSceneImagePrompt, composeSceneVideoPrompt } from '../../prompts/index'
 
 const IMAGE_POLL_INTERVAL_MS = 2000
@@ -55,19 +57,6 @@ const SCALE_POLL_INTERVAL_MS = 5000
 // timeout, since we don't yet have a real timing sample for a full-length
 // (~10s) clip specifically.
 const SCALE_POLL_TIMEOUT_MS = 3 * 60_000
-
-// Standard delivery resolution per aspect ratio — what TikTok/Reels/Shorts
-// (and this app's own video playback modals — dashboard/page.tsx's and
-// library/LibraryContent.tsx's "Watch" dialogs, which play at the clip's
-// real aspect ratio; their grid-card thumbnails crop to a fixed square
-// instead and don't factor into this) treat as the real display size
-// regardless of how many more pixels a generated clip happens to natively
-// carry.
-const SCALE_TARGETS: Record<'9:16' | '1:1' | '16:9', { width: number; height: number }> = {
-  '9:16': { width: 1080, height: 1920 },
-  '1:1': { width: 1080, height: 1080 },
-  '16:9': { width: 1920, height: 1080 },
-}
 
 /** A poll() call throwing (connection reset, "fetch failed", etc.) means the
  *  STATUS CHECK failed, not the generation itself — the KIE job submitted
@@ -156,13 +145,6 @@ async function pollScaleUntilDone(
   )
 }
 
-/** Kling 2.6 only accepts "5" or "10" — round the scene's planned budget to
- *  whichever is closer, per ARCHITECTURE.MD §4.2's "duration is a budget,
- *  not an exact figure" framing. */
-function pickDurationSeconds(targetDurationMs: number): '5' | '10' {
-  return targetDurationMs > 7500 ? '10' : '5'
-}
-
 function findAsset(
   assets: VisualAssetRow[],
   sceneId: string,
@@ -236,7 +218,14 @@ async function runSceneImageStep(
         attemptNumber,
       })
 
-      const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, {
+      // referenceImageUrl comes from the composition itself, not
+      // characterRefUrl directly — composeSceneImagePrompt (2026-09-19) now
+      // gates whether the truck's reference photo is used at all on
+      // whether this scene is actually about the truck, so a non-relevant
+      // scene returns undefined here and gets a pure text-to-image
+      // generation instead of forcing the truck in as a Flux Kontext edit
+      // source.
+      const { prompt, referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
         pipelineId: pipeline.id,
         sceneNumber: scene.scene_number,
         visualDescription: scene.visual_description,
@@ -246,7 +235,7 @@ async function runSceneImageStep(
       })
 
       console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
-      jobRef = await imageGenerator.submit({ prompt, referenceImageUrl: characterRefUrl, aspectRatio })
+      jobRef = await imageGenerator.submit({ prompt, referenceImageUrl, aspectRatio })
 
       // Persist the task id BEFORE polling — this is the fix. Previously
       // this row only ever recorded providerRef on the FINAL, successful
@@ -356,8 +345,33 @@ async function runSceneVideoClipStep(
 
   let attemptNumber = 1
   let jobRef: { providerRef: string } | undefined
+  // Set the moment KIE.ai's video generation succeeds (see the 'fileUrl' in
+  // outcome branch below), or resumed here from a previous attempt's row —
+  // see raw_file_url's own doc comment (db.ts's VisualAssetRow) for the
+  // real incident this fixes: a downscale failure used to discard this
+  // already-paid-for KIE output entirely, forcing every retry to resubmit
+  // to KIE just to redo the (free, KIE-independent) downscale step.
+  // Confirmed live 2026-09-19: a real 6-scene job burned 18 KIE charges
+  // this way (3 attempts x 6 scenes, every single one failing on the exact
+  // same "downscale poll timed out") before being cancelled.
+  let rawUrl: string | undefined
 
-  if (existing?.status === 'generating' && existing.provider_ref) {
+  if (existing?.raw_file_url) {
+    // KIE already succeeded and was already billed on a previous attempt —
+    // only the downscale step failed. Retry that alone; never resubmit to
+    // KIE for this scene again in this generation. Same backoff gate as the
+    // ordinary retry branch below, just keyed off this row instead.
+    const ready = isReadyToRetry({
+      lastError: 'previous downscale attempt did not succeed',
+      retryCount: existing.attempt_number,
+      updatedAt: new Date(existing.updated_at),
+      baseDelayMs: backoffBaseDelayMs,
+    })
+    if (!ready) return false
+    attemptNumber = existing.attempt_number + 1
+    rawUrl = existing.raw_file_url
+    console.log(`[${stepName}] RESUMED FROM RAW KIE CLIP (attempt ${attemptNumber}) — retrying downscale only, no new KIE charge`)
+  } else if (existing?.status === 'generating' && existing.provider_ref) {
     // submit() already succeeded and was already billed for this attempt —
     // the worker just never got to observe the result (most commonly:
     // killed/restarted mid-poll by tsx watch or a deploy). Resuming this
@@ -384,105 +398,95 @@ async function runSceneVideoClipStep(
   }
 
   try {
-    if (!jobRef) {
-      await upsertVisualAsset(client, {
-        contentPipelineId: pipeline.id,
-        generation,
-        assetType: 'scene_video_clip',
-        videoSceneId: scene.id,
-        status: 'generating',
-        attemptNumber,
-      })
+    if (!rawUrl) {
+      if (!jobRef) {
+        await upsertVisualAsset(client, {
+          contentPipelineId: pipeline.id,
+          generation,
+          assetType: 'scene_video_clip',
+          videoSceneId: scene.id,
+          status: 'generating',
+          attemptNumber,
+        })
 
-      const prompt = composeSceneVideoPrompt({
-        visualDescription: scene.visual_description,
-        shotNotes: scene.shot_notes,
-      })
+        const prompt = composeSceneVideoPrompt({
+          visualDescription: scene.visual_description,
+          shotNotes: scene.shot_notes,
+        })
 
-      console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
-      jobRef = await videoGenerator.submit({
-        prompt,
-        referenceImageUrl: sceneImageUrl,
-        durationSeconds: pickDurationSeconds(scene.target_duration_ms),
-      })
+        console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
+        jobRef = await videoGenerator.submit({
+          prompt,
+          referenceImageUrl: sceneImageUrl,
+          durationSeconds: pickClipDurationSeconds(scene.target_duration_ms),
+        })
 
-      // Persist the task id BEFORE polling — this is the fix. Previously
-      // this row only ever recorded providerRef on the FINAL, successful
-      // upsert below, so an interruption anywhere during the poll below
-      // lost the task id forever, making a resume (above) impossible and
-      // forcing every retry into a brand-new paid submission (confirmed
-      // live 2026-09-17: a worker restarted by tsx watch on every save to
-      // index.ts orphaned in-flight Hailuo clip requests this exact way,
-      // burning ~300+ duplicate credits across 6 scenes in one test).
-      await upsertVisualAsset(client, {
-        contentPipelineId: pipeline.id,
-        generation,
-        assetType: 'scene_video_clip',
-        videoSceneId: scene.id,
-        status: 'generating',
-        providerRef: jobRef.providerRef,
-        attemptNumber,
-      })
-    }
-
-    const outcome = await pollVideoUntilDone(videoGenerator, jobRef)
-
-    if ('fileUrl' in outcome) {
-      const target = SCALE_TARGETS[aspectRatio]
-      const scaleJobRef = await scaler.submitScale(outcome.fileUrl, target.width, target.height)
-      const scaleOutcome = await pollScaleUntilDone(scaler, scaleJobRef)
-      if (!('fileBuffer' in scaleOutcome)) {
-        const detail = 'failed' in scaleOutcome ? scaleOutcome.detail : 'downscale poll timed out'
-        throw new ProviderCallError('upload_post', null, detail)
+        // Persist the task id BEFORE polling — this is the fix. Previously
+        // this row only ever recorded providerRef on the FINAL, successful
+        // upsert below, so an interruption anywhere during the poll below
+        // lost the task id forever, making a resume (above) impossible and
+        // forcing every retry into a brand-new paid submission (confirmed
+        // live 2026-09-17: a worker restarted by tsx watch on every save to
+        // index.ts orphaned in-flight Hailuo clip requests this exact way,
+        // burning ~300+ duplicate credits across 6 scenes in one test).
+        await upsertVisualAsset(client, {
+          contentPipelineId: pipeline.id,
+          generation,
+          assetType: 'scene_video_clip',
+          videoSceneId: scene.id,
+          status: 'generating',
+          providerRef: jobRef.providerRef,
+          attemptNumber,
+        })
       }
 
-      const permanentUrl = await uploader.uploadBuffer(
-        `${pipeline.job_id}/scene-${scene.scene_number}-clip.mp4`,
-        scaleOutcome.fileBuffer,
-        'video/mp4',
-      )
+      const outcome = await pollVideoUntilDone(videoGenerator, jobRef)
+      if (!('fileUrl' in outcome)) {
+        const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
+        throw new ProviderCallError('kie', null, detail)
+      }
+
+      rawUrl = outcome.fileUrl
+      // THE FIX: persist the raw KIE clip URL now, before the downscale
+      // pass runs. If downscale fails below, the catch block keeps this
+      // value (see rawFileUrl there) instead of discarding it, so the next
+      // attempt resumes straight into the raw_file_url branch above rather
+      // than paying for another KIE video generation.
       await upsertVisualAsset(client, {
         contentPipelineId: pipeline.id,
         generation,
         assetType: 'scene_video_clip',
         videoSceneId: scene.id,
-        status: 'ready',
+        status: 'generating',
         providerRef: jobRef.providerRef,
-        fileUrl: permanentUrl,
+        rawFileUrl: rawUrl,
         attemptNumber,
       })
-      await recordStepAttempt(client, {
-        contentPipelineId: pipeline.id,
-        stepName,
-        generation,
-        attemptNumber,
-        status: 'succeeded',
-        provider: 'kie',
-        outputSnapshot: { fileUrl: permanentUrl },
-      })
-    } else {
-      const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
-      throw new ProviderCallError('kie', null, detail)
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    // No providerRef passed here — this attempt's task (whether just
-    // submitted or resumed above) is now CONFIRMED done-for (explicit
-    // failure, 404, timeout, or a downscale failure), so upsertVisualAsset
-    // defaults provider_ref back to null. That's deliberate: the next
-    // attempt (if any) legitimately needs a fresh, paid submission — there
-    // is nothing left to resume. Note: a failure during the downscale pass
-    // (scaler.submitScale/pollScaleUntilDone, a SEPARATE upload-post.com
-    // task) still marks the whole clip attempt failed here, discarding an
-    // already-successful KIE video generation — that's a real, separate gap
-    // this fix doesn't address (out of scope: it's an upload-post.com
-    // re-submission, not a duplicate paid KIE task).
+
+    const target = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
+    const scaleJobRef = await scaler.submitScale(rawUrl, target.width, target.height)
+    const scaleOutcome = await pollScaleUntilDone(scaler, scaleJobRef)
+    if (!('fileBuffer' in scaleOutcome)) {
+      const detail = 'failed' in scaleOutcome ? scaleOutcome.detail : 'downscale poll timed out'
+      throw new ProviderCallError('upload_post', null, detail)
+    }
+
+    const permanentUrl = await uploader.uploadBuffer(
+      `${pipeline.job_id}/scene-${scene.scene_number}-clip.mp4`,
+      scaleOutcome.fileBuffer,
+      'video/mp4',
+    )
     await upsertVisualAsset(client, {
       contentPipelineId: pipeline.id,
       generation,
       assetType: 'scene_video_clip',
       videoSceneId: scene.id,
-      status: 'failed',
+      status: 'ready',
+      providerRef: jobRef?.providerRef,
+      fileUrl: permanentUrl,
+      // rawFileUrl omitted deliberately — defaults back to null now that
+      // the asset is ready and the raw clip is no longer needed.
       attemptNumber,
     })
     await recordStepAttempt(client, {
@@ -490,11 +494,44 @@ async function runSceneVideoClipStep(
       stepName,
       generation,
       attemptNumber,
-      status: 'failed_retryable',
+      status: 'succeeded',
       provider: 'kie',
+      outputSnapshot: { fileUrl: permanentUrl },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    // No providerRef passed here — the KIE task (whether just submitted or
+    // resumed above) is now CONFIRMED done-for (explicit failure, 404, or
+    // timeout before rawUrl was ever obtained), so upsertVisualAsset
+    // defaults provider_ref back to null: a future retry legitimately needs
+    // a fresh, paid submission. rawFileUrl IS passed through when set —
+    // that's the fix: a downscale failure (rawUrl already obtained) must
+    // keep it so the next attempt never re-pays for KIE just to redo the
+    // downscale step.
+    await upsertVisualAsset(client, {
+      contentPipelineId: pipeline.id,
+      generation,
+      assetType: 'scene_video_clip',
+      videoSceneId: scene.id,
+      status: 'failed',
+      rawFileUrl: rawUrl,
+      attemptNumber,
+    })
+    // provider/max-attempts reflect which provider actually failed: once
+    // rawUrl exists, KIE already succeeded and every subsequent failure is
+    // upload-post.com's downscale step, cheap and unbilled — its own
+    // (higher) retry budget applies, never KIE's.
+    const failedProvider = rawUrl ? 'upload_post' : 'kie'
+    await recordStepAttempt(client, {
+      contentPipelineId: pipeline.id,
+      stepName,
+      generation,
+      attemptNumber,
+      status: 'failed_retryable',
+      provider: failedProvider,
       errorMessage: message,
     })
-    if (hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+    if (hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS[failedProvider])) {
       await markPipelineFailed(client, pipeline.id, `scene ${scene.scene_number} clip: ${message}`)
     }
   }

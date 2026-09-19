@@ -32,6 +32,12 @@ export interface VideoScriptJobInput {
    *  the model, not a hard cap it's expected to hit exactly — see
    *  composeVideoScriptSystemPrompt's own header for why. */
   durationSeconds: number
+  /** The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
+   *  the creative brief the script and scene plan are built around, same
+   *  treatment as blog's outline/copy and image_post's photo (see
+   *  composeVideoScriptSystemPrompt for how it's used). Optional/nullable
+   *  for a pre-existing job created before the field became required. */
+  sceneNotes?: string | null
 }
 
 export interface ScriptSceneOutput {
@@ -161,6 +167,7 @@ export async function runGenerateScript(
           category: input.category,
           scriptType: input.scriptType,
           targetDurationSeconds: input.durationSeconds,
+          sceneNotes: input.sceneNotes,
         }),
         userPrompt:
           `Topic: ${input.topic}\nKeywords: ${input.keywords}\nCategory: ${input.category}\n` +

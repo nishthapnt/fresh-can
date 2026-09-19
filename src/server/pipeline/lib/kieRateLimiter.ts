@@ -14,28 +14,6 @@
 //
 // One process-wide instance (the module-level export below), not one per
 // caller — the limit is per-account, not per-job or per-pipeline.
-
-class SlidingWindowRateLimiter {
-  private timestamps: number[] = []
-
-  constructor(
-    private readonly max: number,
-    private readonly windowMs: number,
-  ) {}
-
-  async acquire(): Promise<void> {
-    for (;;) {
-      const now = Date.now()
-      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs)
-      if (this.timestamps.length < this.max) {
-        this.timestamps.push(now)
-        return
-      }
-      const oldest = this.timestamps[0]
-      const waitMs = Math.max(this.windowMs - (now - oldest) + 1, 10)
-      await new Promise((resolve) => setTimeout(resolve, waitMs))
-    }
-  }
-}
+import { SlidingWindowRateLimiter } from './rateLimiter'
 
 export const kieSubmitLimiter = new SlidingWindowRateLimiter(15, 10_000)

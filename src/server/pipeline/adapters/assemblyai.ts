@@ -59,10 +59,22 @@ export class AssemblyAITranscriptionService implements TranscriptionService {
       error?: string
       text?: string
       words?: unknown
+      // AssemblyAI's real measured duration of the submitted audio file, in
+      // SECONDS (assemblyai.com/docs) — read here so transcribeAudio.ts can
+      // offset later scenes' captions against real audio length instead of
+      // synthesizeVoice.ts's word-count estimate (see TranscriptionPollResult's
+      // audioDurationMs for why that estimate drifts out of sync).
+      audio_duration?: number
     }
 
     if (data.status === 'completed') {
-      return { status: 'ready', timingData: data.words ?? [], text: data.text ?? '' }
+      return {
+        status: 'ready',
+        timingData: data.words ?? [],
+        text: data.text ?? '',
+        audioDurationMs:
+          typeof data.audio_duration === 'number' ? Math.round(data.audio_duration * 1000) : undefined,
+      }
     }
     if (data.status === 'error') {
       return { status: 'failed', detail: data.error ?? 'unknown AssemblyAI failure' }

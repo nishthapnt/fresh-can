@@ -158,8 +158,11 @@ function makeFailingVoiceSynthesizer() {
 
 // Two words per scene, at a fixed offset — the test asserts the SECOND
 // scene's combined words are shifted by the first scene's duration_ms, not
-// just that 4 words exist.
-function makeMockTranscriptionService() {
+// just that 4 words exist. `audioDurationMs` is omitted by default (so
+// transcribeAudio.ts falls back to synthesizeVoice.ts's word-count estimate,
+// matching provider/mock behavior before that field existed) — pass one to
+// simulate AssemblyAI reporting the REAL measured audio duration instead.
+function makeMockTranscriptionService(audioDurationMs?: number) {
   let counter = 0
   const submit = vi.fn(async () => ({ providerRef: `transcript-${++counter}` }))
   const poll = vi.fn(
@@ -170,6 +173,7 @@ function makeMockTranscriptionService() {
         { text: 'word2', start: 400, end: 800 },
       ],
       text: 'word1 word2',
+      audioDurationMs,
     }),
   )
   return { submit, poll } satisfies TranscriptionService
@@ -188,8 +192,16 @@ function makeMockAVMerger() {
   const submitAudioConcat = vi.fn(async () => ({ providerRef: `audio-concat-${++counter}` }))
   const submitMux = vi.fn(async () => ({ providerRef: `mux-${++counter}` }))
   const submitCaptionBurn = vi.fn(async () => ({ providerRef: `caption-${++counter}` }))
+  const submitSceneDurationMatch = vi.fn(async () => ({ providerRef: `duration-match-${++counter}` }))
   const poll = vi.fn(async (): Promise<AVMergeResult> => ({ status: 'ready', fileBuffer: Buffer.from(`fake-video-${counter}`) }))
-  return { submitVideoConcat, submitAudioConcat, submitMux, submitCaptionBurn, poll } satisfies AVMerger
+  return {
+    submitVideoConcat,
+    submitAudioConcat,
+    submitMux,
+    submitCaptionBurn,
+    submitSceneDurationMatch,
+    poll,
+  } satisfies AVMerger
 }
 
 describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers) — M1+M2+M3', () => {
@@ -700,6 +712,79 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(finalClip.attempt_number).toBe(2) // the failed resume (1) + the legitimate fresh retry (2)
   })
 
+  it('a scene clip whose downscale step fails keeps the already-paid KIE clip — retrying resubmits to the scaler only, never pays for another KIE video generation', async () => {
+    // Regression test for a real incident (2026-09-19): a live job's
+    // downscale step ("upload_post call failed: downscale poll timed out")
+    // failed on every scene, 3 attempts in a row, burning a fresh paid KIE
+    // video generation on every single retry — 18 wasted charges — because
+    // the old code discarded the already-successful KIE clip the moment the
+    // UNRELATED downscale step failed. The fix: persist the raw KIE clip
+    // URL (content_visual_assets.raw_file_url) the instant KIE succeeds, and
+    // resume straight into the scale step on retry instead of resubmitting.
+    const { pipeline } = await makeJobAndPipeline('EN')
+    const script = makeMockScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, script)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    const image = makeMockImageGenerator()
+    const uploader = makeFakeVideoUploader()
+    const video = makeMockVideoGenerator()
+
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
+    const { data: afterCharRef } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+
+    const failingScaler: SceneClipScaler = {
+      submitScale: vi.fn(async () => ({ providerRef: 'scale-attempt-1' })),
+      poll: vi.fn(async (): Promise<AVMergeResult> => ({ status: 'failed', detail: 'simulated downscale timeout' })),
+    }
+
+    // Tick 1: produces the scene_image for every scene (see the identical
+    // two-tick comment on the "M2 produces..." test above).
+    await runGenerateSceneVisual(client, afterCharRef as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, failingScaler, 0)
+    const { data: afterImages } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+
+    // Tick 2: images are ready, so this attempts the video clip for every
+    // scene — KIE succeeds (video mock), but the downscale step fails.
+    await runGenerateSceneVisual(client, afterImages as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, failingScaler, 0)
+
+    const kieCallsAfterFailure = video.submit.mock.calls.length
+    expect(kieCallsAfterFailure).toBeGreaterThan(0) // KIE really was called (and paid for) once per scene
+
+    const { data: failedClips } = await client
+      .from('content_visual_assets')
+      .select('*')
+      .eq('content_pipeline_id', pipeline.id)
+      .eq('asset_type', 'scene_video_clip')
+    expect(failedClips!.length).toBeGreaterThan(0)
+    for (const clip of failedClips!) {
+      expect(clip.status).toBe('failed')
+      // The raw KIE clip URL is kept, not discarded — this is the fix.
+      expect(clip.raw_file_url).toMatch(/^https:\/\/example\.com\/mock-clip-\d+\.mp4$/)
+    }
+
+    // Now the downscale step succeeds. Retrying must resume straight into
+    // the scale step using the preserved raw_file_url, WITHOUT calling KIE
+    // again for any scene.
+    const succeedingScaler = makeMockScaler()
+    const { data: afterFirstFailure } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    await runGenerateSceneVisual(client, afterFirstFailure as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, succeedingScaler, 0)
+
+    expect(video.submit.mock.calls.length).toBe(kieCallsAfterFailure) // no NEW KIE calls during the downscale-only retry
+    expect(succeedingScaler.submitScale).toHaveBeenCalled()
+
+    const { data: readyClips } = await client
+      .from('content_visual_assets')
+      .select('*')
+      .eq('content_pipeline_id', pipeline.id)
+      .eq('asset_type', 'scene_video_clip')
+    for (const clip of readyClips!) {
+      expect(clip.status).toBe('ready')
+      expect(clip.raw_file_url).toBeNull() // cleaned up once ready, no longer needed
+      expect(clip.file_url).toBeTruthy()
+    }
+  })
+
   it('M3: BOTH — localize_script produces genuinely different, independent narration per language', async () => {
     const { pipeline } = await makeJobAndPipeline('BOTH')
     const scriptGen = makeLocalizeAwareScriptGenerator()
@@ -765,6 +850,51 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(words[2].start).toBeGreaterThan(words[1].end)
   })
 
+  it("M3: caption offsets use AssemblyAI's real measured audio duration, not synthesizeVoice's word-count estimate", async () => {
+    // Regression test for a real sync bug: scene 1 and scene 2's narration
+    // text here ("English text for scene 1"/"...scene 2") have the SAME
+    // word count, so synthesizeVoice.ts's estimate is IDENTICAL for both
+    // (2000ms). If transcribeAudio.ts were still using that estimate as the
+    // offset, scene 2's words would start at 2000ms regardless of what the
+    // transcription service reports. Feeding a real audioDurationMs of
+    // 5000ms here and asserting scene 2 starts at exactly 5000ms proves the
+    // real value — not the estimate — is what actually drives the offset.
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+    const { data: tracks } = await client.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id)
+    const track = tracks![0] as TrackRow
+
+    await runLocalizeScript(client, track, approved.id, scriptGen)
+    const { data: afterLocalize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+
+    const voice = makeMockVoiceSynthesizer()
+    const uploader = makeFakeVideoUploader()
+    await runSynthesizeVoice(client, afterLocalize as TrackRow, approved.id, jobId, voice, uploader)
+
+    const { data: audioRows } = await client.from('video_scene_audio').select('*').eq('content_language_track_id', track.id)
+    // The estimate synthesizeVoice.ts actually stored — same for both scenes
+    // (equal word counts) — kept only to assert it's genuinely DIFFERENT
+    // from the real duration this test feeds in, so the test would fail if
+    // the fix silently fell back to the estimate.
+    expect(audioRows!.every((a) => a.duration_ms === 2000)).toBe(true)
+
+    const { data: afterSynthesize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+    const transcription = makeMockTranscriptionService(5000)
+    await runTranscribeAudio(client, afterSynthesize as TrackRow, approved.id, transcription)
+
+    const { data: captions } = await client
+      .from('video_captions')
+      .select('*')
+      .eq('content_language_track_id', track.id)
+      .single()
+    const words = captions.timing_data as Array<{ text: string; start: number; end: number }>
+    expect(words[0].start).toBe(0)
+    expect(words[2].start).toBe(5000) // the REAL duration, not the 2000ms estimate
+  })
+
   it('M3: one language failing (ElevenLabs down) never blocks or corrupts the other', async () => {
     const { pipeline } = await makeJobAndPipeline('BOTH')
     const scriptGen = makeLocalizeAwareScriptGenerator()
@@ -828,6 +958,55 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(scriptGen.generate).toHaveBeenCalledTimes(2) // generate_script + localize_script, not re-called
     expect(voice.synthesize).toHaveBeenCalledTimes(2) // one per scene, not re-called
     expect(transcription.submit).toHaveBeenCalledTimes(2) // one per scene, not re-called
+  })
+
+  it('a track stuck at "generating" after transcribe_captions already succeeded catches up to "awaiting_shared" instead of being stranded forever', async () => {
+    // Regression test (2026-09-19): transcribe_captions is the ONLY step
+    // that advances a track to 'awaiting_shared' (see runTranscribeAudio's
+    // own header). Its old code short-circuited on `alreadySucceeded`
+    // BEFORE ever reaching that transition — so a crash/restart between
+    // recordStepAttempt(succeeded) and claimTrack (or, as happened live
+    // during a real manual recovery, an external process resetting
+    // track.status back to 'generating' without touching the already-
+    // succeeded step record) left the track stuck at 'generating' forever:
+    // every future call hit the same early return and never reached the
+    // real claimTrack line. renderLanguageTrack.ts's own 'render' step
+    // already had this exact fix (see its identical incident comment);
+    // transcribeAudio.ts was simply missing it.
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+    const { data: tracks } = await client.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id)
+    const track = tracks![0] as TrackRow
+
+    const voice = makeMockVoiceSynthesizer()
+    const transcription = makeMockTranscriptionService()
+    const uploader = makeFakeVideoUploader()
+
+    await runLocalizeScript(client, track, approved.id, scriptGen)
+    let fresh = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+    await runSynthesizeVoice(client, fresh, approved.id, jobId, voice, uploader)
+    fresh = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+    await runTranscribeAudio(client, fresh, approved.id, transcription)
+    fresh = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+    expect(fresh.status).toBe('awaiting_shared')
+
+    // Simulate the stuck state directly: transcribe_captions' own
+    // pipeline_steps row and video_captions row are untouched (the real
+    // work genuinely succeeded) — only track.status regresses, exactly what
+    // a crash between recordStepAttempt and claimTrack (or an external
+    // reset) would produce.
+    await client.from('content_language_tracks').update({ status: 'generating' }).eq('id', track.id)
+    const stuck = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+    expect(stuck.status).toBe('generating')
+
+    await runTranscribeAudio(client, stuck, approved.id, transcription)
+    const recovered = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+
+    expect(recovered.status).toBe('awaiting_shared') // caught up, not stranded
+    expect(transcription.submit).toHaveBeenCalledTimes(2) // still just the original per-scene calls — no re-transcription
   })
 
   it('M4: EN-only reaches a real generated_content row end-to-end (script -> approve -> visuals -> audio/captions -> render)', async () => {

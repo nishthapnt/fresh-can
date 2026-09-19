@@ -348,6 +348,16 @@ export async function upsertSocialPost(
   hashtags: string[],
   platforms: PlatformType[],
 ): Promise<SocialPost> {
+  // Read the existing row's status BEFORE the upsert below overwrites it —
+  // this is the only place that can tell "brand new approval" apart from
+  // "retrying a previously failed post," which matters for the cleanup below.
+  const { data: existing } = await supabase
+    .from('social_posts')
+    .select('id, status')
+    .eq('job_id', jobId)
+    .eq('content_type', contentType)
+    .maybeSingle()
+
   const { data, error } = await supabase
     .from('social_posts')
     .upsert(
@@ -366,6 +376,26 @@ export async function upsertSocialPost(
     .single()
 
   if (error) throw new Error(error.message)
+
+  // Retrying a previously failed post: db.ts's
+  // getApprovedSocialPostsAwaitingSubmission infers "not yet submitted"
+  // purely from the ABSENCE of any social_platform_logs row for this post —
+  // so flipping status back to 'approved' above, on its own, is silently a
+  // permanent no-op if the old 'failed' rows from the last attempt are still
+  // there (confirmed: there was no retry path at all before this). Clearing
+  // them here is what makes clicking "Approve & Post" again on a failed post
+  // actually resubmit it. Gated strictly on the PREVIOUS status being
+  // 'failed' — never on 'posted' (SocialApprovalCard hides this whole action
+  // once posted, so that path should be unreachable anyway, but this never
+  // discards a real success record even if some future caller changes that).
+  if (existing?.status === 'failed') {
+    const { error: delErr } = await supabase
+      .from('social_platform_logs')
+      .delete()
+      .eq('social_post_id', existing.id)
+    if (delErr) throw new Error(delErr.message)
+  }
+
   return data as SocialPost
 }
 

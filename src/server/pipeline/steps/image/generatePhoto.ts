@@ -54,6 +54,36 @@ export async function runGeneratePhoto(
   backoffBaseDelayMs = 5000,
   referenceImageUrl?: string,
 ): Promise<{ ran: boolean }> {
+  try {
+    return await runGeneratePhotoInner(client, pipeline, prompt, imageGenerator, uploader, backoffBaseDelayMs, referenceImageUrl)
+  } catch (err) {
+    // Anything reaching here escaped the submit/poll/upload try/catch
+    // inside runGeneratePhotoInner — e.g. a genuine Supabase error from
+    // claimPipeline/hasSucceededStep/getVisualAssets, none of which are
+    // wrapped there. Without this, such an error propagates uncaught all
+    // the way up through Inngest's own step retry machinery and, once that
+    // budget is exhausted, marks the Inngest run 'Failed' while leaving the
+    // pipeline permanently stuck at 'generating' in the DB — confirmed live
+    // (2026-09-19): a run failed in Inngest with content_visual_assets and
+    // pipeline_steps completely empty for it, meaning it crashed before the
+    // inner try/catch's own bookkeeping ever got a chance to run. The
+    // dashboard then shows "AI is creating your image concept…" forever,
+    // since nothing ever marks the job failed for it to react to.
+    const message = err instanceof Error ? err.message : String(err)
+    await markPipelineFailed(client, pipeline.id, message)
+    return { ran: true }
+  }
+}
+
+async function runGeneratePhotoInner(
+  client: SupabaseClient,
+  pipeline: PipelineRow,
+  prompt: string,
+  imageGenerator: ImageGenerator,
+  uploader: PhotoStorageUploader,
+  backoffBaseDelayMs: number,
+  referenceImageUrl: string | undefined,
+): Promise<{ ran: boolean }> {
   const generation = pipeline.current_generation
   const stepName = 'generate_photo'
 

@@ -18,6 +18,7 @@ import {
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
+import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
 
 // FFmpeg render is the longest-running external call in the whole pipeline
 // (ARCHITECTURE.MD §3.1) — generous poll timeout, unlike the ~1-3 min
@@ -61,7 +62,7 @@ function isStaleClaim(updatedAt: string): boolean {
 async function pollUntilDone(
   merger: AVMerger,
   jobRef: { providerRef: string },
-  label: 'video-concat' | 'audio-concat' | 'mux' | 'caption',
+  label: 'duration-match' | 'video-concat' | 'audio-concat' | 'mux' | 'caption',
 ): Promise<
   | { fileBuffer: Buffer; elapsedMs: number }
   | { failed: true; detail: string; elapsedMs: number }
@@ -132,6 +133,11 @@ export async function runRenderLanguageTrack(
   avMerger: AVMerger,
   uploader: VideoStorageUploader,
   backoffBaseDelayMs = 5000,
+  // content_jobs.aspect_ratio (video.ts already has this in scope from its
+  // own fetchVideoJobFields call) — threaded through to the caption-burn
+  // pass so its line-wrapping knows the real frame width instead of
+  // guessing (see avMerger.ts's buildCaptionCommand).
+  aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
 ): Promise<{ ran: boolean }> {
   if (pipeline.status !== 'ready') return { ran: false } // shared visuals not ready yet
   if (track.master_generation_used !== pipeline.current_generation) return { ran: false } // stale generation
@@ -201,7 +207,7 @@ export async function runRenderLanguageTrack(
     const visualAssets = await getVisualAssets(client, pipeline.id, generation)
     const audioRows = await getVideoSceneAudioRows(client, track.id, generation)
 
-    const scenePairs = scenes.map((scene) => {
+    const sceneRenderInputs = scenes.map((scene) => {
       const clip = visualAssets.find((a) => a.video_scene_id === scene.id && a.asset_type === 'scene_video_clip')
       const audio = audioRows.find((a) => a.video_scene_id === scene.id)
       if (!clip?.file_url) {
@@ -210,8 +216,66 @@ export async function runRenderLanguageTrack(
       if (!audio?.file_url) {
         throw new Error(`render: scene ${scene.scene_number} has no ready audio for track ${track.language}`)
       }
-      return { clipUrl: clip.file_url, audioUrl: audio.file_url }
+      return {
+        sceneNumber: scene.scene_number,
+        clipUrl: clip.file_url,
+        audioUrl: audio.file_url,
+        // Never probed — Kling/Hailuo reliably render at exactly the
+        // duration requested, so this is recomputed deterministically from
+        // the same input generateSceneVisual.ts used to request the clip
+        // (see pickClipDurationSeconds's own header for why that's safe).
+        clipDurationSeconds: Number(pickClipDurationSeconds(scene.target_duration_ms)),
+        // The REAL AssemblyAI-measured duration, once transcribeAudio.ts
+        // has run (it overwrites synthesizeVoice.ts's word-count estimate
+        // in this same column) — falls back to whatever's stored if a
+        // track somehow reached here without that write, which shouldn't
+        // happen (transcribe_captions is a hard gate before awaiting_shared).
+        audioDurationSeconds: (audio.duration_ms ?? 0) / 1000,
+      }
     })
+
+    // Pass 0: reconcile each scene's SHARED video clip to THIS track's
+    // real narration length — hold the last frame if the clip is shorter
+    // than the audio, trim if it's longer (avMerger.ts's
+    // buildSceneDurationMatchCommand). This is the render-time
+    // reconciliation ARCHITECTURE.MD §4.2 always called for but that was
+    // never actually implemented — confirmed live (2026-09-19): a real
+    // 7-scene render's total video length (35s, all fixed 5s clips) ran
+    // 7.4s short of its real total audio length (42.4s), and the mux
+    // pass's `-shortest` below was silently truncating the last ~7.4s of
+    // narration and captions instead of anything ever reconciling per
+    // scene. Writes to PER-TRACK temp clip URLs, never back onto the
+    // shared content_visual_assets row — the match amount is language-
+    // specific (EN/FR narration lengths differ for the same scene), and
+    // that row must stay untouched so every language keeps editing from
+    // the same real, unmodified shared clip. Run in parallel across
+    // scenes — independent single-file operations, same reasoning the
+    // video/audio concat passes below use for their own two halves.
+    const matchedScenes = await Promise.all(
+      sceneRenderInputs.map(async (input) => {
+        const jobRef = await avMerger.submitSceneDurationMatch(
+          input.clipUrl,
+          input.clipDurationSeconds,
+          input.audioDurationSeconds,
+        )
+        const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match')
+        if (!('fileBuffer' in outcome)) {
+          const detail = 'failed' in outcome ? outcome.detail : 'FFmpeg duration-match pass poll timed out'
+          throw new ProviderCallError(
+            'upload-post',
+            null,
+            `scene ${input.sceneNumber}: ${detail} (after ${(outcome.elapsedMs / 1000).toFixed(1)}s)`,
+          )
+        }
+        const matchedClipUrl = await uploader.uploadBuffer(
+          `${pipeline.job_id}/${track.language}-scene${input.sceneNumber}-matched-tmp.mp4`,
+          outcome.fileBuffer,
+          'video/mp4',
+        )
+        return { clipUrl: matchedClipUrl, audioUrl: input.audioUrl }
+      }),
+    )
+    const scenePairs = matchedScenes
 
     const { data: captionRow } = await client
       .from('video_captions')
@@ -283,7 +347,7 @@ export async function runRenderLanguageTrack(
         muxOutcome.fileBuffer,
         'video/mp4',
       )
-      const captionJobRef = await avMerger.submitCaptionBurn(muxTempUrl, captionRow?.timing_data)
+      const captionJobRef = await avMerger.submitCaptionBurn(muxTempUrl, captionRow?.timing_data, aspectRatio)
       const captionOutcome = await pollUntilDone(avMerger, captionJobRef, 'caption')
       if (!('fileBuffer' in captionOutcome)) {
         const detail = 'failed' in captionOutcome ? captionOutcome.detail : 'FFmpeg caption pass poll timed out'

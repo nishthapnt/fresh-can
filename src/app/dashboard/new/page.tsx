@@ -772,9 +772,10 @@ export default function NewContentPage() {
                 rows={4}
               />
               <p className="text-xs text-gray-400">
-                This is the creative brief the Image Post photo and the Blog post&apos;s angle and images are
-                built around — not used for Video. Fresh-CAN&apos;s own brand details only shape how the truck,
-                interior, and voice must look or sound if they appear; they don&apos;t decide what the scene is.
+                This is the creative brief the Image Post photo, the Blog post&apos;s angle and images, and the
+                Video&apos;s story and scenes are all built around. Fresh-CAN&apos;s own brand details only shape
+                how the truck, interior, and voice must look or sound if they appear; they don&apos;t decide what
+                the scene is.
               </p>
             </div>
 

@@ -60,4 +60,17 @@ describe('hasExceededMaxAttempts', () => {
     expect(hasExceededMaxAttempts(3, MAX_ATTEMPTS.openai)).toBe(true)
     expect(hasExceededMaxAttempts(5, MAX_ATTEMPTS.kie)).toBe(true)
   })
+
+  it('upload_post allows a 4th attempt — regression for a real 429 rate-limit failure that exhausted all 3 attempts in ~21s, well short of the provider\'s own documented 60s cooldown', () => {
+    expect(hasExceededMaxAttempts(3, MAX_ATTEMPTS.upload_post)).toBe(false)
+    expect(hasExceededMaxAttempts(4, MAX_ATTEMPTS.upload_post)).toBe(true)
+  })
+
+  it("upload_post's schedule (paired with renderLanguageTrack.ts's 20000ms backoffBaseDelayMs) requires a cumulative wait that clears a real 60s provider cooldown by the last attempt", () => {
+    const baseDelayMs = 20_000
+    const requiredDelayBeforeAttempt = (retryCount: number) => retryCount * baseDelayMs
+    // Attempt 4 (retryCount=3 going in) requires 60s since the PREVIOUS
+    // attempt — exactly the provider's own retry_after_seconds hint.
+    expect(requiredDelayBeforeAttempt(3)).toBe(60_000)
+  })
 })

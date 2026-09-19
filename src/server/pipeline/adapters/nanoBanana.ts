@@ -12,7 +12,7 @@ import { kieSubmitLimiter } from '../lib/kieRateLimiter'
  * reached through a different KIE endpoint shape (jobs/createTask +
  * jobs/recordInfo, not flux/kontext/*). Used specifically for
  * image_style: 'infographic' — confirmed live (2026-09-10) that this model
- * renders headline/subtitle/logo/CTA-bar text onto an image correctly,
+ * renders headline/subtitle/CTA-bar text onto an image correctly,
  * where Flux Kontext reliably garbles the same kind of text (see
  * prompts/brand/fresh-can.ts's incident notes on the infographic style
  * that was tried and removed). Implements the same ImageGenerator

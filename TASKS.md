@@ -8,10 +8,11 @@
 - [ ] Stabilize `worker/src/steps/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness)
 - [ ] Backport permanent Supabase Storage upload (`fc-image-posts` pattern) to blog's hero/inline images
 - [ ] Surface "stale" track state in the job detail UI after a visual regenerate (currently silent — user must know to re-click Approve)
-- [ ] Fix social posting getting permanently stuck at status='posting' with no error/timeout/retry surfaced — confirmed live via 2 real stuck rows since 2026-07-01 (Session 6, 2026-09-14)
+- [x] Fix social posting getting permanently stuck at status='posting' with no error/timeout/retry surfaced — confirmed live via 2 real stuck rows since 2026-07-01 (Session 6, 2026-09-14). The stuck-forever/no-timeout part was already fixed earlier (`publishPost.ts`'s `STALE_POSTING_MS`/`isStale`); the "no retry" part closed Session 7 (2026-09-19) — `upsertSocialPost` now clears a failed post's old `social_platform_logs` rows on re-approval, since `getApprovedSocialPostsAwaitingSubmission` was silently excluding any post with existing log rows forever, retry or not.
 - [ ] `WaitingCard`'s progress bar (`src/app/dashboard/jobs/[job_id]/page.tsx`) is a fake wall-clock timer (`elapsed/90*85`, capped 85%) that never checks real backend status — unlike `GlobalProgressBar`, which was fixed to poll real pipeline/track state (Session 6, 2026-09-14)
 - [ ] Enable RLS on `content_jobs`/`generated_content` (defined but not actually enforced — anon key has effectively unrestricted read/write on both today)
 - [ ] Deploy to Vercel (or chosen host)
+- [ ] Build real blog social posting support — blog never writes a `generated_content` row (no image/video), so posting it always failed deep in the pipeline; `SocialApprovalCard` now guards against this with a clear "not supported yet" message (Session 7, 2026-09-19) instead of a silent failure, but the actual feature (e.g. attach the blog's hero image, or a link-only post where the platform allows one) is still unbuilt
 
 ---
 

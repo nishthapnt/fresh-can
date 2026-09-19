@@ -46,14 +46,24 @@ export function hasExceededMaxAttempts(retryCount: number, maxAttempts: number):
 // stated rationale, not a baseline worth inheriting as-is. `kie` is shared
 // by both KieImageGenerator (scene images) and KieVideoGenerator (scene
 // clips) since they're the same provider/account, not per-asset-type.
-// Tune elevenlabs/assemblyai/upload_post against real failure rates once
-// M3/M4 are live-tested.
+// Tune elevenlabs/assemblyai against real failure rates once M3/M4 are
+// live-tested.
+//
+// upload_post bumped 3 -> 4 (2026-09-19) after a real 429 rate-limit
+// failure (see uploadPostRateLimiter.ts) exhausted all 3 attempts in ~21s
+// total — nowhere near the provider's own documented 60s cooldown
+// (`retry_after_seconds: 60` in its error body). renderLanguageTrack.ts's
+// own call site was bumped in step with this (backoffBaseDelayMs
+// 5000 -> 20000ms), so the schedule of required waits before each attempt
+// is now 20s/40s/60s — comfortably clearing a real 60s cooldown by the
+// last attempt, instead of giving up three times faster than the provider
+// asked for.
 export const MAX_ATTEMPTS = {
   openai: 3,
   kie: 5,
   elevenlabs: 3,
   assemblyai: 5,
-  upload_post: 3,
+  upload_post: 4,
 } as const
 
 export type ProviderName = keyof typeof MAX_ATTEMPTS

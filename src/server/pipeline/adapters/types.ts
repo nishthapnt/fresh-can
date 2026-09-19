@@ -119,7 +119,22 @@ export interface TranscriptionJobRef {
 }
 
 export type TranscriptionPollResult =
-  | { status: 'ready'; timingData: unknown; text: string }
+  | {
+      status: 'ready'
+      timingData: unknown
+      text: string
+      /** The REAL measured duration of this scene's audio file, straight
+       *  from the transcription provider (AssemblyAI's own `audio_duration`
+       *  field, in ms here) — not synthesizeVoice.ts's word-count ESTIMATE
+       *  (video_scene_audio.duration_ms). transcribeAudio.ts uses this to
+       *  offset the NEXT scene's caption timestamps, so captions drift back
+       *  in sync with the real per-scene audio files that get concatenated
+       *  at render time, instead of accumulating estimate-vs-reality error
+       *  scene over scene. Optional/undefined for any provider or mock that
+       *  doesn't report it — transcribeAudio.ts falls back to the estimate
+       *  in that case, same as before this field existed. */
+      audioDurationMs?: number
+    }
   | { status: 'pending' }
   | { status: 'failed'; detail: string }
 
@@ -136,7 +151,7 @@ export interface VideoGenerationInput {
    *  character-ref editing at the image stage, not re-derived here). */
   referenceImageUrl: string
   /** '5' or '10' seconds — a Kling-2.6-era constraint (that model only
-   *  accepted those two values) generateSceneVisual.ts's pickDurationSeconds
+   *  accepted those two values) lib/sceneClipDuration.ts's pickClipDurationSeconds
    *  still buckets into, even now that KieVideoGenerator targets a
    *  different model (see kie.ts) that would accept an arbitrary duration;
    *  keeping the bucketing means swapping the underlying model doesn't also
@@ -220,8 +235,32 @@ export interface AVMerger {
   /** Only ever called when there are caption cues to burn in — a render
    *  with no captions stops after the mux pass (its output IS the final
    *  render). mergedVideoUrl is the mux pass's output, re-hosted by the
-   *  caller so this provider can fetch it as a plain input file. */
-  submitCaptionBurn(mergedVideoUrl: string, captionTimingData: unknown): Promise<AVMergeJobRef>
+   *  caller so this provider can fetch it as a plain input file.
+   *  `aspectRatio` (content_jobs.aspect_ratio, default '9:16') resolves to
+   *  the job's real delivery resolution so caption lines wrap against the
+   *  actual frame width instead of a fixed word count — see
+   *  avMerger.ts's buildCaptionCommand for why this matters. */
+  submitCaptionBurn(
+    mergedVideoUrl: string,
+    captionTimingData: unknown,
+    aspectRatio?: '9:16' | '1:1' | '16:9',
+  ): Promise<AVMergeJobRef>
+  /** Matches ONE scene's shared video clip to the CALLING track's real
+   *  narration length (hold last frame / trim — see avMerger.ts's
+   *  buildSceneDurationMatchCommand) before that scene's clip is fed into
+   *  submitVideoConcat. Deliberately on THIS interface, not
+   *  SceneClipScaler — this runs from renderLanguageTrack.ts, at render
+   *  time, per language track; SceneClipScaler's downscale runs from
+   *  generateSceneVisual.ts, once per shared clip, right after KIE.ai
+   *  generates it. Keeping them on separate interfaces documents which
+   *  step actually uses which capability, same reasoning SceneClipScaler's
+   *  own header gives for being split from this interface in the first
+   *  place. */
+  submitSceneDurationMatch(
+    clipUrl: string,
+    currentDurationSeconds: number,
+    targetDurationSeconds: number,
+  ): Promise<AVMergeJobRef>
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }
 

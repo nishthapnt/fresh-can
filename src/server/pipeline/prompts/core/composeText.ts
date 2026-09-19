@@ -172,6 +172,14 @@ export interface VideoScriptSystemPromptOptions {
    *  actual length signal (confirmed live 2026-09-13: a real run picked
    *  90s of total runtime with no target to react to). */
   targetDurationSeconds: number
+  /** The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
+   *  same required-creative-brief treatment as composeOutlineSystemPrompt's
+   *  (see that function), now extended to video: the story and every scene
+   *  are built around this idea, with the brand facts above acting as fixed
+   *  constraints on tone/accuracy/how branded elements must look or sound
+   *  IF they appear — never as the angle itself. Optional/nullable for a
+   *  pre-existing job created before the field became required. */
+  sceneNotes?: string | null
 }
 
 /**
@@ -186,12 +194,62 @@ export interface VideoScriptSystemPromptOptions {
  * writes literal English sentences into narration_intent here would quietly
  * reintroduce the "FR is just a translation of the EN script" bug this
  * whole redesign exists to avoid.
+ *
+ * `sceneNotes` (added alongside the anti-ad framing below) brings video in
+ * line with how composeOutlineSystemPrompt/composeBlogImage/composePhotoPrompt
+ * already treat the dashboard's "Your Scene Idea" field and SCENE_IS_CREATIVE_BRIEF
+ * (core/compose.ts): the brand's mission/voice/category/real physical
+ * descriptions are fixed CONSTRAINTS on what must look, sound, or feel
+ * correct if they appear — never the reason a scene exists. Without this,
+ * the model defaults to writing the vehicle/app/brand into the center of
+ * every scene, which is exactly what makes generated video read as an ad
+ * instead of a real moment.
+ *
+ * Rewritten 2026-09-19 after a real generation given a fully unrelated
+ * scene idea (a family's cozy autumn dinner — pumpkin, squash, sweet
+ * potatoes, warm spices, no mention of Fresh-CAN at all) ignored it
+ * completely and wrote a generic Fresh-CAN mission/food-desert pitch
+ * instead — real statistics cited, the mobile unit forced into 4 of 7
+ * scenes. The scene-idea clause used to be a single sentence appended at
+ * the very END of this entire system prompt, AFTER the brand's full
+ * mission statement, its category brief (a directive: "this category
+ * should focus on..." — a second, directly competing topic), real
+ * statistics available to cite, the whole JSON schema, and every other
+ * instruction below. By the time the model reached it, it had already
+ * been primed hard toward brand/mission content, and one trailing
+ * sentence was nowhere near enough to override that. The idea now leads
+ * instead — brand facts are reframed as background constraints from the
+ * very first sentence — and the category brief/statistics (the two most
+ * topic-like, directly competing pieces of brand content) are dropped
+ * entirely rather than reworded softer: there's no safe phrasing of "here
+ * is a second, whole different topic you may also want to write about"
+ * that doesn't risk reintroducing exactly this bug.
+ *
+ * Follow-up the same day: even after the rewrite above, the user asked why
+ * a generation about that same unrelated autumn-dinner idea still
+ * mentioned "food desert communities" at all. Answer: missionStatement
+ * itself — quoted verbatim as "background context" — literally contains
+ * that phrase (see fresh-can.ts), regardless of which category was
+ * selected; a category brief was never the only source of topic drift.
+ * `brand.neutralIdentityLine` (falls back to missionStatement when unset)
+ * exists so this branch can quote a short, purely-factual line instead —
+ * the same "remove the competing content, don't just reframe it" judgment
+ * already applied to the category brief/statistics above.
  */
 export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoScriptSystemPromptOptions): string {
+  const preamble = opts.sceneNotes
+    ? `Build this video's story and every one of its scenes around the user's own creative idea: ` +
+      `"${opts.sceneNotes}". This idea alone decides what the video is about and what happens in it — ` +
+      `never blend in or substitute a different topic. ${brand.neutralIdentityLine ?? brand.missionStatement} ` +
+      `That is background context for tone and brand accuracy only: a fixed constraint on how the brand's ` +
+      `vehicle, app, or other branding must look or sound IF the idea above genuinely calls for them, never a ` +
+      `second angle, and never a reason to insert brand or mission messaging into a scene the idea doesn't ` +
+      `call for. Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
+    : brandContext(brand, opts.category) + statsLine(brand) + '\n\n'
+
   return (
-    brandContext(brand, opts.category) +
-    statsLine(brand) +
-    `\n\nYou are a video scriptwriter and shot planner. Produce a short-form marketing video script AND its ` +
+    preamble +
+    `You are a video scriptwriter and shot planner. Produce a short-form marketing video script AND its ` +
     `scene-by-scene shot plan in ONE response. Script type: ${opts.scriptType}.\n\n` +
     'Respond with strictly valid JSON matching this exact shape (all fields required):\n' +
     '{\n' +
@@ -201,8 +259,13 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '  "scenes": [\n' +
     '    {\n' +
     '      "scene_number": number (1-indexed, sequential, no gaps),\n' +
-    '      "visual_description": string (what the camera shows — specific enough to generate an image from),\n' +
-    '      "shot_notes": string (camera angle/movement notes; "" if none),\n' +
+    '      "visual_description": string (what the camera shows — the subject\'s own action plus any natural ' +
+    'ambient motion already implied by the setting, e.g. steam rising, wind moving leaves or fabric, light ' +
+    'shifting — specific enough to generate an image from),\n' +
+    '      "shot_notes": string (real cinematographic direction for this exact shot — angle, camera movement, ' +
+    'depth of field, framing, e.g. "low-angle slow tracking shot, shallow depth of field" or "static wide shot, ' +
+    'soft window light" — only "" for a scene where a plain static shot is genuinely the deliberate choice, ' +
+    'never left empty by default),\n' +
     '      "narration_intent": string (the SEMANTIC content this scene\'s narration should convey — describe ' +
     'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
     'independently localized into actual EN or FR wording by a later step),\n' +
@@ -214,7 +277,32 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'seconds — that is the target runtime, aim for it. Treat it as a guideline, not a hard cutoff: it is fine ' +
     'for the true total to land a bit short or long of it if that is what a complete, naturally-paced narration ' +
     'actually needs. Never truncate a scene\'s narration_intent, or drop a scene\'s idea early, just to force the ' +
-    'total to match exactly.'
+    'total to match exactly.\n\n' +
+    'The overall video and every individual scene must read as a genuine story or moment from real life — ' +
+    'natural pacing, real stakes or feeling — never scripted ad copy, a corporate promo, or a polished ' +
+    'commercial, even though it is being produced for marketing use. Every scene\'s setting must also be ' +
+    'physically plausible and safe — an ordinary real-world place the action could actually happen (a ' +
+    'sidewalk, porch, kitchen table, park, community space, or similar) — never an implausible or unsafe ' +
+    'arrangement like people gathered or eating in the middle of an active road, unless the scene idea ' +
+    'itself explicitly calls for that exact setup. Shoot it like a well-made short film, not a slideshow of ' +
+    'plain snapshots: vary shot types scene to scene (wide establishing shots, medium shots, close-ups, ' +
+    'over-the-shoulder, tracking shots) and give each one deliberate camera direction in shot_notes — this is ' +
+    'a production-quality bar every scene should meet, never a directive on what mood or overall style to ' +
+    'use, which stays entirely up to the scene idea. If the idea above is brief, expand it creatively into ' +
+    'specific, vivid visual detail — concrete actions, objects, and environment — but every detail must still ' +
+    'serve that exact idea, never a generic or unrelated addition. Do not invent a prop, vehicle, building, or ' +
+    'person that serves no purpose in the story — every significant visual element must have a clear reason ' +
+    'to exist; if removing it would not harm the story, do not add it. Maintain natural continuity across ' +
+    'scenes that share the same moment, characters, or place — the same people, their clothing, and the ' +
+    'setting should carry between consecutive scenes describing that same moment, unless the story moves ' +
+    'somewhere new.' +
+    (opts.sceneNotes
+      ? ' Every scene must still serve the creative idea given at the very start of this prompt — never drift ' +
+        'into generic brand, mission, or food-desert messaging unless that idea itself genuinely calls for it, ' +
+        'and never force the vehicle into a scene it does not genuinely fit. The vehicle appearing in one ' +
+        'scene is never a reason to carry it into a later scene — only include it again if that later scene\'s ' +
+        'own idea genuinely calls for it too.'
+      : '')
   )
 }
 
@@ -239,7 +327,8 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     'with a "narration_intent" (the SEMANTIC content that scene\'s narration should convey — not literal ' +
     `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
     'each scene, fitting comfortably within its target duration (roughly 2.5 words per second is a reasonable ' +
-    'speaking pace) — a soft constraint, not an exact word count. Respond with strictly valid JSON: ' +
+    'speaking pace) — a soft constraint, not an exact word count. Write it as natural spoken narration for a ' +
+    'real story, never as scripted ad copy or a voiceover that sounds like a commercial. Respond with strictly valid JSON: ' +
     '{ "scenes": [ { "scene_number": number, "narration_text": string } ] }, exactly one entry per scene given, ' +
     'in the same order, using the given scene_number values unchanged.'
   )

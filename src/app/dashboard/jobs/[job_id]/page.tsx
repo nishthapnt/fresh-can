@@ -2048,6 +2048,15 @@ export default function JobDetailPage() {
         const preferred = data.find((r) => r.language === preferredLang) ?? data[0]
         setImageResult(preferred as ImagePostResult)
         setImagePolling(false)
+        // image_post has no manual "Approve" click to route through (unlike
+        // blog/video's handleContentApprove/handleVideoApprove, the only
+        // other callers of clearAfterApproval) — this auto-redirect IS its
+        // approval-equivalent moment. Without this call, the "New Content"
+        // page's pending-generation banner (src/stores/newContentStore.ts)
+        // stayed stuck forever for any image_post-only job, since nothing
+        // else ever clears it once the user is bounced straight to the
+        // library instead of landing on an approve screen.
+        clearAfterApproval(job_id)
         // Auto-redirect to Library images section, highlighted
         router.push(`/dashboard/library?section=images&highlight=${job_id}`)
       }

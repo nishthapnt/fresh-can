@@ -47,6 +47,13 @@ export interface VisualAssetRow {
   status: string
   provider_ref: string | null
   file_url: string | null
+  /** scene_video_clip only (supabase/migrations/20260919170000) — the KIE.ai
+   *  clip URL captured the moment video generation succeeds, before the
+   *  downscale pass runs. See upsertVisualAsset's rawFileUrl param and
+   *  generateSceneVisual.ts's runSceneVideoClipStep for why this exists:
+   *  it's what lets a downscale-only failure retry without re-paying for a
+   *  brand-new KIE video generation. Always null for every other asset_type. */
+  raw_file_url: string | null
   attempt_number: number
   video_scene_id: string | null
   updated_at: string
@@ -439,6 +446,13 @@ export async function upsertVisualAsset(
     videoSceneId?: string
     providerRef?: string
     fileUrl?: string
+    /** scene_video_clip only — see VisualAssetRow.raw_file_url's own doc
+     *  comment. MUST be passed explicitly on every call that should keep an
+     *  already-set value (this function always writes the full row, not a
+     *  partial patch, so omitting it here wipes any existing value back to
+     *  null — the same deliberate reset-by-omission behavior providerRef/
+     *  fileUrl already rely on elsewhere in this function). */
+    rawFileUrl?: string
     attemptNumber?: number
   },
 ): Promise<VisualAssetRow> {
@@ -451,6 +465,7 @@ export async function upsertVisualAsset(
     ...(input.videoSceneId ? { video_scene_id: input.videoSceneId } : {}),
     provider_ref: input.providerRef ?? null,
     file_url: input.fileUrl ?? null,
+    raw_file_url: input.rawFileUrl ?? null,
     attempt_number: input.attemptNumber ?? 1,
     updated_at: new Date().toISOString(),
   }

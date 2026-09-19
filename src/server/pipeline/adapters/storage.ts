@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { compositeLogoWatermark } from '../lib/watermark'
 
 /**
  * Downloads a provider's (ephemeral) image URL and re-uploads it to
@@ -7,6 +8,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * this download+reupload step; the Blog pipeline currently does NOT (a
  * known gap — see worker/src/steps/blog/generateVisualImage.ts), but image_post
  * gets it from day one here since it's cheap to do right the first time.
+ *
+ * Also composites the real Fresh-CAN logo into the top-right corner (see
+ * lib/watermark.ts) before uploading — this is the one place every image_post
+ * photo (any retry, any regeneration) passes through, so doing it here means
+ * no caller has to remember to apply it.
  *
  * Bucket name and path convention (`{job_id}-final.jpg`) confirmed against
  * real objects already in the live `fc-image-posts` bucket, not invented —
@@ -29,13 +35,16 @@ export class SupabasePhotoStorageUploader implements PhotoStorageUploader {
     if (!res.ok) {
       throw new Error(`failed to download generated photo (status ${res.status})`)
     }
-    const contentType = res.headers.get('content-type') ?? 'image/png'
-    const bytes = new Uint8Array(await res.arrayBuffer())
+    const rawBytes = Buffer.from(await res.arrayBuffer())
+    // compositeLogoWatermark always re-encodes to JPEG, so the uploaded
+    // content-type is fixed here rather than taken from the provider's
+    // response (which no longer reflects the actual bytes being sent).
+    const bytes = await compositeLogoWatermark(rawBytes)
     const path = `${jobId}-final.jpg`
 
     const { error } = await this.client.storage
       .from(STORAGE_BUCKET)
-      .upload(path, bytes, { contentType, upsert: true })
+      .upload(path, bytes, { contentType: 'image/jpeg', upsert: true })
     if (error) {
       throw new Error(`failed to upload photo to storage: ${error.message}`)
     }

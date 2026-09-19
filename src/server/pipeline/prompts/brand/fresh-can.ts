@@ -11,16 +11,90 @@ import type { BrandProfile } from '../types'
 // other vehicle shape wearing the wordmark — this constant is what
 // containerDescriptor below is assigned from, so the two can never drift
 // apart the way earlier hand-copied summaries did.
+// Tightened 2026-09-19 to explicitly cover the SIDE panels, which the
+// original wording left undefined (it only ever described the cab and the
+// rear face). That gap is what let a generation invent a side door: with
+// nothing telling the model what the side actually looks like, it filled
+// the ambiguity itself. Now explicit and simple, matching what the brand
+// actually wants: each side shows the logo, nothing else, ever.
+//
+// Extended same day: a later generation hallucinated a door on the
+// container's FRONT face (the wall nearest the cab) instead of a side —
+// the same class of gap, just on the one remaining face this descriptor
+// never named directly. The old "NEVER... on either side... the rear
+// double door is the vehicle's ONLY entrance and ONLY opening" wording is
+// logically absolute (it implies nowhere else, including the front, has
+// an opening), but the side-door bug already proved an implied "nowhere
+// else" isn't reliable enough — the model needs every real face named
+// explicitly, not left to infer from a global negative. Now the front
+// gets the same explicit, named treatment the sides already got.
+//
+// Trimmed twice, 2026-09-19 (same rules and every enumerated specific
+// kept — only connecting prose cut) after a real generation hit
+// KieImageGenerator's own prompt-length cap ("The prompt word cannot
+// exceed 3000 characters", confirmed live). A first trim (1708 -> 1491
+// chars) wasn't enough — composeSceneImagePrompt's total FIXED overhead
+// (before any scene content) was still ~2796, and real (short!) scenes
+// from a live job were already landing at ~3006-3007, over the limit
+// with almost no scene content to blame. This second pass gets
+// containerDescriptor itself down to ~1180. Kept the critical
+// NEVER-render sentence and the ONLY-entrance sentence 100% verbatim
+// (compose.test.ts asserts on both), and kept every enumerated specific
+// (the side's full no-graphics/decals/stripes/URLs/vents list, the
+// front's no-door/window/vent/wordmark list) — cut two lower-value
+// sentences instead (the standalone "wordmark is the vehicle's only
+// text" restatement, redundant with the side/front rules already saying
+// so; and shortened the closing "logo can't appear elsewhere" sentence's
+// object list).
+//
+// Extended again 2026-09-19: a real generation still rendered an open
+// service hatch on the side, in a scene where a family approaches to shop
+// — the existing "never a door/hatch/window/vent on either side" wording
+// apparently read as ruling out a delivery-style door, not the specific
+// "customer service window" framing the model reached for instead. Named
+// that exact failure mode directly (customers are served ONLY through the
+// rear double door, never a side window/hatch) rather than trusting the
+// existing generic wording to cover it by implication a second time.
+//
+// Rewritten again 2026-09-19 after direct user feedback ("make sure the
+// correct fresh-can logo is used and the logo is not used at random
+// places — only on the side of the truck") plus re-inspecting the real
+// reference photos (assets/fresh-can/*.png) closely for the first time
+// against that exact claim. They contradict the OLD wording here in real,
+// verified ways: truck_exterior_back.png's rear header bar carries a
+// small second wordmark AND a whole separate "Scan to Shop Fresh"
+// QR-code/feature-list panel next to the door; truck_exterior_arrival.png
+// shows a large wordmark on the FRONT face too; every exterior photo's
+// visible side also carries "fresh-can.com" URL text and a decorative red
+// graphic wave alongside the real wordmark. None of that was ever
+// described here, so nothing told the model to disregard it — this is the
+// actual source of the "duplicate garbled decal" character-ref defect
+// fixed earlier the same day (see composeCharacterRefPrompt's own
+// comment): the model was trying to faithfully reproduce real, genuine
+// (but undocumented) extra branding from whichever reference photo it
+// used. Rather than keep chasing each one individually, the wordmark's
+// legitimate location is now simplified to exactly ONE place — the side
+// panels, once each — with the front and rear both now explicitly plain.
+// Real photos disagree (the physical truck's actual wrap does carry it in
+// 2-3 places), but a single, simple, consistently-enforceable rule is what
+// actually stops the drift a generated image can show, and referenceImages.
+// exterior's own framing strings (below) now explicitly call out and
+// disregard every one of those other real elements, whichever photo is
+// used as the edit source.
 const CONTAINER_DESCRIPTOR =
   'The Fresh-CAN mobile grocery store: a white box truck with a dark maroon-red steel cargo container ' +
-  'mounted on back — always this exact maroon-red. The cab is plain white — no decals, stickers, ' +
-  'logos, or text of any kind; all branding is on the container only. A steel header bar on the ' +
-  'container\'s rear face bears a white "Fresh [maple leaf icon] CAN" wordmark, never distorted — the ' +
-  'vehicle\'s only text. The container\'s only entrance is a black-frame glass double door at the rear, ' +
-  'flush at bumper height, with no external staircase. NEVER render a door, hatch, window, or any other ' +
-  "opening on either side of the container, under any circumstance — the rear double door above is the " +
-  'vehicle\'s ONLY entrance, always. Keep this structure, color, and logo placement identical every time ' +
-  '— a fixed brand element, not a creative choice.'
+  'mounted on back — always this exact maroon-red. The cab is plain white, unbranded; all branding is on ' +
+  'the container only. The white "Fresh [maple leaf icon] CAN" wordmark, never distorted, appears ONLY on ' +
+  'the two side panels, centered, once per side, and nowhere else on the vehicle. No other text, ' +
+  'graphics, decals, stripes, URLs, or vents anywhere on the container. The front face (where it meets ' +
+  'the cab) and the rear face are both plain maroon-red with no wordmark, signage, or QR code — the ' +
+  'rear\'s only feature is its entrance, a black-frame glass double door, flush at bumper height, with no ' +
+  'external staircase. NEVER render a door, hatch, customer service window, vent, or any other opening ' +
+  "or fixture on the front face or either side of the container, under any circumstance — the rear " +
+  "double door above is the vehicle's ONLY entrance and ONLY opening, on any face, always, and the only " +
+  'place customers are ever served. Keep this structure, color, and single side-panel wordmark identical ' +
+  'every time. The side panels are the only place the Fresh-CAN logo may appear — never on another ' +
+  'vehicle, sign, storefront, or object, unless the scene explicitly calls for one elsewhere.'
 
 // Added 2026-09-18 after a real bad generation: a categoryVisualHints entry
 // telling the model the truck "may appear in the background" with only a
@@ -50,6 +124,16 @@ export const BRAND_PROFILE: BrandProfile = {
     'shipping containers — directly into food desert communities across Canada, partnering with local farmers ' +
     'to stock affordable, fresh produce. Customers use the free Fresh-CAN app to find the nearest unit, scan ' +
     'in with a QR code, shop cashlessly, and leave without a checkout line.',
+
+  // See BrandProfile.neutralIdentityLine's own doc comment for why this
+  // exists separately from missionStatement — deliberately drops the
+  // "food desert" mission framing and statistics-adjacent language, kept
+  // to just the physical facts (what the unit is, how customers use it)
+  // a story might legitimately need for accuracy if it touches the truck
+  // or app at all.
+  neutralIdentityLine:
+    'Fresh-CAN operates a mobile grocery unit — a converted shipping container customers visit and shop in, ' +
+    'found and unlocked via the free Fresh-CAN app and a QR code — in communities across Canada.',
 
   voiceGuidelines:
     'Warm, hopeful, community-driven — never corporate. Highlight real people, local farmers, and ' +
@@ -184,36 +268,42 @@ export const BRAND_PROFILE: BrandProfile = {
     'fixtures, and branding identical every time it appears in an image — this is a fixed brand element, ' +
     'not a creative choice.',
 
+  // "natural lighting, documentary style" dropped 2026-09-19 — that was
+  // mood/style dictation bolted onto what these two fields actually exist
+  // for (stopping invented text/logos), competing with both the scene's own
+  // requested style and the separate, deferential mood system (moodClause
+  // in core/compose.ts). "Photorealistic" stays: that's a format constraint
+  // (this pipeline renders photos, never illustrations), not a mood choice.
+  //
+  // Briefly tightened, then restored, chasing composeSceneImagePrompt's
+  // length cap — moot either way for THIS field specifically, since scene
+  // images always attach a reference image and use noNewTextInstruction
+  // below instead; this one is only ever read by the no-reference-image
+  // branch (composeCharacterRefPrompt/blog/photo when no photo is
+  // configured yet), which isn't anywhere near KieImageGenerator's real
+  // ~3000-char cap. Left at the fuller, explicit enumeration.
   noTextInstruction:
-    'Photorealistic, natural lighting, documentary style. Absolutely no text, no words, no letters, ' +
+    'Photorealistic. Absolutely no text, no words, no letters, ' +
     'no captions, no titles, no logos, no watermarks, no typography anywhere in the image — pure photography only.',
 
+  // Tightened 2026-09-19 after a real 'photo'-style generation (a split-
+  // scene request) came back with invented panel labels and storefront
+  // signage — this field's old wording only forbade invented text "on the
+  // vehicle," so anything elsewhere in the frame was left unscoped. 'photo'
+  // style is defined as strictly no on-image text at all (see ImageStyle's
+  // own doc comment); only 'infographic' renders text, through a completely
+  // separate function (infographicTextLayer) that textLayerFor routes to
+  // instead of this field, so tightening this can't affect infographic
+  // jobs. Re-tightened again 2026-09-19 (this field, unlike noTextInstruction
+  // above, is on composeSceneImagePrompt's critical path — it's the
+  // no-reference-image field that's unused there) after confirming
+  // KieImageGenerator has its own real, ~3000-char prompt-length cap (see
+  // REFERENCE_IS_GUIDE_NOT_COPY's comment in core/compose.ts). Kept the
+  // scoping fix ("on the vehicle or off it") exactly, since that's the
+  // actual bug fix this field's history is about.
   noNewTextInstruction:
-    'Photorealistic, natural lighting, documentary style. Preserve the Fresh-CAN truck\'s real signage and ' +
-    'logo exactly as shown in the reference photo — do not invent, add, or alter any text, captions, or ' +
-    'typography beyond what is already visible on the vehicle in that photo.',
-
-  // Confirmed live (2026-09-10) with nano-banana-2: a plain "the Fresh-CAN
-  // logo" reference produced a plausible-looking but wrong cursive
-  // wordmark. This exact phrasing matches containerDescriptor's own
-  // wordmark description (bold sans-serif, maple leaf between the words).
-  // Updated 2026-09-11 against the real FreshCAN Brand Guidelines doc: this
-  // is the "negative logo" variant (solid white, for placement over a
-  // photo/color background, as opposed to the red-on-white primary logo)
-  // per that doc, in the guide's actual typeface (Manrope) and with its
-  // explicit usage restrictions (no stretching, no recoloring, no rotation,
-  // no added effects, never on a busy/low-contrast area) folded in directly
-  // — these aren't just nice-to-haves, they're the same category of failure
-  // as the cursive-wordmark bug above (the model inventing a plausible but
-  // off-brand rendering) and are cheap to rule out explicitly.
-  logoDescriptor:
-    'In the top-right corner, the FreshCAN wordmark in its negative (reversed) form: "Fresh [maple leaf icon] ' +
-    'CAN" rendered entirely in solid, flat white with no other colors, gradient, outline, or drop shadow — in ' +
-    'Manrope or a very similar bold, clean, modern geometric sans-serif typeface (never cursive, never ' +
-    'script, never a serif font). "Fresh" and "CAN" are the exact same bold weight and size, with a simple ' +
-    'solid white maple leaf icon between the two words. The wordmark is never stretched, distorted, or ' +
-    'rotated, and sits over a plain, uncluttered area of the image so it stays clearly legible — never over a ' +
-    'busy or low-contrast part of the photo.',
+    'Photorealistic. Keep the truck\'s real signage/logo exactly as shown in the reference photo, unaltered. ' +
+    'No other invented text, logo, or typography anywhere, on the vehicle or off it — pure photography only.',
 
   ctaBarText: 'Visit fresh-can.com',
 
@@ -266,25 +356,77 @@ export const BRAND_PROFILE: BrandProfile = {
   // assets/fresh-can/. One is picked per image (hero/inline/photo
   // pick independently) — each `framing` string must accurately describe
   // what that specific photo shows, since Flux Kontext edits from it.
+  //
+  // `arrival`/`standing` framing strings tightened 2026-09-19: both used to
+  // mix in narrative ("as the truck arrives and parks at the curb") or
+  // compositional direction ("close enough to fill the frame") alongside
+  // the factual camera-angle description — dictating the NEW image's story/
+  // composition rather than just describing the reference photo, which is
+  // what compose.ts's describeReferencePhoto() now explicitly scopes these
+  // strings as. Also fixed the same day: a three-quarter-angle generation
+  // rendered a hallucinated glass side door, most likely because neither
+  // framing string said what was actually on that visible side, leaving the
+  // model to fill the ambiguity itself despite containerDescriptor's
+  // separate, generic "never on the side" rule.
+  //
+  // Tightened further, same day: containerDescriptor now defines the
+  // side panels as logo-only (no graphics, URL text, or vents) — but both
+  // of these real reference photos actually DO show a decorative red
+  // graphic accent, "fresh-can.com" text, and (standing) two vents on the
+  // side, which would otherwise contradict that simplified rule exactly
+  // the way the door ambiguity once did. Each framing string below now
+  // explicitly calls out those specific real details and tells the model
+  // to disregard them in favor of containerDescriptor's logo-only side —
+  // rather than leaving the model to notice the mismatch itself.
+  //
+  // Reordered and rewritten again 2026-09-19, prompted by direct user
+  // feedback that the logo must be the correct one and must never appear
+  // anywhere but the side — see CONTAINER_DESCRIPTOR's own comment for the
+  // full finding. `standing` is now listed FIRST because
+  // composeCharacterRefPrompt (core/compose.ts) deliberately always uses
+  // referenceImages.exterior[0] — this is the one photo showing the real
+  // logo in exactly its correct, simplified location (a full dead-on side
+  // profile, one clean wordmark, nothing rear/front competing for
+  // attention in the same frame), unlike `back` (which also shows a
+  // second, smaller rear wordmark plus a whole QR-code panel in the same
+  // shot) or `arrival` (which also shows a large front-face wordmark in
+  // the same shot). Every framing string below was re-checked directly
+  // against the actual image file (not assumed from memory) and now names
+  // every real extra element each specific photo shows, so whichever one
+  // a caller ends up using, nothing is left for the model to notice and
+  // try to faithfully reproduce on its own.
   referenceImages: {
     exterior: [
-      {
-        url: 'https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/brand-assets/truck_exterior_back.png',
-        framing:
-          'Camera positioned directly behind the truck, straight-on, facing the rear entrance doors and ' +
-          'header wordmark dead-on.',
-      },
-      {
-        url: 'https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/brand-assets/truck_exterior_arrival.png',
-        framing:
-          'Camera positioned ahead and to the side of the truck, a three-quarter front view as the truck ' +
-          'arrives and parks at the curb, driver visible through the windshield.',
-      },
       {
         url: 'https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/brand-assets/truck_exterior_standing.png',
         framing:
           'Camera positioned directly to the side of the container, a full profile view along its length, ' +
-          'close enough to fill the frame with the side wall and logo.',
+          'showing the real "Fresh CAN" wordmark in its correct place — reproduce that exact wordmark ' +
+          'faithfully, once. This particular photo also shows a decorative red graphic wave, "fresh-can.com" ' +
+          'text, and two small dark ventilation grilles elsewhere on the side — none of that is part of the ' +
+          'container\'s real, correct design; disregard all three. Otherwise the side is plain maroon-red — ' +
+          'no vents, no URL text, no extra graphics, and no door, hatch, or opening of any kind.',
+      },
+      {
+        url: 'https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/brand-assets/truck_exterior_back.png',
+        framing:
+          'Camera positioned directly behind the truck, straight-on, facing the rear entrance doors dead-on. ' +
+          'This particular photo also shows a small second wordmark on the header bar above the door and a ' +
+          '"Scan to Shop Fresh" QR-code panel to the left of the door — neither is part of the container\'s ' +
+          'real, correct design; disregard both. Render the rear face plain maroon-red apart from the glass ' +
+          'double door itself, exactly as described elsewhere in this prompt — no wordmark, signage, or QR ' +
+          'code on the rear.',
+      },
+      {
+        url: 'https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/brand-assets/truck_exterior_arrival.png',
+        framing:
+          'Camera positioned ahead and to the side of the truck, a three-quarter front view, driver visible ' +
+          'through the windshield. This particular photo also shows a large wordmark on the container\'s ' +
+          'front face, plus a decorative red graphic accent and small "fresh-can.com" text on the visible ' +
+          'side panel — none of that is part of the container\'s real, correct design; disregard all of it. ' +
+          'Render the front face plain maroon-red with nothing on it, and the side panel exactly as ' +
+          'described elsewhere in this prompt (plain maroon-red with only the wordmark logo, once) — no ' +
+          'door, hatch, or opening of any kind.',
       },
     ],
     interior: [

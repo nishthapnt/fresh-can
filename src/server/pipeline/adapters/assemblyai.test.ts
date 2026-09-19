@@ -50,7 +50,24 @@ describe('AssemblyAITranscriptionService', () => {
     const fetchImpl = mockFetch({ jsonBody: { status: 'completed', text: 'hello', words } })
     const svc = new AssemblyAITranscriptionService('test-key', fetchImpl)
     const result = await svc.poll({ providerRef: 'abc' })
-    expect(result).toEqual({ status: 'ready', timingData: words, text: 'hello' })
+    expect(result).toEqual({ status: 'ready', timingData: words, text: 'hello', audioDurationMs: undefined })
+  })
+
+  it("poll() converts audio_duration (seconds) to audioDurationMs — the REAL measured duration transcribeAudio.ts uses to keep captions in sync with the real audio, instead of synthesizeVoice.ts's word-count estimate", async () => {
+    const words = [{ text: 'hello', start: 0, end: 500 }]
+    const fetchImpl = mockFetch({
+      jsonBody: { status: 'completed', text: 'hello', words, audio_duration: 4.2 },
+    })
+    const svc = new AssemblyAITranscriptionService('test-key', fetchImpl)
+    const result = await svc.poll({ providerRef: 'abc' })
+    expect(result).toEqual({ status: 'ready', timingData: words, text: 'hello', audioDurationMs: 4200 })
+  })
+
+  it('poll() leaves audioDurationMs undefined when audio_duration is absent (caller falls back to the estimate)', async () => {
+    const fetchImpl = mockFetch({ jsonBody: { status: 'completed', text: '', words: [] } })
+    const svc = new AssemblyAITranscriptionService('test-key', fetchImpl)
+    const result = await svc.poll({ providerRef: 'abc' })
+    expect((result as { audioDurationMs?: number }).audioDurationMs).toBeUndefined()
   })
 
   it('poll() returns failed with a detail message on error', async () => {

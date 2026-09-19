@@ -57,7 +57,7 @@ import { runSynthesizeVoice } from '../../server/pipeline/steps/video/synthesize
 import { runTranscribeAudio } from '../../server/pipeline/steps/video/transcribeAudio'
 import { runRenderLanguageTrack } from '../../server/pipeline/steps/video/renderLanguageTrack'
 import { OpenAIScriptGenerator } from '../../server/pipeline/adapters/openai'
-import { KieImageGenerator, KieSceneImageGenerator, KieVideoGenerator } from '../../server/pipeline/adapters/kie'
+import { KieImageGenerator, KieVideoGenerator } from '../../server/pipeline/adapters/kie'
 import { FakeKieImageGenerator, FakeKieVideoGenerator } from '../../server/pipeline/adapters/kieFake'
 import type { ImageGenerator, VideoGenerator } from '../../server/pipeline/adapters/types'
 import { SupabaseVideoStorageUploader } from '../../server/pipeline/adapters/storage'
@@ -74,7 +74,15 @@ type AspectRatio = '9:16' | '1:1' | '16:9'
 // blog.ts's identical constant for why this is just "how often to check
 // back," not the real backoff delay.
 const RETRY_POLL_INTERVAL = '5s'
-const MAX_RETRY_LOOP_ITERATIONS = 30
+// Bumped 30 -> 40 (2026-09-19, in step with the render step's own
+// backoffBaseDelayMs increase below) — the render retry schedule's
+// worst case (20s/40s/60s waits before attempts 2/3/4) needs up to ~140s
+// of this loop's own polling just to reach the last attempt, and 30 *
+// RETRY_POLL_INTERVAL (150s) left uncomfortably little margin for
+// Inngest's own step overhead on top of that. Shared by every retry loop
+// in this file, not render-specific — harmless for the others, which
+// finish well inside the old ceiling anyway.
+const MAX_RETRY_LOOP_ITERATIONS = 40
 // The per-track render event waits here for the SEPARATE content/video.approve
 // function to finish shared visual generation, which can legitimately take
 // many minutes across several scenes — a longer, patient poll, not a tight
@@ -87,8 +95,22 @@ const client = createServiceClient()
 function characterRefGenerator(): ImageGenerator {
   return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new KieImageGenerator(env.KIE_API_KEY)
 }
+// Switched 2026-09-19 from KieSceneImageGenerator (KIE's cheaper, capped
+// Market endpoint — see that class's own header) to the same dedicated,
+// uncapped KieImageGenerator characterRefGenerator() above already uses.
+// Real jobs were hitting "kie call failed (status 200): The text length
+// cannot exceed the maximum limit" on EVERY scene, including short ones
+// (~100 chars of visual_description), even after composeSceneImagePrompt
+// was tightened — the Market endpoint's real cap turned out to be lower
+// than the already-tightened fixed overhead alone, so no further wording
+// squeeze could fix this without cutting real constraints. This costs
+// more per scene image (~55 credits vs. ~5 on the Market endpoint), same
+// tradeoff characterRefGenerator() already accepted. Scene VIDEO clips
+// (sceneVideoGenerator below) stay on the cheap Hailuo model for now —
+// composeSceneVideoPrompt is short enough that it's never actually hit
+// this error, so there's no equivalent bug to fix there yet.
 function sceneImageGenerator(): ImageGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new KieSceneImageGenerator(env.KIE_API_KEY)
+  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new KieImageGenerator(env.KIE_API_KEY)
 }
 function sceneVideoGenerator(): VideoGenerator {
   return env.KIE_FAKE_MODE ? new FakeKieVideoGenerator() : new KieVideoGenerator(env.KIE_API_KEY)
@@ -121,13 +143,17 @@ interface VideoJobFields {
   video_duration_seconds: number | null
   voice_id_en: string | null
   voice_id_fr: string | null
+  // The dashboard's "Your Scene Idea" field — now the creative brief video's
+  // script/scene plan is built around too (see composeVideoScriptSystemPrompt),
+  // same as blog's outline/copy and image_post's photo already were.
+  scene_notes: string | null
 }
 
 async function fetchVideoJobFields(jobId: string): Promise<VideoJobFields> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, script_type, language, aspect_ratio, video_duration_seconds, voice_id_en, voice_id_fr',
+      'topic, keywords, category, target_audience, script_type, language, aspect_ratio, video_duration_seconds, voice_id_en, voice_id_fr, scene_notes',
     )
     .eq('id', jobId)
     .single()
@@ -156,6 +182,7 @@ export const videoGenerate = inngest.createFunction(
       scriptType: job.script_type ?? 'SOLUTION',
       jobLanguage: job.language ?? 'EN',
       durationSeconds: job.video_duration_seconds ?? 36,
+      sceneNotes: job.scene_notes,
     }
 
     let pipeline = await fetchPipeline(pipelineId)
@@ -367,11 +394,16 @@ export const videoTrackRender = inngest.createFunction(
     }
 
     // ── render — see this file's header for the maxDuration caveat ─────
+    // backoffBaseDelayMs bumped 5000 -> 20000ms (2026-09-19, in step with
+    // backoff.ts's MAX_ATTEMPTS.upload_post 3 -> 4) after a real 429
+    // rate-limit failure exhausted every retry in ~21s total — nowhere
+    // near upload-post.com's own documented 60s cooldown. See backoff.ts's
+    // own comment on upload_post for the full schedule this produces.
     for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
       track = await step.run(`render-${attempt}`, async () => {
         const currentTrack = await fetchTrack(trackId)
         const currentPipeline = await fetchPipeline(pipelineId)
-        await runRenderLanguageTrack(client, currentTrack, currentPipeline, avMerger, videoUploader)
+        await runRenderLanguageTrack(client, currentTrack, currentPipeline, avMerger, videoUploader, 20000, job.aspect_ratio ?? '9:16')
         return fetchTrack(trackId)
       })
       if (track.status === 'ready' || track.status === 'failed') break

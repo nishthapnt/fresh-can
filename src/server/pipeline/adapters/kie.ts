@@ -208,39 +208,27 @@ export class KieSceneImageGenerator implements ImageGenerator {
 }
 
 /**
- * KIE.ai scene video-clip generation — TEST-CHEAP MODE (2026-09-17): uses
- * Hailuo 02 Standard image-to-video (`hailuo/02-image-to-video-standard`)
- * instead of Kling 2.6, via the same unified Market job endpoints (POST
- * /api/v1/jobs/createTask, GET /api/v1/jobs/recordInfo) Kling 2.6 already
- * used — poll()'s response shape is identical, only submit()'s model/input
- * changed. `referenceImageUrl` is always the scene's already-generated
- * scene_image — this is what keeps the character/likeness consistent (the
- * model animates from that one locked frame; it never regenerates the
- * subject's appearance independently), so a caller must never pass a bare
- * text-only prompt with no image here.
+ * KIE.ai scene video-clip generation — Kling 2.6 image-to-video, the
+ * production model, via the unified Market job endpoints (POST
+ * /api/v1/jobs/createTask, GET /api/v1/jobs/recordInfo), verified against
+ * docs.kie.ai/market/kling/image-to-video and docs.kie.ai/market/common/
+ * get-task-detail on 2026-09-12. `referenceImageUrl` is always the scene's
+ * already-generated scene_image — this is what keeps the character/likeness
+ * consistent (Kling animates from that one locked frame; it never
+ * regenerates the subject's appearance independently), so a caller must
+ * never pass a bare text-only prompt with no image here.
  *
- * Confirmed live via recordInfo.creditsConsumed: 512P output costs 2
- * credits/second (~10 credits for a 5s clip) versus Kling 2.6's flat 55
- * credits for the same 5s — picked over the cheaper-still bytedance/
- * v1-lite-image-to-video, which failed with an opaque "Internal Error" in
- * live testing (2026-09-17) and wasn't worth debugging blind for a ~2-credit
- * difference. `image_url` here is singular — unlike Kling 2.6's
- * `image_urls` array, this model 400s on the plural form (confirmed live).
- *
- * This model also rejects `duration: 5` outright ("duration is not within
- * the range of allowed options" — confirmed live; only 6 or 10 are valid),
- * unlike Kling 2.6 which accepted exactly the '5'|'10' this codebase's
- * VideoGenerationInput type models. Rather than touch
- * generateSceneVisual.ts's pickDurationSeconds (still correctly named for
- * Kling's actual 5/10 buckets) or widen the shared type for one provider's
- * quirk, submit() below remaps '5' -> 6 right at the HTTP boundary, where
- * provider-specific translation belongs.
- *
- * NOT necessarily the right choice for production — 512P is visibly lower
- * resolution than Kling 2.6's HD output; this exists purely so testing the
- * pipeline doesn't burn 55 credits per scene clip. Revert to
- * 'kling-2.6/image-to-video' + `image_urls: [...]` + `sound: false` (git
- * history) for production-quality output.
+ * Reverted 2026-09-19 back from a 2026-09-17 TEST-CHEAP MODE swap to Hailuo
+ * 02 Standard (`hailuo/02-image-to-video-standard`, 512P, `image_url`
+ * singular, 2 credits/second) — that existed purely to avoid burning 55
+ * credits/clip while testing the pipeline, at the cost of visibly lower
+ * resolution than Kling's HD output; not appropriate once testing is done.
+ * If cheap-mode testing is needed again: `model: 'hailuo/02-image-to-video-
+ * standard'`, `input: { prompt, image_url: referenceImageUrl, duration:
+ * durationSeconds === '5' ? 6 : 10, resolution: '512P' }` (git history) —
+ * note Hailuo rejects `duration: 5` outright and needs that remap, and
+ * takes `image_url` singular where Kling takes `image_urls` (plural,
+ * 400s on the singular form).
  */
 export class KieVideoGenerator implements VideoGenerator {
   constructor(
@@ -258,12 +246,15 @@ export class KieVideoGenerator implements VideoGenerator {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: 'hailuo/02-image-to-video-standard',
+        model: 'kling-2.6/image-to-video',
         input: {
           prompt: input.prompt,
-          image_url: input.referenceImageUrl,
-          duration: input.durationSeconds === '5' ? 6 : 10,
-          resolution: '512P',
+          image_urls: [input.referenceImageUrl],
+          // Narration audio is composited separately at render time
+          // (avMerger.ts) — this call never carries the language-specific
+          // narration, so no ambient/sound track is requested here either.
+          sound: false,
+          duration: input.durationSeconds,
         },
       }),
     })

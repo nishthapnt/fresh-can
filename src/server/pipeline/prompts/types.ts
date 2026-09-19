@@ -48,6 +48,23 @@ export interface BrandProfile {
    */
   missionStatement: string
   /**
+   * A short, neutral, purely-factual fallback for missionStatement — used
+   * ONLY by composeVideoScriptSystemPrompt when a user-submitted scene idea
+   * leads the prompt (see that function). Added 2026-09-19 after a real
+   * generation given a scene idea entirely unrelated to food deserts still
+   * mentioned "food desert communities" — traced to missionStatement's own
+   * fuller framing (mission language, statistics-adjacent phrasing) being
+   * quoted verbatim as "background context," which is the same
+   * competing-topic risk composeVideoScriptSystemPrompt's category-brief/
+   * statistics removal was fixed for, just via a field this file's other
+   * prompts (outline/copy) still correctly use the fuller missionStatement
+   * for — those ARE Fresh-CAN content by definition, so the fuller framing
+   * is appropriate there. Optional: falls back to missionStatement itself
+   * when unset, so an existing/new brand file needs no change to keep
+   * working.
+   */
+  neutralIdentityLine?: string
+  /**
    * Tone/voice rules for all generated text — e.g. person, formality,
    * regional spelling. Fixed here rather than re-explained per prompt call,
    * so every generated piece of text sounds consistent regardless of topic.
@@ -119,17 +136,6 @@ export interface BrandProfile {
   /** Rotated across generations (deterministically, keyed by pipeline id —
    *  see core/rotation.ts) so images don't all default to the same mood. */
   moods: readonly ImageMood[]
-  /**
-   * Fixed, precise description of the brand's real logo mark — used only
-   * for image_style: 'infographic' (see core/composeInfographic.ts), where
-   * the image model renders a corner logo from this description rather
-   * than editing it in from a reference photo. Confirmed live (2026-09-10):
-   * without this being explicit, the model invents a plausible-looking but
-   * stylistically wrong logo (e.g. a cursive wordmark instead of the real
-   * bold sans-serif one) — same lesson as containerDescriptor, applied to
-   * a different model (nano-banana-2, not Flux Kontext).
-   */
-  logoDescriptor: string
   /** Fixed CTA bar text rendered along the bottom edge of every
    *  image_style: 'infographic' image — e.g. "Visit fresh-can.com". */
   ctaBarText: string

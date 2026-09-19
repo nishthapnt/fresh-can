@@ -26,3 +26,24 @@ export function isContainerRelevant(text: string, defaultRelevant: boolean): boo
   if (VISIT_OR_FACILITY_KEYWORDS.test(text)) return true
   return defaultRelevant
 }
+
+// Deliberately a SEPARATE, much narrower keyword set for video scenes —
+// isContainerRelevant above was built for blog/photo's TOPIC/CATEGORY
+// strings (short, thematic: "How FreshCAN Works", "Community Impact"),
+// where a generic action word plausibly implies a visit/access moment. A
+// video scene's visual_description is full narrative prose describing
+// literally anything the job's own "Your Scene Idea" creative brief calls
+// for (composeVideoScriptSystemPrompt: "never a reason to force the
+// vehicle into a scene it does not genuinely fit") — e.g. a mother and son
+// walking down the road, arriving at a park, entering a house. Reusing
+// VISIT_OR_FACILITY_KEYWORDS' generic verbs (arrive, enter, door, visit,
+// pick up, shop, scan) against sentences like that would false-positive
+// constantly and force the truck into scenes that have nothing to do with
+// it — the exact "illogical scene" failure mode this exists to prevent.
+// Only fires on an unambiguous, explicit mention of the unit itself.
+const FRESH_CAN_UNIT_MENTION =
+  /\b(fresh-?can|the unit|the truck|the container|mobile grocery|mobile store|mobile unit|qr code)\b/i
+
+export function isVideoSceneAboutUnit(text: string): boolean {
+  return FRESH_CAN_UNIT_MENTION.test(text)
+}
