@@ -122,6 +122,14 @@ export interface CaptionSystemPromptOptions {
   /** Resolved text of the job's selected content_angle (brand.adAngleBriefs
    *  lookup), or undefined if the user left it on "let AI decide". */
   angleBrief?: string
+  /** The same assembled scene text used to build the accompanying photo
+   *  (content_jobs.scene_notes + any clarifying-question answers — see
+   *  image.ts's photoScene()). Without this the caption was only ever built
+   *  from topic/category/angleBrief, so it could describe a generic take on
+   *  the topic while the photo depicted the user's specific scene idea —
+   *  undefined only for a pre-existing job created before scene_notes
+   *  became required. */
+  scene?: string
   /** Set only for 'infographic'-style jobs, once generate_ad_copy has
    *  succeeded — the exact headline/subtitle already rendered onto the
    *  image, so the caption can be told what's on it instead of guessing an
@@ -135,6 +143,10 @@ export function composeCaptionSystemPrompt(brand: BrandProfile, opts: CaptionSys
   return (
     `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}${statsLine(brand)}\n\n` +
     (opts.angleBrief ? `This specific post should focus on: ${opts.angleBrief}\n\n` : '') +
+    (opts.scene
+      ? `The accompanying photo depicts this specific moment: "${opts.scene}". Write the caption about this ` +
+        'same moment, not a generic restatement of the topic or category.\n\n'
+      : '') +
     (opts.imageHeadline
       ? `The accompanying image already has this text rendered directly onto it — headline "${opts.imageHeadline}"` +
         (opts.imageSubtitle ? ` and subtitle "${opts.imageSubtitle}"` : '') +
@@ -238,6 +250,13 @@ export interface AdCopySystemPromptOptions {
   /** Resolved text of the job's selected content_angle, or undefined if the
    *  user left it on "let AI decide". */
   angleBrief?: string
+  /** The same assembled scene text used to build the accompanying photo
+   *  (content_jobs.scene_notes + any clarifying-question answers — see
+   *  image.ts's photoScene()) — so the on-image headline/subtitle stay
+   *  cohesive with the photo's actual scene instead of guessing an
+   *  unrelated take on the topic. Undefined only for a pre-existing job
+   *  created before scene_notes became required. */
+  scene?: string
 }
 
 /**
@@ -252,6 +271,10 @@ export function composeAdCopySystemPrompt(brand: BrandProfile, opts: AdCopySyste
   return (
     brandContext(brand, opts.category) +
     (opts.angleBrief ? `This specific post should focus on: ${opts.angleBrief}\n\n` : '') +
+    (opts.scene
+      ? `The accompanying photo depicts this specific moment: "${opts.scene}". Base the headline/subtitle/` +
+        'coreMessage on this same moment, not a generic restatement of the topic or category.\n\n'
+      : '') +
     'You are an ad copywriter preparing the text that will be rendered directly onto a social image, plus a ' +
     'creative brief for whoever writes its caption. Respond with strictly valid JSON matching this exact ' +
     'shape: { "headline": string (max 6 words, punchy, spelled exactly as you want it rendered on the ' +

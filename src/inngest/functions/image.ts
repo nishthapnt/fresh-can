@@ -75,6 +75,7 @@ async function fetchTracksForPipeline(pipelineId: string): Promise<TrackRow[]> {
 interface ImageJobFields {
   topic: string
   category: string
+  keywords: string | null
   scene_notes: string | null
   image_answers: ImageAnswer[] | null
   image_style: string | null
@@ -84,7 +85,7 @@ interface ImageJobFields {
 async function fetchImageJobFields(jobId: string): Promise<ImageJobFields> {
   const { data, error } = await client
     .from('content_jobs')
-    .select('topic, category, scene_notes, image_answers, image_style, content_angle')
+    .select('topic, category, keywords, scene_notes, image_answers, image_style, content_angle')
     .eq('id', jobId)
     .single()
   if (error || !data) {
@@ -197,6 +198,7 @@ export const imageGenerate = inngest.createFunction(
         topic: job.topic,
         category: job.category,
         angleBrief: angleBriefFor(job),
+        scene: photoScene(job),
       }
       pipeline = await runAdCopyUntilSettled(step, pipelineId, adCopyInput, scriptGenerator)
     }
@@ -219,6 +221,7 @@ export const imageGenerate = inngest.createFunction(
         topic: job.topic,
         category: job.category,
         scene: photoScene(job),
+        keywords: job.keywords,
         regenInstructions: pipeline.regen_instructions,
         imageStyle,
         ...styleInputs,
@@ -278,6 +281,7 @@ export const imageTrackProcess = inngest.createFunction(
       topic: job.topic,
       category: job.category,
       angleBrief: angleBriefFor(job),
+      scene: photoScene(job),
       imageStyle,
       pipelineGeneration: pipeline.current_generation,
     }

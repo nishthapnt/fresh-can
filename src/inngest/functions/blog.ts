@@ -206,6 +206,7 @@ export const blogGenerate = inngest.createFunction(
         headline,
         subtitle,
         sceneNotes: job.scene_notes,
+        keywords: job.keywords,
       }
       const hero = composeHeroPrompt(BRAND_PROFILE, blogImageJob)
       const inline = composeInlinePrompt(BRAND_PROFILE, blogImageJob)

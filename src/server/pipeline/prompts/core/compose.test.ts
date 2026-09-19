@@ -99,6 +99,31 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     expect(hero.prompt).not.toContain('For light inspiration only')
   })
 
+  it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
+    const job = { pipelineId: 'pipeline-food-clean', topic: 'Community garden fundraiser', category: 'Community Impact' }
+    const hero = composeHeroPrompt(testBrand, job)
+    expect(hero.prompt).toContain('clean, fresh, tidy, and appetizing')
+    expect(hero.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
+  })
+
+  it('weaves in the dashboard keywords as themes, without forcing or overriding the scene', () => {
+    const job = {
+      pipelineId: 'pipeline-keywords-1',
+      topic: 'Community garden fundraiser',
+      category: 'Community Impact',
+      keywords: 'local farmers, cashless, community',
+    }
+    const hero = composeHeroPrompt(testBrand, job)
+    expect(hero.prompt).toContain('local farmers, cashless, community')
+    expect(hero.prompt).toContain('never let it contradict or override the scene')
+  })
+
+  it('omits the keywords clause entirely when none is given', () => {
+    const job = { pipelineId: 'pipeline-keywords-2', topic: 'Community garden fundraiser', category: 'Community Impact' }
+    const hero = composeHeroPrompt(testBrand, job)
+    expect(hero.prompt).not.toContain('Relevant themes for this post')
+  })
+
   it('omits the headline clause entirely when none is given (backward compatible)', () => {
     const job = { pipelineId: 'pipeline-no-headline', topic: 'Community garden', category: 'Community Impact' }
     const hero = composeHeroPrompt(testBrand, job)
@@ -389,6 +414,27 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('never as the reason this scene exists')
     expect(photo.prompt).toContain('never a posed, polished advertisement')
   })
+
+  it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    expect(photo.prompt).toContain('clean, fresh, tidy, and appetizing')
+    expect(photo.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
+  })
+
+  it('weaves in the dashboard keywords as themes, without forcing or overriding the scene', () => {
+    const photo = composePhotoPrompt(testBrand, {
+      ...baseJob,
+      scene: baseJob.topic,
+      keywords: 'local farmers, cashless, community',
+    })
+    expect(photo.prompt).toContain('local farmers, cashless, community')
+    expect(photo.prompt).toContain('never let it contradict or override the scene')
+  })
+
+  it('omits the keywords clause entirely when none is given', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    expect(photo.prompt).not.toContain('Relevant themes for this post')
+  })
 })
 
 describe('composeSceneImagePrompt', () => {
@@ -420,6 +466,12 @@ describe('composeSceneImagePrompt', () => {
     const scene = composeSceneImagePrompt(testBrand, { ...baseJob, regenInstructions: 'warmer lighting' })
     expect(scene.prompt).toContain('Slow push-in')
     expect(scene.prompt).toContain('warmer lighting')
+  })
+
+  it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
+    expect(scene.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
   })
 })
 

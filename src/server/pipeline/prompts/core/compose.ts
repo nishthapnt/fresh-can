@@ -39,6 +39,8 @@ interface BlogImageJob extends StyleInputs {
    *  present, it's the creative brief the scene is built around — see
    *  SCENE_IS_CREATIVE_BRIEF — not a light, non-binding influence. */
   sceneNotes?: string | null
+  /** content_jobs.keywords — see keywordsClause. */
+  keywords?: string | null
 }
 
 interface PhotoJob extends StyleInputs {
@@ -53,6 +55,8 @@ interface PhotoJob extends StyleInputs {
    *  of several interchangeable descriptors. */
   scene: string
   regenInstructions?: string | null
+  /** content_jobs.keywords — see keywordsClause. */
+  keywords?: string | null
 }
 
 /** Same seed for hero+inline of one pipeline => same mood for both. */
@@ -198,6 +202,33 @@ const SCENE_IS_CREATIVE_BRIEF =
   'appears — never as the reason this scene exists. The result must read as a genuine, candid moment from ' +
   'real life, never a posed, polished advertisement or marketing photo.'
 
+// A grocery-access brand can never show food looking anything less than
+// fresh — added 2026-09-19 after generated photos of produce/groceries came
+// back looking dirty, bruised, or cluttered. Applied unconditionally
+// everywhere food could plausibly appear (image_post's photo, blog's
+// hero/inline, every video scene), not just the produce-focused category
+// hints, since a user-authored scene idea can put food into any scene
+// regardless of category.
+const FOOD_MUST_LOOK_CLEAN =
+  'Any food, produce, or packaged groceries visible in the image must always look clean, fresh, tidy, and ' +
+  'appetizing — vibrant colour, no dirt, bruising, wilting, mold, spills, or clutter, neatly arranged or ' +
+  'held. Never render food looking dirty, rotten, messy, or unappetizing, no matter what the scene calls for.'
+
+// content_jobs.keywords — thematic keywords entered on the dashboard.
+// Already shapes blog's outline/copy text (generateOutline.ts/
+// generateCopy.ts's userPrompt) and video's script, but was never fed into
+// any IMAGE prompt until 2026-09-19 — added here so the actual visual
+// content can reflect them too, not just the written copy. Non-binding,
+// same treatment as the scene idea itself: themes to weave in where they
+// genuinely fit, never a checklist of objects that must all appear or that
+// override the scene.
+function keywordsClause(keywords: string | null | undefined): string {
+  return keywords
+    ? `Relevant themes for this post: ${keywords}. Weave in any that naturally fit the scene above — never ` +
+      'force one in, and never let it contradict or override the scene.'
+    : ''
+}
+
 // Added 2026-09-18: the showSubject branch below used to push ONLY the
 // truck/interior's fixed description plus the reference photo's own camera
 // framing — nothing telling the model to actually build a new scene around
@@ -252,7 +283,7 @@ function composeBlogImage(
   // nonContainerSceneHint), with no reference photo to vary freely.
   const showSubject = isContainerRelevant(`${job.topic} ${job.category}`, false)
 
-  const parts = [topicLine, moodDetailFor(brand, job.pipelineId)]
+  const parts = [topicLine, moodDetailFor(brand, job.pipelineId), FOOD_MUST_LOOK_CLEAN]
   // The dashboard's "Your Scene Idea" field — the creative brief this scene
   // is built around (see SCENE_IS_CREATIVE_BRIEF above the type declaring
   // this field). Absent only for a job created before the field became
@@ -263,6 +294,8 @@ function composeBlogImage(
         `"${job.sceneNotes}". ${SCENE_IS_CREATIVE_BRIEF}`,
     )
   }
+  const blogKeywords = keywordsClause(job.keywords)
+  if (blogKeywords) parts.push(blogKeywords)
   let referenceImageUrl: string | undefined
 
   if (showSubject) {
@@ -357,6 +390,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // consistent across all of one video's scenes, same reasoning as
     // composeBlogImage's hero/inline pairing.
     moodDetailFor(brand, job.pipelineId),
+    FOOD_MUST_LOOK_CLEAN,
     // Every scene reuses the SAME characterRefUrl as its edit source — the
     // same "edit-mode reproduces its input verbatim" risk containerSceneContext
     // was fixed for, except worse here: without this, every one of a video's
@@ -399,7 +433,10 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
     `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
     moodDetailFor(brand, job.pipelineId),
     SCENE_IS_CREATIVE_BRIEF,
+    FOOD_MUST_LOOK_CLEAN,
   ]
+  const photoKeywords = keywordsClause(job.keywords)
+  if (photoKeywords) parts.push(photoKeywords)
 
   let referenceImageUrl: string | undefined
   if (showSubject) {

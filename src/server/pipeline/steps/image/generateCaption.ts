@@ -19,6 +19,10 @@ export interface CaptionJobInput {
   /** Resolved text of the job's selected content_angle, or undefined —
    *  spliced into the caption prompt regardless of imageStyle. */
   angleBrief?: string
+  /** The same assembled scene text used to build the shared photo (image.ts's
+   *  photoScene()) — folded into the prompt so the caption describes the
+   *  same moment as the photo, not just a topic/category-only guess. */
+  scene?: string
   /**
    * Set (along with pipelineGeneration) only for 'infographic'-style jobs.
    * When set, this step gates on the pipeline's shared generate_ad_copy step
@@ -119,6 +123,7 @@ export async function runGenerateCaption(
       systemPrompt: composeCaptionSystemPrompt(BRAND_PROFILE, {
         language: track.language,
         angleBrief: input.angleBrief,
+        scene: input.scene,
         imageHeadline: adCopy?.headline,
         imageSubtitle: adCopy?.subtitle,
         imageCoreMessage: adCopy?.coreMessage,

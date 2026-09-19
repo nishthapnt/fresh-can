@@ -16,6 +16,10 @@ export interface AdCopyJobInput {
   category: string
   /** Resolved text of the job's selected content_angle, or undefined. */
   angleBrief?: string
+  /** The same assembled scene text used to build the shared photo (image.ts's
+   *  photoScene()) — folded into the prompt so the on-image headline/
+   *  subtitle stay cohesive with the photo's actual scene. */
+  scene?: string
 }
 
 /**
@@ -74,6 +78,7 @@ export async function runGenerateAdCopy(
         systemPrompt: composeAdCopySystemPrompt(BRAND_PROFILE, {
           category: input.category,
           angleBrief: input.angleBrief,
+          scene: input.scene,
         }),
         userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}`,
       })

@@ -163,6 +163,24 @@ describe('composeCaptionSystemPrompt', () => {
     const prompt = composeCaptionSystemPrompt(testBrand, { language: 'EN' })
     expect(prompt).not.toContain('already has this text rendered')
   })
+
+  it('tells the caption what specific moment the accompanying photo depicts, when given', () => {
+    // Regression test: the caption used to be built from nothing but
+    // topic/category/angleBrief, so it could describe a generic take while
+    // the photo (built from the now-mandatory scene idea) depicted a
+    // specific, different moment.
+    const prompt = composeCaptionSystemPrompt(testBrand, {
+      language: 'EN',
+      scene: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('this same moment')
+  })
+
+  it('omits the scene clause when none is given (pre-existing job with no scene_notes)', () => {
+    const prompt = composeCaptionSystemPrompt(testBrand, { language: 'EN' })
+    expect(prompt).not.toContain('depicts this specific moment')
+  })
 })
 
 describe('composeAdCopySystemPrompt', () => {
@@ -187,5 +205,14 @@ describe('composeAdCopySystemPrompt', () => {
   it('omits any angle-focus line when no angle brief is given', () => {
     const prompt = composeAdCopySystemPrompt(testBrand, { category: 'Test Category' })
     expect(prompt).not.toContain('This specific post should focus on')
+  })
+
+  it('tells the model what specific moment the accompanying photo depicts, when given', () => {
+    const prompt = composeAdCopySystemPrompt(testBrand, {
+      category: 'Test Category',
+      scene: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('A senior reaching a mobile unit at dusk')
+    expect(prompt).toContain('this same moment')
   })
 })
