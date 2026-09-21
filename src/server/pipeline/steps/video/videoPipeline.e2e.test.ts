@@ -157,12 +157,14 @@ function makeFailingVoiceSynthesizer() {
 }
 
 // Two words per scene, at a fixed offset — the test asserts the SECOND
-// scene's combined words are shifted by the first scene's duration_ms, not
-// just that 4 words exist. `audioDurationMs` is omitted by default (so
-// transcribeAudio.ts falls back to synthesizeVoice.ts's word-count estimate,
-// matching provider/mock behavior before that field existed) — pass one to
-// simulate AssemblyAI reporting the REAL measured audio duration instead.
-function makeMockTranscriptionService(audioDurationMs?: number) {
+// scene's combined words are shifted by the first scene's real duration, not
+// just that 4 words exist. transcribeAudio.ts now derives that duration from
+// the second word's own `end` timestamp (+ its TRAILING_SILENCE_BUFFER_MS),
+// not from AssemblyAI's audio_duration field (confirmed live 2026-09-21 to
+// only have whole-second precision — see that constant's header) — so
+// `secondWordEndMs` is what actually drives the offset here, defaulting to
+// 800 to match the old fixed mock shape.
+function makeMockTranscriptionService(secondWordEndMs = 800) {
   let counter = 0
   const submit = vi.fn(async () => ({ providerRef: `transcript-${++counter}` }))
   const poll = vi.fn(
@@ -170,10 +172,9 @@ function makeMockTranscriptionService(audioDurationMs?: number) {
       status: 'ready',
       timingData: [
         { text: 'word1', start: 0, end: 400 },
-        { text: 'word2', start: 400, end: 800 },
+        { text: 'word2', start: 400, end: secondWordEndMs },
       ],
       text: 'word1 word2',
-      audioDurationMs,
     }),
   )
   return { submit, poll } satisfies TranscriptionService
@@ -476,6 +477,58 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     const { data: assets } = await client.from('content_visual_assets').select('*').eq('content_pipeline_id', pipeline.id)
     expect(assets!.find((a) => a.asset_type === 'character_ref')!.status).toBe('ready')
     expect(flakyImage.submit).toHaveBeenCalledTimes(2)
+  })
+
+  // Regression test for the P0 fix: a cancellation (/video/cancel, which
+  // sets content_pipelines.status = 'failed') that lands WHILE a poll loop
+  // is already running used to be invisible to that loop — it would keep
+  // polling until the provider genuinely finished or timed out, still
+  // consuming KIE's paid generation time regardless of the DB status. This
+  // mock's poll() marks the pipeline 'failed' as a side effect of its FIRST
+  // response (simulating the user clicking Cancel while KIE is mid-generation)
+  // and never reports 'ready' — if the fix works, the loop's SECOND
+  // iteration checks for cancellation BEFORE calling poll() again, so
+  // poll() itself is only ever called ONCE, and the asset is left in the
+  // same 'generating' state (with its provider_ref intact) a mid-poll crash
+  // would already leave it in, not recorded as a failure.
+  it('a cancellation that lands mid-poll stops the poll loop immediately and does not record a failure', async () => {
+    const { pipeline } = await makeJobAndPipeline('EN')
+    const script = makeMockScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, script)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    let pollCount = 0
+    const submit = vi.fn(async () => ({ providerRef: 'mock-img-cancel-mid-poll' }))
+    const poll = vi.fn(async (): Promise<ImagePollResult> => {
+      pollCount++
+      if (pollCount === 1) {
+        await client.from('content_pipelines').update({ status: 'failed', last_error: 'Cancelled by user' }).eq('id', pipeline.id)
+      }
+      return { status: 'pending' }
+    })
+    const cancellingImage = { submit, poll } satisfies ImageGenerator
+    const uploader = makeFakeVideoUploader()
+
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', cancellingImage, uploader)
+
+    expect(submit).toHaveBeenCalledTimes(1) // never re-submitted — the original task is still what's resumable
+    expect(pollCount).toBe(1) // poll() called ONCE (triggers the cancellation) — the loop's cancellation check on the next iteration stops it before poll() is ever called again
+
+    const { data: pipelineRow } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    expect(pipelineRow.status).toBe('failed') // untouched — already correctly set by the "cancel route"
+
+    const { data: assets } = await client.from('content_visual_assets').select('*').eq('content_pipeline_id', pipeline.id)
+    const characterRef = assets!.find((a) => a.asset_type === 'character_ref')!
+    expect(characterRef.status).toBe('generating') // NOT 'failed' — no failure was recorded
+    expect(characterRef.provider_ref).toBe('mock-img-cancel-mid-poll') // resumable, same shape a mid-poll crash leaves
+
+    const { data: steps } = await client
+      .from('pipeline_steps')
+      .select('*')
+      .eq('content_pipeline_id', pipeline.id)
+      .eq('step_name', 'generate_character_ref')
+    expect(steps).toHaveLength(0) // no failed_retryable (or any) attempt was ever recorded for this step
   })
 
   it('re-running generate_character_ref and generate_scene_visual after success does not call any provider again', async () => {
@@ -850,15 +903,16 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(words[2].start).toBeGreaterThan(words[1].end)
   })
 
-  it("M3: caption offsets use AssemblyAI's real measured audio duration, not synthesizeVoice's word-count estimate", async () => {
+  it("M3: caption offsets use AssemblyAI's real per-word timing, not synthesizeVoice's word-count estimate", async () => {
     // Regression test for a real sync bug: scene 1 and scene 2's narration
     // text here ("English text for scene 1"/"...scene 2") have the SAME
     // word count, so synthesizeVoice.ts's estimate is IDENTICAL for both
     // (2000ms). If transcribeAudio.ts were still using that estimate as the
     // offset, scene 2's words would start at 2000ms regardless of what the
-    // transcription service reports. Feeding a real audioDurationMs of
-    // 5000ms here and asserting scene 2 starts at exactly 5000ms proves the
-    // real value — not the estimate — is what actually drives the offset.
+    // transcription service reports. Feeding a real second-word end of
+    // 4700ms here (+ the 300ms TRAILING_SILENCE_BUFFER_MS = 5000ms) and
+    // asserting scene 2 starts at exactly 5000ms proves the real per-word
+    // timing — not the estimate — is what actually drives the offset.
     const { jobId, pipeline } = await makeJobAndPipeline('EN')
     const scriptGen = makeLocalizeAwareScriptGenerator()
     await runGenerateScript(client, pipeline, scriptInput, scriptGen)
@@ -882,7 +936,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(audioRows!.every((a) => a.duration_ms === 2000)).toBe(true)
 
     const { data: afterSynthesize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
-    const transcription = makeMockTranscriptionService(5000)
+    const transcription = makeMockTranscriptionService(4700)
     await runTranscribeAudio(client, afterSynthesize as TrackRow, approved.id, transcription)
 
     const { data: captions } = await client
@@ -892,7 +946,13 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
       .single()
     const words = captions.timing_data as Array<{ text: string; start: number; end: number }>
     expect(words[0].start).toBe(0)
-    expect(words[2].start).toBe(5000) // the REAL duration, not the 2000ms estimate
+    expect(words[2].start).toBe(5000) // real word-end (4700) + buffer (300), not the 2000ms estimate
+
+    // The same real value also lands in video_scene_audio.duration_ms —
+    // renderLanguageTrack.ts's Pass 0 padding reads this column, so this is
+    // what actually protects the render-time fix, not just the captions.
+    const { data: audioRowsAfter } = await client.from('video_scene_audio').select('*').eq('content_language_track_id', track.id)
+    expect(audioRowsAfter!.every((a) => a.duration_ms === 5000)).toBe(true)
   })
 
   it('M3: one language failing (ElevenLabs down) never blocks or corrupts the other', async () => {

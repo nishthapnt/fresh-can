@@ -380,6 +380,92 @@ describe('composeVideoScriptSystemPrompt', () => {
       prompt.indexOf('does not mean the story can ignore Fresh-CAN'),
     )
   })
+
+  it('anchors the required brand mention to narration_intent specifically, not the internal-review-only top-level "script" field — regression for a real generation that satisfied the requirement only in the throwaway script summary, with no guarantee it reached narration_intent (the only field composeLocalizeScriptSystemPrompt ever reads)', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A box of fresh produce arrives at a small restaurant',
+    })
+    expect(prompt).toContain('MUST be written directly into the relevant scene\'s own "narration_intent" field')
+    expect(prompt).toContain('the top-level "script" field is for internal review only')
+    expect(prompt).toContain('does NOT satisfy this requirement')
+  })
+
+  it('forbids writing a scene whose subject is the logo/wordmark/brand graphic — regression for a real generation whose final scene asked for "the screen transitions to the Fresh-CAN logo", which an image/video model can only ever hallucinate an approximation of, never the real asset', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A box of fresh produce arrives at a small restaurant',
+    })
+    expect(prompt).toContain('Never write a scene whose subject is the brand\'s logo, wordmark, or any graphic/text reveal')
+    expect(prompt).toContain('an AI image or video model cannot reproduce the real logo accurately')
+  })
+
+  it('asks the model to silently plan the story (idea, arc, creative device, Fresh-CAN role, visual motif, scene purpose) before writing scenes, without exposing that reasoning in the JSON output', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A kid learns to ride a bike for the first time',
+    })
+    expect(prompt).toContain('Core creative idea')
+    expect(prompt).toContain('Story arc')
+    expect(prompt).toContain('Creative device')
+    expect(prompt).toContain('classify it as background, supporting, enabler, subject, or hero')
+    expect(prompt).toContain('Visual motif')
+    expect(prompt).toContain('Scene purpose')
+    expect(prompt).toContain('never part of your JSON output')
+  })
+
+  it('scales how much Fresh-CAN presence is earned (beyond the required name mention) with the classified role, and forbids the same anti-patterns the user flagged (random trucks/props, generic shots, unrelated elements, surreal justification-free additions)', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A kid learns to ride a bike for the first time',
+    })
+    expect(prompt).toContain('keep Fresh-CAN\'s presence subtle')
+    expect(prompt).toContain('stronger, more direct branding is earned and appropriate')
+    expect(prompt).toContain('never a random Fresh-CAN truck, a random food prop, a generic cinematic shot')
+    expect(prompt).toContain('or a surreal element with no narrative justification')
+    // The required floor-level mention from CAMPAIGN_FIT must still appear
+    // before this scaling guidance — adaptivity is layered ON TOP of the
+    // non-negotiable requirement, never a replacement for it.
+    expect(prompt.indexOf('the Fresh-CAN name itself must be said explicitly')).toBeLessThan(
+      prompt.indexOf('How visually and narratively present Fresh-CAN is'),
+    )
+  })
+
+  it('forbids inventing or redesigning brand assets (logo, vehicle shape/colors, products/services, app features) at the narrative level', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A family picks up groceries on the way home',
+    })
+    expect(prompt).toContain('never invent a new logo, redesign the vehicle\'s shape or colors')
+    expect(prompt).toContain('invent a product or service Fresh-CAN doesn\'t actually offer')
+  })
+
+  it('asks visual_description/shot_notes to be grounded in each scene\'s own story beat, purpose, and connection to the previous scene, not just physical content', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('Ground it in this scene\'s own story beat and purpose from your planning above')
+    expect(prompt).toContain('how it connects to the scene immediately before it')
+    expect(prompt).toContain('Choose composition and camera movement that serve THIS scene\'s specific purpose')
+  })
+
+  it('asks a chosen visual motif to recur across scenes rather than appear once', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('let it recur across multiple scenes rather than appearing once and being forgotten')
+  })
+
+  it('adds a silent final self-check before returning the JSON, only when a scene idea is given', () => {
+    const withIdea = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(withIdea).toContain('silently verify')
+    expect(withIdea).toContain('only the final JSON is returned, never this checklist')
+
+    const withoutIdea = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(withoutIdea).not.toContain('silently verify')
+  })
 })
 
 describe('composeLocalizeScriptSystemPrompt', () => {
@@ -391,6 +477,18 @@ describe('composeLocalizeScriptSystemPrompt', () => {
   it('tells the model to write natural spoken narration, never scripted ad copy', () => {
     const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
     expect(prompt).toContain('never as scripted ad copy or a voiceover that sounds like a commercial')
+  })
+
+  it('carves out an exception so a required brand-name mention survives localization instead of being softened out by the anti-ad-copy rule — regression for this step having zero awareness of composeVideoScriptSystemPrompt\'s CAMPAIGN_FIT requirement, since it only ever receives narration_intent, never the reasoning behind it', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'French' })
+    expect(prompt).toContain('if a narration_intent explicitly calls for naming Fresh-CAN')
+    expect(prompt).toContain('MUST include that name literally, spoken naturally')
+    expect(prompt).toContain('never paraphrase, translate, soften, or drop it')
+    // Still coexists with (appears after, never replaces) the general
+    // anti-ad-copy rule — this is a narrow exception, not a reversal.
+    expect(prompt.indexOf('never as scripted ad copy or a voiceover that sounds like a commercial')).toBeLessThan(
+      prompt.indexOf('if a narration_intent explicitly calls for naming Fresh-CAN'),
+    )
   })
 
   it('preserves the exact JSON schema field names localizeScript.ts depends on', () => {

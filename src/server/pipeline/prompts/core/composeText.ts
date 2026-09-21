@@ -248,16 +248,70 @@ export interface VideoScriptSystemPromptOptions {
  * CONNECTION but treated the literal brand name as merely "ideal," one of
  * several equally-valid options alongside generic "fresh/local" language —
  * still too easy for the model to satisfy with vague food-freshness talk
- * and never actually say "Fresh-CAN." Rewritten a third time: the name
- * itself is now a hard requirement, not a preference, layered on TOP of
- * (not instead of) the substantive connection to Fresh-CAN's real mission
- * — a bare name-drop with no real thematic tie-in doesn't satisfy this
- * either. The key distinction that keeps this from reopening the hijack
- * bug: MESSAGING (reciting the mission statement, statistics, a slogan,
- * forcing the vehicle into a scene it doesn't fit) is still forbidden; ONE
- * natural, specific, spoken mention of the name itself, grounded in a
- * genuine narrative connection to what Fresh-CAN actually does, is now
+ * and never actually say "Fresh-CAN." Third attempt made the name itself a
+ * hard requirement, layered on top of the mission connection — this DID
+ * produce a real script mentioning "Fresh-CAN" twice, but review of that
+ * real output surfaced two further gaps, both closed in this (fourth)
+ * revision:
+ *
+ * (a) The model satisfied the requirement by writing "Fresh-CAN" into the
+ * top-level `script` field — which the schema itself labels "for internal
+ * review only" — while `narration_intent`, the field that actually reaches
+ * the audience (composeLocalizeScriptSystemPrompt below reads ONLY
+ * narration_intent, never the top-level script), had no guarantee of
+ * carrying the same mention. CAMPAIGN_FIT now says explicitly which field
+ * the mention must live in.
+ *
+ * (b) The real output's final scene asked for "the screen transitions to
+ * the Fresh-CAN logo" as its own visual_description — i.e. asking an image/
+ * video generation model to DRAW the actual brand logo from a text
+ * description, the exact failure mode watermark.ts (src/server/pipeline/
+ * lib/watermark.ts) already exists to avoid for images ("risked a
+ * plausible-but-wrong rendering... this stamps the actual asset on
+ * instead") — video has no equivalent real-asset-compositing step, so a
+ * scene like that would only ever produce an AI-hallucinated approximation
+ * of the logo, never the real one. CAMPAIGN_FIT now explicitly forbids
+ * writing a scene whose subject is the logo/wordmark/any brand graphic —
+ * the Fresh-CAN connection must live entirely in narration, never in a
+ * shot asking a generative model to render brand artwork.
+ *
+ * The key distinction that keeps all of this from reopening the original
+ * hijack bug: MESSAGING (reciting the mission statement, statistics, a
+ * slogan, forcing the vehicle into a scene it doesn't fit) is still
+ * forbidden; ONE specific, natural, spoken mention of the name itself,
+ * written into the right scene's narration_intent and grounded in a
+ * genuine narrative connection to what Fresh-CAN actually does, is
  * required.
+ *
+ * 2026-09-22: fifth revision — not another rewrite of the requirement
+ * above (real production data already confirmed it works: a real
+ * generation said "Fresh-CAN" twice in actual synthesized narration), but
+ * an explicit ask to make the SURROUNDING creative process more
+ * structured, and to make how much Fresh-CAN shows up beyond that one
+ * required mention scale with how directly the user's idea already
+ * concerns the brand, instead of being the same fixed ask for every idea.
+ * Added STORY_PLANNING_CLAUSE (a silent, internal 6-step planning pass —
+ * core idea, story arc, a deliberately chosen creative device, a
+ * background/supporting/enabler/subject/hero classification of Fresh-CAN's
+ * role in THIS idea, a recurring visual motif, and per-scene purpose —
+ * explicitly never exposed in the JSON output, so the existing schema
+ * generateScript.ts depends on didn't need to change) and
+ * FRESHCAN_ROLE_ADAPTIVITY (how much VISUAL/NARRATIVE presence — the
+ * vehicle appearing, more direct narration — is earned by that
+ * classification; the one required spoken name-mention above stays a flat,
+ * non-negotiable floor at every role level, since that's the specific,
+ * production-validated fix an idea with only a loose connection should
+ * never lose). Also added BRAND_ASSET_FIDELITY (never invent/redesign the
+ * logo, vehicle, or a product/service that doesn't exist — the narrative-
+ * level counterpart to what containerDescriptor/REFERENCE_IS_GUIDE_NOT_COPY
+ * already enforce at the image-prompt layer in compose.ts) and
+ * FINAL_SELF_CHECK_CLAUSE (a silent pre-return quality gate). None of this
+ * changes the JSON schema, the DB columns it's written into, or
+ * isVideoSceneAboutUnit's keyword-based per-scene truck decision (scene.ts)
+ * — all of it is prompt-only, richer guidance flowing into the same
+ * visual_description/shot_notes/narration_intent fields that already
+ * existed, per the request's own "preserve JSON structure/DB expectations,
+ * modify the smallest number of files necessary."
  */
 const CAMPAIGN_FIT =
   'That does not mean the story can ignore Fresh-CAN, though — every video is made for Fresh-CAN\'s own brand ' +
@@ -268,12 +322,75 @@ const CAMPAIGN_FIT =
   'details: food that reads as genuinely fresh and local, a real neighbourhood or community feeling, people ' +
   'getting good food easily; and (2) the Fresh-CAN name itself must be said explicitly, out loud, somewhere in ' +
   'the narration across the video — this is REQUIRED, not merely ideal, and is never satisfied by "fresh" or ' +
-  '"local" language alone, no matter how strong the thematic connection is otherwise. Find the single most ' +
-  'natural moment already in the story for it — wherever food, its origin, a delivery, or a visit is already ' +
-  'part of the scene — and have the narration name Fresh-CAN there directly, the way a real person would ' +
-  'actually say it out loud in that moment. The difference from reciting the mission statement or forcing the ' +
-  'vehicle in: this is ONE specific, natural mention of the name, grounded in the story\'s own real details, ' +
-  'never a slogan, statistic, or pitch stated on top of the scene.'
+  '"local" language alone, no matter how strong the thematic connection is otherwise. This MUST be written ' +
+  'directly into the relevant scene\'s own "narration_intent" field below, in plain semantic terms (e.g. ' +
+  '"mentions this was made possible by Fresh-CAN") — the top-level "script" field is for internal review only ' +
+  'and is never what actually reaches the audience, so writing the mention there alone does NOT satisfy this ' +
+  'requirement. Find the single most natural moment already in the story for it — wherever food, its origin, a ' +
+  'delivery, or a visit is already part of the scene — and have that scene\'s narration_intent call for naming ' +
+  'Fresh-CAN there directly, the way a real person would actually say it out loud in that moment. The ' +
+  'difference from reciting the mission statement or forcing the vehicle in: this is ONE specific, natural ' +
+  'mention of the name, grounded in the story\'s own real details, never a slogan, statistic, or pitch stated ' +
+  'on top of the scene. Never write a scene whose subject is the brand\'s logo, wordmark, or any graphic/text ' +
+  'reveal — no visual_description should ask for the logo to be drawn, shown, or transitioned to; an AI image ' +
+  'or video model cannot reproduce the real logo accurately, so the Fresh-CAN connection belongs entirely in ' +
+  'the spoken narration above, never as a visual logo or brand-graphic shot.'
+
+// Silent internal planning pass, run before the model writes any scene —
+// see CAMPAIGN_FIT's own header, "2026-09-22: fifth revision," for why this
+// was added and why it deliberately never touches the JSON schema below
+// (generateScript.ts's normalizeScriptOutput has no field for any of this;
+// it's reasoning that should shape the existing visual_description/
+// shot_notes/narration_intent output, not a new output of its own).
+const STORY_PLANNING_CLAUSE =
+  'Before writing the scenes below, silently work through the following — this is internal reasoning, never ' +
+  'part of your JSON output, which must contain only the fields the schema below asks for: (1) Core creative ' +
+  'idea — what genuinely makes the idea above interesting or worth watching? (2) Story arc — a hook, a ' +
+  'development, and a payoff, or another structure that fits this specific idea better. (3) Creative device — ' +
+  'choose ONE device that serves this idea, such as a visual reveal, an object\'s own journey, a POV shot, a ' +
+  'match cut, a cause-and-effect chain, a transformation, a human moment, or another device that fits better ' +
+  'than any of these. (4) Fresh-CAN\'s role in this story — classify it as background, supporting, enabler, ' +
+  'subject, or hero, based on how directly the idea above already concerns Fresh-CAN or its mission (an idea ' +
+  'with no real connection to groceries or the brand is background; an idea directly about Fresh-CAN\'s own ' +
+  'mission or service is hero) — this is an honest read of the idea itself, never a default, since the ' +
+  'branding guidance below scales against it. (5) Visual motif — one recurring visual element (a color, an ' +
+  'object, a gesture, a shot type) that can carry across multiple scenes for cohesion. (6) Scene purpose — plan ' +
+  'what specific job each scene does in the story before writing it; every scene must advance the story, never ' +
+  'exist as one more pretty but disconnected shot.'
+
+// How much Fresh-CAN shows up BEYOND the one required narration mention
+// above scales with STORY_PLANNING_CLAUSE's role classification — see
+// CAMPAIGN_FIT's header for why the mention itself stays a flat,
+// non-negotiable floor at every role level regardless.
+const FRESHCAN_ROLE_ADAPTIVITY =
+  'How visually and narratively present Fresh-CAN is beyond that one required mention should scale with the ' +
+  'role you classified during planning, not be the same for every idea. For a background, supporting, or ' +
+  'enabler role — the idea has only a loose or everyday connection to groceries — keep Fresh-CAN\'s presence ' +
+  'subtle: the required spoken mention above is enough, connected through the story\'s own food, people, ' +
+  'community, or access details; do not force the vehicle, the logo, or the app into the visuals just because ' +
+  'the brand is being credited in narration. For a subject or hero role — the idea is directly about Fresh-CAN, ' +
+  'its mission, or its service — stronger, more direct branding is earned and appropriate: the vehicle can be a ' +
+  'real visual presence across multiple scenes, and narration can speak about Fresh-CAN more directly, still as ' +
+  'part of a genuine story, never as a recited pitch. Every added character, object, location, action, or brand ' +
+  'element must have a narrative reason for being there, at any role level — never a random Fresh-CAN truck, a ' +
+  'random food prop, a generic cinematic shot with nothing to do with the story, an unrelated character or ' +
+  'location, branding beyond what the role above earns, or a surreal element with no narrative justification. ' +
+  'The finished video should make it obvious both why it belongs on Fresh-CAN\'s own social media and why the ' +
+  'user\'s original creative idea is still fully recognizable in it — neither should come at the other\'s expense.'
+
+const BRAND_ASSET_FIDELITY =
+  'When Fresh-CAN\'s vehicle, app, or other real assets appear in a scene, describe them only as already true ' +
+  'per the brand facts above — never invent a new logo, redesign the vehicle\'s shape or colors, invent a ' +
+  'product or service Fresh-CAN doesn\'t actually offer, or add an app feature that isn\'t real. Use an ' +
+  'existing asset because this specific scene\'s idea genuinely calls for it, never merely because it exists.'
+
+const FINAL_SELF_CHECK_CLAUSE =
+  '\n\nBefore returning your answer, silently verify: is the original creative idea still recognizable in what ' +
+  'you wrote? Is there a clear, coherent story rather than a string of unrelated shots? Does every scene serve ' +
+  'a purpose? Is Fresh-CAN\'s presence natural for the role you classified, not forced? Did you avoid drawing ' +
+  'the logo or inventing brand assets? Is the story visually and physically logical? Does it land on a ' +
+  'memorable, satisfying ending? If not, revise your answer before returning it — only the final JSON is ' +
+  'returned, never this checklist.'
 
 export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoScriptSystemPromptOptions): string {
   const preamble = opts.sceneNotes
@@ -283,7 +400,8 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
       `That is background context for tone and brand accuracy only: a fixed constraint on how the brand's ` +
       `vehicle, app, or other branding must look or sound IF the idea above genuinely calls for them, never a ` +
       `second angle, and never a reason to insert brand or mission messaging into a scene the idea doesn't ` +
-      `call for. ${CAMPAIGN_FIT} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
+      `call for. ${STORY_PLANNING_CLAUSE} ${CAMPAIGN_FIT} ${FRESHCAN_ROLE_ADAPTIVITY} ${BRAND_ASSET_FIDELITY} ` +
+      `Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
     : brandContext(brand, opts.category) + statsLine(brand) + '\n\n'
 
   return (
@@ -300,15 +418,23 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '      "scene_number": number (1-indexed, sequential, no gaps),\n' +
     '      "visual_description": string (what the camera shows — the subject\'s own action plus any natural ' +
     'ambient motion already implied by the setting, e.g. steam rising, wind moving leaves or fabric, light ' +
-    'shifting — specific enough to generate an image from),\n' +
+    'shifting — specific enough to generate an image from. Ground it in this scene\'s own story beat and ' +
+    'purpose from your planning above: what specifically happens, in what environment, and how it connects to ' +
+    'the scene immediately before it — never a generic or purposeless shot),\n' +
     '      "shot_notes": string (real cinematographic direction for this exact shot — angle, camera movement, ' +
     'depth of field, framing, e.g. "low-angle slow tracking shot, shallow depth of field" or "static wide shot, ' +
     'soft window light" — only "" for a scene where a plain static shot is genuinely the deliberate choice, ' +
-    'never left empty by default),\n' +
+    'never left empty by default. Choose composition and camera movement that serve THIS scene\'s specific ' +
+    'purpose in the story, not decoration for its own sake),\n' +
     '      "narration_intent": string (the SEMANTIC content this scene\'s narration should convey — describe ' +
     'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
     'independently localized into actual EN or FR wording by a later step),\n' +
-    '      "target_duration_seconds": number (this scene\'s planned runtime budget)\n' +
+    '      "target_duration_seconds": number (this scene\'s planned runtime budget),\n' +
+    '      "visual_state": { "people": number, "hands": string (who this scene\'s visible hands belong to, ' +
+    'e.g. "the woman only" or "none visible" — never a hand with no owner), "objects": string[] (visually ' +
+    'significant physical objects in frame, a few words each), "new_entities": string[] (the subset of ' +
+    'objects genuinely new in THIS scene) } (keep this extremely compact — a few short words per field, ' +
+    'omit a field or leave an array empty rather than pad it)\n' +
     '    }\n' +
     '  ]\n' +
     '}\n' +
@@ -334,7 +460,13 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'to exist; if removing it would not harm the story, do not add it. Maintain natural continuity across ' +
     'scenes that share the same moment, characters, or place — the same people, their clothing, and the ' +
     'setting should carry between consecutive scenes describing that same moment, unless the story moves ' +
-    'somewhere new. The FINAL scene must land the video on a genuine sense of closure, not cut off mid-action ' +
+    'somewhere new — each scene\'s visual_state should reflect this too: carry forward the previous scene\'s ' +
+    'people/objects/location unless the story genuinely moves on, and only list something under ' +
+    'new_entities when this scene\'s own action introduces it or it\'s a natural background element, never ' +
+    'invented just to make the scene visually interesting. Where your planning above chose a visual motif, let it recur across multiple scenes rather ' +
+    'than appearing once and being forgotten — that repetition is what makes the video read as one connected ' +
+    'piece rather than a set of unrelated shots. The FINAL scene must land the video on a genuine sense of ' +
+    'closure, not cut off mid-action ' +
     "— its action should resolve into a settled, natural concluding beat (a finished gesture, a held look, a " +
     'moment landing) appropriate to the story\'s own scale, never a big staged finale or a jump straight from ' +
     'motion to black.' +
@@ -343,7 +475,8 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
         'into generic brand, mission, or food-desert messaging unless that idea itself genuinely calls for it, ' +
         'and never force the vehicle into a scene it does not genuinely fit. The vehicle appearing in one ' +
         'scene is never a reason to carry it into a later scene — only include it again if that later scene\'s ' +
-        'own idea genuinely calls for it too.'
+        'own idea genuinely calls for it too.' +
+        FINAL_SELF_CHECK_CLAUSE
       : '')
   )
 }
@@ -361,6 +494,19 @@ export interface LocalizeScriptSystemPromptOptions {
  * regenerating the scene plan itself. This is what replaces n8n's "FR —"
  * forced-script-regeneration branch, which is retired entirely, not ported
  * forward (worker/src/steps/video/localizeScript.ts).
+ *
+ * 2026-09-21: this is the step that ACTUALLY produces what gets voiced —
+ * composeVideoScriptSystemPrompt's CAMPAIGN_FIT clause can require a scene's
+ * narration_intent to name Fresh-CAN, but this function only ever received
+ * that narration_intent and a generic "never sound like a commercial"
+ * instruction with zero awareness of that requirement. Given a
+ * narration_intent that explicitly calls for naming the brand, "never
+ * sound like ad copy" is exactly the instruction that could make this step
+ * quietly paraphrase the name away — a real brand-name mention IS the kind
+ * of thing that pattern-matches as "sounds promotional." Added an explicit
+ * carve-out below so a deliberate brand mention survives localization
+ * instead of being softened out by a rule aimed at a different problem
+ * (generic ad-copy phrasing, not a specific required name).
  */
 export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: LocalizeScriptSystemPromptOptions): string {
   return (
@@ -370,7 +516,12 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
     'each scene, fitting comfortably within its target duration (roughly 2.5 words per second is a reasonable ' +
     'speaking pace) — a soft constraint, not an exact word count. Write it as natural spoken narration for a ' +
-    'real story, never as scripted ad copy or a voiceover that sounds like a commercial. Respond with strictly valid JSON: ' +
+    'real story, never as scripted ad copy or a voiceover that sounds like a commercial. The one exception: if ' +
+    'a narration_intent explicitly calls for naming Fresh-CAN (or otherwise references the brand by name), the ' +
+    `localized ${opts.language} wording MUST include that name literally, spoken naturally — never paraphrase, ` +
+    'translate, soften, or drop it for sounding too promotional; that specific mention is a deliberate, ' +
+    'required part of the story, not the generic ad-copy pattern this rule exists to avoid elsewhere. Respond ' +
+    'with strictly valid JSON: ' +
     '{ "scenes": [ { "scene_number": number, "narration_text": string } ] }, exactly one entry per scene given, ' +
     'in the same order, using the given scene_number values unchanged.'
   )

@@ -12,7 +12,7 @@ import {
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
-import { BRAND_PROFILE, composeVideoScriptSystemPrompt } from '../../prompts/index'
+import { BRAND_PROFILE, composeVideoScriptSystemPrompt, type SceneVisualState } from '../../prompts/index'
 
 export interface VideoScriptJobInput {
   topic: string
@@ -46,6 +46,13 @@ export interface ScriptSceneOutput {
   shot_notes?: string
   narration_intent: string
   target_duration_seconds: number
+  /** Compact visual-continuity bookkeeping for this scene — see
+   *  SceneVisualState's own header (prompts/types.ts). Optional/lenient
+   *  end-to-end (normalizeVisualState below): a missing or malformed
+   *  visual_state never fails the whole scene the way a missing
+   *  visual_description does — it's a quality enhancement on top of
+   *  already-working scene content, not core content of its own. */
+  visual_state?: SceneVisualState
 }
 
 export interface VideoScriptOutput {
@@ -67,6 +74,35 @@ function coerceNumber(value: unknown): number | null {
     return Number(value)
   }
   return null
+}
+
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const strings = value.filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+  return strings.length > 0 ? strings : undefined
+}
+
+/** Lenient, best-effort parse of a scene's raw visual_state — never throws
+ *  and never fails the surrounding scene; a field the model omitted or got
+ *  wrong just doesn't appear on the result. Returns undefined for anything
+ *  genuinely empty rather than an empty-but-present object, so a scene with
+ *  no real visual_state content doesn't grow narration_intent's stored JSON
+ *  for no reason. */
+function normalizeVisualState(value: unknown): SceneVisualState | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const people = coerceNumber(v.people)
+  const hands = typeof v.hands === 'string' && v.hands.trim() !== '' ? v.hands : undefined
+  const objects = toStringArray(v.objects)
+  const newEntities = toStringArray(v.new_entities)
+
+  if (people === null && !hands && !objects && !newEntities) return undefined
+  return {
+    ...(people !== null ? { people } : {}),
+    ...(hands ? { hands } : {}),
+    ...(objects ? { objects } : {}),
+    ...(newEntities ? { new_entities: newEntities } : {}),
+  }
 }
 
 /** Normalizes a parsed script response into VideoScriptOutput, or returns
@@ -103,10 +139,22 @@ export function normalizeScriptOutput(parsed: unknown): VideoScriptOutput | null
       shot_notes: typeof scene.shot_notes === 'string' ? scene.shot_notes : undefined,
       narration_intent: scene.narration_intent,
       target_duration_seconds: targetDurationSeconds,
+      visual_state: normalizeVisualState(scene.visual_state),
     })
   }
 
   return { script: p.script, visual_description: p.visual_description, duration_seconds: durationSeconds, scenes }
+}
+
+/** Reads a scene's visual_state back out of its stored narration_intent
+ *  (see upsertVideoScenes's call below — visual_state rides inside that
+ *  same JSON column rather than a new one). Trusts the shape rather than
+ *  re-validating it: normalizeVisualState above already sanitized it once,
+ *  at write time. */
+export function extractVisualState(narrationIntent: unknown): SceneVisualState | null {
+  if (!narrationIntent || typeof narrationIntent !== 'object') return null
+  const visualState = (narrationIntent as Record<string, unknown>).visual_state
+  return visualState && typeof visualState === 'object' ? (visualState as SceneVisualState) : null
 }
 
 /**
@@ -214,7 +262,9 @@ export async function runGenerateScript(
           sceneNumber: s.scene_number,
           visualDescription: s.visual_description,
           shotNotes: s.shot_notes ?? null,
-          narrationIntent: { text: s.narration_intent },
+          // visual_state rides inside this same JSON column — see
+          // extractVisualState's own header for why that's not a new column.
+          narrationIntent: { text: s.narration_intent, visual_state: s.visual_state },
           targetDurationMs: Math.round(s.target_duration_seconds * 1000),
         })),
       })

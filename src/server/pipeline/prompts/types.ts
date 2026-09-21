@@ -24,6 +24,32 @@ export interface ImageMood {
   detail: string
 }
 
+/**
+ * Compact, per-scene visual-continuity bookkeeping — added alongside a
+ * scene's existing visual_description/shot_notes/narration_intent (never a
+ * DB migration: persisted inside video_scenes.narration_intent, which
+ * already stores an arbitrary JSON object — see generateScript.ts's
+ * upsertVideoScenes call). Deliberately tiny: only the handful of facts that
+ * actually matter for keeping scene N+1's image consistent with scene N's —
+ * never a full scene description of its own. `hands`/`objects`/
+ * `new_entities` are free-text/short-string lists, not a taxonomy, by
+ * design: this only needs to be specific enough for a human-readable
+ * continuity clause (composeSceneImagePrompt), not a structured schema
+ * downstream code branches on.
+ */
+export interface SceneVisualState {
+  /** Count of distinct people visible in this scene. */
+  people?: number
+  /** Whose hands/arms are shown, e.g. "the woman only", "none visible" —
+   *  never left implying a hand with no owner. */
+  hands?: string
+  /** Visually significant physical objects in frame (compact — a few words each). */
+  objects?: string[]
+  /** Subset of `objects` that are genuinely new in THIS scene, not carried
+   *  over from the previous one. */
+  new_entities?: string[]
+}
+
 export interface BrandReferenceImage {
   /** Publicly fetchable URL — Flux Kontext's `inputImage` must be able to
    *  download it. See worker/assets/<brand>/README.md for how to get one. */

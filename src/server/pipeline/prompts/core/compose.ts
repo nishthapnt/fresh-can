@@ -6,7 +6,7 @@
 // This is what makes the container/logo look the same across every image
 // that includes it, and what makes reference-image usage automatic instead
 // of something every call site has to remember to wire up.
-import type { BrandProfile, BrandReferenceImage, ImageStyle } from '../types'
+import type { BrandProfile, BrandReferenceImage, ImageStyle, SceneVisualState } from '../types'
 import { pickDeterministic } from './rotation'
 import { isContainerRelevant, isVideoSceneAboutUnit } from './scene'
 
@@ -378,8 +378,23 @@ const NO_UNEXPLAINED_PROPS =
 // included only when there's genuinely room. Kept intentionally short for
 // exactly this reason: every character here is a character less available
 // for real scene content on borderline-length scenes.
+// Extended 2026-09-22 (still the same droppable, quality-not-safety tier —
+// see this constant's own history just above) to also cover the visual-
+// consistency failure modes a well-planned scene can still produce:
+// unexplained/disembodied hands (the single most common defect — an object
+// being "placed" or "held" with no established owner named), duplicate
+// people, and floating objects. Kept in ONE constant with the existing
+// hands/skin guardrail rather than as a separate fixedParts addition —
+// fixedLen is already within single-digit characters of real headroom (see
+// SCENE_IMAGE_PROMPT_CHAR_LIMIT's own comment), so a new unconditional
+// clause would truncate real scene content on nearly every generation;
+// this only costs headroom on the same borderline-length scenes the
+// existing hands/skin guardrail already sometimes drops for.
 const REALISTIC_PEOPLE =
-  'Hands must be anatomically correct — never extra or missing fingers; skin must look real, not synthetic.'
+  'Hands must be anatomically correct — never extra or missing fingers — and every visible hand or arm must ' +
+  'clearly belong to an already-established person in the scene, never unexplained or disembodied; skin must ' +
+  'look real, not synthetic. Only depict entities the scene establishes or clearly implies — never a ' +
+  'duplicate of an established person or a floating, unexplained object.'
 
 // Added 2026-09-19 as the OTHER half of composeSceneImagePrompt's new
 // per-scene relevance gate (see showSubject there) — the explicit
@@ -595,6 +610,37 @@ interface SceneImageJob {
   /** Set by POST /video/regenerate { scope: "visuals" } — never present on
    *  a first-time generation. */
   regenInstructions?: string | null
+  /** The immediately preceding scene's visual_state (SceneVisualState,
+   *  prompts/types.ts) — undefined for scene 1, or if that scene had none.
+   *  See continuityClauseFrom below for how this is used. */
+  previousVisualState?: SceneVisualState | null
+}
+
+/**
+ * Compact carry-forward context built from the PREVIOUS scene's
+ * visual_state — "use the previous scene's compact visual state as
+ * context" for scene-to-scene continuity. Deliberately built from just a
+ * people count and a short object list, never the full scene, and kept in
+ * the SAME droppable cascade tier as REALISTIC_PEOPLE below (never
+ * fixedParts — see SCENE_IMAGE_PROMPT_CHAR_LIMIT's own header for why
+ * fixedParts has essentially no headroom left to spend). Returns '' when
+ * there's nothing worth carrying forward (scene 1, or a previous scene
+ * whose visual_state was empty/never generated).
+ */
+function continuityClauseFrom(previous: SceneVisualState | null | undefined): string {
+  if (!previous) return ''
+  const bits: string[] = []
+  if (typeof previous.people === 'number' && previous.people > 0) {
+    bits.push(`${previous.people} established ${previous.people === 1 ? 'person' : 'people'}`)
+  }
+  if (previous.objects && previous.objects.length > 0) {
+    bits.push(`objects: ${previous.objects.slice(0, 5).join(', ')}`)
+  }
+  if (bits.length === 0) return ''
+  return (
+    `Continuing from the previous scene (${bits.join('; ')}) — keep these consistent unless this scene's ` +
+    'own description changes them.'
+  )
 }
 
 // Hard ceiling under KieImageGenerator's real, confirmed 3000-char cap
@@ -689,6 +735,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   let shotNotes = job.shotNotes ?? ''
   let regenInstructions = job.regenInstructions ?? ''
   let includeRealismClause = true
+  let continuityClause = continuityClauseFrom(job.previousVisualState)
 
   const totalLen = () =>
     fixedLen +
@@ -696,11 +743,20 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     `Scene ${job.sceneNumber}: ${visualDescription}`.length +
     (shotNotes ? 1 + `Shot notes: ${shotNotes}.`.length : 0) +
     (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) +
-    (includeRealismClause ? 1 + REALISTIC_PEOPLE.length : 0)
+    (includeRealismClause ? 1 + REALISTIC_PEOPLE.length : 0) +
+    (continuityClause ? 1 + continuityClause.length : 0)
 
   let overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
   if (overflow > 0 && includeRealismClause) {
     includeRealismClause = false
+    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  }
+  if (overflow > 0 && continuityClause) {
+    // Second to drop — a real scene-to-scene continuity aid, but still an
+    // enhancement on top of the always-present NO_UNSCRIPTED_PEOPLE/
+    // NO_UNEXPLAINED_PROPS constraints above, never the only thing
+    // enforcing consistency.
+    continuityClause = ''
     overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
   }
   if (overflow > 0 && regenInstructions) {
@@ -724,6 +780,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // composer just needs to render it faithfully, not re-frame it as an ad.
     `Scene ${job.sceneNumber}: ${visualDescription}`,
     shotNotes ? `Shot notes: ${shotNotes}.` : '',
+    continuityClause,
     // Same mood per pipeline (not per scene) — keeps lighting/atmosphere
     // consistent across all of one video's scenes, same reasoning as
     // composeBlogImage's hero/inline pairing. Deferential (moodClause, not
@@ -865,7 +922,9 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'on top of those two — follow whatever camera direction is given above (pans, tilts, tracking, slow ' +
     'dolly, rack focus) with smooth, real-camera motion. Camera movement is never a substitute for actual ' +
     'subject or environmental motion. Never a jump cut, and never a staged product-reveal move like a slow ' +
-    'orbit or a dramatic hero push-in around the subject.' +
+    'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
+    'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
+    'a new person, limb, or object that was not already in that frame.' +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
   let visualDescription = job.visualDescription

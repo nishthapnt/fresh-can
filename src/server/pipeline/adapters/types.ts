@@ -88,6 +88,40 @@ export interface ImageGenerator {
   poll(jobRef: ImageJobRef): Promise<ImagePollResult>
 }
 
+export interface ImageValidationInput {
+  /** The already-uploaded, permanent scene_image URL — never the provider's
+   *  own temporary generation URL, so this survives past that URL's TTL. */
+  imageUrl: string
+  visualDescription: string
+  shotNotes?: string | null
+}
+
+export interface ImageValidationResult {
+  pass: boolean
+  /** Short, human-readable phrases, one per real defect found — empty when
+   *  pass is true. Feeds directly into generateSceneVisual.ts's targeted
+   *  correction prompt for the next attempt, so these should read as
+   *  something a regeneration instruction can act on (e.g. "unexplained
+   *  hand on the right side of frame"), not a generic verdict. */
+  issues: string[]
+}
+
+/**
+ * Lightweight vision-based QA gate, run once per scene image, right after
+ * generation and before that scene's video clip is ever submitted (see
+ * generateSceneVisual.ts's runSceneImageStep) — catches the specific class
+ * of defect a well-planned scene prompt can still produce: unexpected
+ * people, unexplained/disembodied hands, duplicate limbs, floating or
+ * unexplained objects, a missing required subject, major object
+ * inconsistency, or an obviously illogical scene. Optional on every call
+ * site that takes one (runSceneImageStep/runGenerateSceneVisual) — a caller
+ * that omits it (every existing test, unless it opts in) just skips this
+ * quality gate entirely, exactly like before it existed.
+ */
+export interface ImageValidator {
+  validate(input: ImageValidationInput): Promise<ImageValidationResult>
+}
+
 // ─── Video-only adapters (M0 of the video migration) ───────────────────────
 
 export interface VoiceSynthesisInput {

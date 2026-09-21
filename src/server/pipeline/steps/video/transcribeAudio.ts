@@ -11,6 +11,7 @@ import {
   getVideoSceneAudioRows,
   upsertVideoCaptions,
   upsertVideoSceneAudio,
+  isTrackFailed,
   type TrackRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
@@ -18,22 +19,54 @@ import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 120_000
 
+// Confirmed live 2026-09-21 against the real AssemblyAI API: `audio_duration`
+// is Math.ceil() of the real file length in SECONDS, not a precise
+// measurement (a real 6.09s file reported `audio_duration: 7`, a real 7.24s
+// file reported `8` — every scene in the same job showed the same whole-
+// second-ceiling pattern). This function used to use that field directly as
+// "the real duration", which is what it was added to replace synthesizeVoice
+// .ts's word-count estimate with — but a value that's up to ~1s inflated
+// PER SCENE, compounding across every scene into cumulativeOffsetMs below,
+// reproduces the exact same class of drift this whole mechanism exists to
+// avoid, just smaller and harder to notice. It also over-pads Pass 0's
+// per-scene video hold (renderLanguageTrack.ts) well past what the real clip
+// needs, and inflates totalDurationSeconds enough that the mux pass's fade
+// (avMerger.ts's buildMuxCommand) computes a fadeStart past the real,
+// `-shortest`-trimmed video's actual end — confirmed live as the root cause
+// of a real render showing frozen holds at every scene cut, no visible fade,
+// and end-of-video captions never appearing. The word timings themselves
+// (outcome.words) are real, millisecond-precise AssemblyAI output — the last
+// word's own `end` timestamp plus a small trailing-silence buffer is a far
+// more accurate "how long is this scene's real content" signal than the
+// coarse audio_duration field, so that's what's used below instead.
+const TRAILING_SILENCE_BUFFER_MS = 300
+
 interface WordTiming {
   text: string
   start: number
   end: number
 }
 
+// Cancellation check (2026-09-22, P0 fix) — see isPipelineFailed's header
+// (db.ts, isTrackFailed is its track-scoped twin) and generateSceneVisual
+// .ts's own pollUntilDone for the full reasoning; not duplicated here.
 async function pollUntilDone(
+  client: SupabaseClient,
+  trackId: string,
   service: TranscriptionService,
   jobRef: { providerRef: string },
 ): Promise<
   | { words: WordTiming[]; audioDurationMs?: number }
   | { failed: true; detail: string }
   | { timedOut: true }
+  | { cancelled: true }
 > {
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
+    if (await isTrackFailed(client, trackId)) {
+      console.log('[transcribe_captions] cancelled — stopping poll early')
+      return { cancelled: true }
+    }
     const result = await service.poll(jobRef)
     if (result.status === 'ready') {
       const words = Array.isArray(result.timingData) ? (result.timingData as WordTiming[]) : []
@@ -53,21 +86,25 @@ async function pollUntilDone(
  *
  * No audio-concatenation service exists yet (that's render's job, M4), so
  * this transcribes each scene's audio SEPARATELY and stitches the resulting
- * word timings into one flat, cumulative-offset timeline — using
- * AssemblyAI's own REAL measured duration of each scene's audio file
- * (TranscriptionPollResult.audioDurationMs) as the additive offset for the
- * next scene, falling back to video_scene_audio.duration_ms (synthesizeVoice's
- * word-count ESTIMATE) only if a provider/mock doesn't report one. Using the
- * estimate here unconditionally used to be the only option — that drifted
- * captions out of sync with the real render's audio track (concatenated
- * from these same real audio files in renderLanguageTrack.ts) whenever
- * ElevenLabs' actual speaking pace differed from the flat words-per-second
- * assumption behind the estimate, and the error compounded scene over
- * scene. The real duration is already sitting in every poll() response
- * this step already makes — no extra API call needed to use it. Output
- * shape is exactly the {text,start,end}[] array worker/src/adapters/
- * avMerger.ts's buildFfmpegCommand already expects for caption burn-in —
- * no further transformation needed at render time.
+ * word timings into one flat, cumulative-offset timeline — using each
+ * scene's own last transcribed word's real `end` timestamp (plus
+ * TRAILING_SILENCE_BUFFER_MS) as the additive offset for the next scene,
+ * falling back to TranscriptionPollResult.audioDurationMs or video_scene_audio
+ * .duration_ms (synthesizeVoice's word-count ESTIMATE) only if a scene
+ * somehow has zero transcribed words. Using the word-count estimate here
+ * unconditionally used to be the only option — that drifted captions out of
+ * sync with the real render's audio track (concatenated from these same
+ * real audio files in renderLanguageTrack.ts) whenever ElevenLabs' actual
+ * speaking pace differed from the flat words-per-second assumption behind
+ * the estimate, and the error compounded scene over scene. A later attempt
+ * to fix that by using AssemblyAI's own audio_duration field instead turned
+ * out to have the same compounding-drift problem one level down — see
+ * TRAILING_SILENCE_BUFFER_MS's header for why that field itself is too
+ * coarse to use. The real per-word timing is already sitting in every
+ * poll() response this step already makes — no extra API call needed to use
+ * it. Output shape is exactly the {text,start,end}[] array worker/src/
+ * adapters/avMerger.ts's buildFfmpegCommand already expects for caption
+ * burn-in — no further transformation needed at render time.
  *
  * Also persists that same real duration back into
  * video_scene_audio.duration_ms (overwriting the estimate) once known —
@@ -139,8 +176,16 @@ export async function runTranscribeAudio(
     for (const scene of scenes) {
       const audio = audioRows.find((a) => a.video_scene_id === scene.id)!
       const jobRef = await transcriptionService.submit({ audioUrl: audio.file_url! })
-      const outcome = await pollUntilDone(transcriptionService, jobRef)
+      const outcome = await pollUntilDone(client, track.id, transcriptionService, jobRef)
 
+      if ('cancelled' in outcome) {
+        // A plain `return` here (inside this function's own try block)
+        // skips the catch below entirely — no failure gets recorded, and
+        // the loop never reaches a later scene's submit() call, satisfying
+        // "don't start the next expensive operation after cancellation."
+        console.log(`[transcribe_captions] cancelled at scene ${scene.scene_number} — stopping, not recording a failure`)
+        return { ran: true }
+      }
       if (!('words' in outcome)) {
         const detail = 'failed' in outcome ? outcome.detail : 'AssemblyAI poll timed out'
         throw new ProviderCallError('assemblyai', null, `scene ${scene.scene_number}: ${detail}`)
@@ -148,24 +193,31 @@ export async function runTranscribeAudio(
       for (const w of outcome.words) {
         combinedWords.push({ text: w.text, start: w.start + cumulativeOffsetMs, end: w.end + cumulativeOffsetMs })
       }
-      const realDurationMs = outcome.audioDurationMs ?? audio.duration_ms ?? 0
+      // Prefer the real per-word timing (millisecond-precise) over the
+      // coarse whole-second audio_duration field — see TRAILING_SILENCE_
+      // BUFFER_MS's header. Only falls back to audioDurationMs/duration_ms
+      // when a scene somehow has zero transcribed words.
+      const lastWord = outcome.words[outcome.words.length - 1]
+      const realDurationMs =
+        lastWord !== undefined
+          ? lastWord.end + TRAILING_SILENCE_BUFFER_MS
+          : (outcome.audioDurationMs ?? audio.duration_ms ?? 0)
       cumulativeOffsetMs += realDurationMs
 
       // Persist the REAL measured duration back over synthesizeVoice.ts's
-      // word-count ESTIMATE (only when AssemblyAI actually reported one —
-      // never overwrite a real value with 0 if a provider/mock omits it).
-      // renderLanguageTrack.ts's per-scene duration-match pass (M4) reads
-      // this column to know how long THIS scene's audio really is — without
-      // this, it would still see the estimate, silently reintroducing the
-      // exact estimate-vs-reality drift this whole fix exists to close, just
-      // one step later in the pipeline than the caption-offset bug was.
-      if (outcome.audioDurationMs !== undefined && outcome.audioDurationMs !== audio.duration_ms) {
+      // word-count ESTIMATE. renderLanguageTrack.ts's per-scene duration-
+      // match pass (M4) reads this column to know how long THIS scene's
+      // audio really is — without this, it would still see the estimate,
+      // silently reintroducing the exact estimate-vs-reality drift this
+      // whole fix exists to close, just one step later in the pipeline than
+      // the caption-offset bug was.
+      if (realDurationMs !== audio.duration_ms) {
         await upsertVideoSceneAudio(client, {
           contentLanguageTrackId: track.id,
           videoSceneId: scene.id,
           generation,
           status: audio.status as 'pending' | 'generating' | 'ready' | 'failed',
-          durationMs: outcome.audioDurationMs,
+          durationMs: realDurationMs,
           attemptNumber: audio.attempt_number,
         })
       }

@@ -279,6 +279,42 @@ export async function markTrackFailed(
 }
 
 /** Bumps retry_count/last_error without changing status — used when a step fails but hasn't exhausted its retry cap yet. */
+// Cheap liveness check for a long-running poll loop (KIE image/video
+// generation and upload-post.com's ffmpeg passes can run for minutes) —
+// reads ONLY the status column, not a full row, since this runs on every
+// poll tick for as long as a generation is in flight. 'failed' covers BOTH
+// a genuine provider failure (markPipelineFailed/markTrackFailed) and an
+// explicit user cancellation (POST .../video/cancel, which reuses this
+// same status value rather than adding a new one — see that route's own
+// header) — a poll loop has no reason to keep working once EITHER has
+// happened, so it doesn't need to distinguish which. Added 2026-09-22
+// after a real gap: cancelling mid-poll only ever changed the DB row: the
+// KIE/upload-post job already submitted kept running (and being billed/
+// consuming time) until it finished or timed out on its own, since nothing
+// checked for cancellation WHILE a poll loop was already running — only
+// the code BETWEEN steps/waves ever re-read pipeline/track status. These
+// checks close that gap by making every poll loop itself durable against
+// cancellation, not just the code that decides whether to start the next
+// one.
+//
+// Fails OPEN (returns false) on a read error — a transient DB hiccup while
+// checking "should I stop?" must never itself abort an otherwise-healthy,
+// already-paid-for generation; that generation's own timeout/normal
+// completion still applies as the fallback either way.
+export async function isPipelineFailed(client: SupabaseClient, pipelineId: string): Promise<boolean> {
+  const { data, error } = await client.from('content_pipelines').select('status').eq('id', pipelineId).maybeSingle()
+  if (error || !data) return false
+  return data.status === 'failed'
+}
+
+/** Same as isPipelineFailed, for a content_language_tracks row — the
+ *  render/transcription poll loops are track-scoped, not pipeline-scoped. */
+export async function isTrackFailed(client: SupabaseClient, trackId: string): Promise<boolean> {
+  const { data, error } = await client.from('content_language_tracks').select('status').eq('id', trackId).maybeSingle()
+  if (error || !data) return false
+  return data.status === 'failed'
+}
+
 export async function recordPipelineRetryableFailure(
   client: SupabaseClient,
   id: string,
@@ -382,6 +418,38 @@ export async function getLastSucceededStepOutputAnyGeneration(
   const { data, error } = await query.maybeSingle()
   if (error) throw error
   return (data?.output_snapshot as unknown) ?? null
+}
+
+/**
+ * Reads back the error_message of a step's most recent failed_retryable
+ * attempt — used by generateSceneVisual.ts's targeted-regeneration path
+ * (runSceneImageStep) to recover a validation-triggered correction
+ * instruction on the NEXT attempt, without a new DB column: recordStepAttempt
+ * already persists an errorMessage on every failed attempt (both a genuine
+ * provider failure and, as of the image-validation gate, a rejected-by-QA
+ * attempt), so this just reads that same existing column back. Returns null
+ * if the step has never failed at this generation (the ordinary case).
+ */
+export async function getLastFailedStepErrorMessage(
+  client: SupabaseClient,
+  scope: StepScope,
+  stepName: string,
+  generation: number,
+): Promise<string | null> {
+  const query = scopedQuery(
+    client
+      .from('pipeline_steps')
+      .select('error_message')
+      .eq('step_name', stepName)
+      .eq('generation', generation)
+      .eq('status', 'failed_retryable')
+      .order('created_at', { ascending: false })
+      .limit(1),
+    scope,
+  )
+  const { data, error } = await query.maybeSingle()
+  if (error) throw error
+  return (data?.error_message as string | null) ?? null
 }
 
 export async function recordStepAttempt(

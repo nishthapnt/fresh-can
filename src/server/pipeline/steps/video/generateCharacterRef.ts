@@ -9,6 +9,7 @@ import {
   markPipelineFailed,
   upsertVisualAsset,
   getVisualAssets,
+  isPipelineFailed,
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
@@ -24,13 +25,23 @@ const POLL_TIMEOUT_MS = 60_000
  *  step and burning a fresh paid submission on retry. A 404 is the one
  *  exception — the provider has no record of this task at all, so retrying
  *  the same poll would just burn the timeout window for nothing; treated as
- *  an immediate, definite failure instead. */
+ *  an immediate, definite failure instead.
+ *
+ *  Cancellation check (2026-09-22, P0 fix) — see isPipelineFailed's header
+ *  (db.ts) and generateSceneVisual.ts's own pollUntilDone for the full
+ *  reasoning; not duplicated here. */
 async function pollUntilDone(
+  client: SupabaseClient,
+  pipelineId: string,
   imageGenerator: ImageGenerator,
   jobRef: { providerRef: string },
-): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true }> {
+): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true } | { cancelled: true }> {
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
+    if (await isPipelineFailed(client, pipelineId)) {
+      console.log('[generate_character_ref] cancelled — stopping poll early, task left resumable')
+      return { cancelled: true }
+    }
     let result: ImagePollResult
     try {
       result = await imageGenerator.poll(jobRef)
@@ -163,7 +174,12 @@ export async function runGenerateCharacterRef(
         })
       }
 
-      const outcome = await pollUntilDone(imageGenerator, jobRef)
+      const outcome = await pollUntilDone(client, pipeline.id, imageGenerator, jobRef)
+
+      if ('cancelled' in outcome) {
+        console.log(`[${stepName}] cancelled mid-poll — leaving task ${jobRef.providerRef} resumable, not recording a failure`)
+        return { ran: true }
+      }
 
       if ('fileUrl' in outcome) {
         const permanentUrl = await uploader.uploadFromUrl(

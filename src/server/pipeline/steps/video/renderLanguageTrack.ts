@@ -14,6 +14,7 @@ import {
   getVideoSceneAudioRows,
   upsertVideoGeneratedContent,
   markJobReadyIfAllContentComplete,
+  isTrackFailed,
   type TrackRow,
   type PipelineRow,
 } from '../../db'
@@ -57,15 +58,26 @@ function isStaleClaim(updatedAt: string): boolean {
  * pipeline_steps row (see call sites below) so this is queryable after the
  * fact, not just visible in whatever is tailing the worker's stdout at the
  * time.
+ *
+ * `trackId` cancellation check (2026-09-22, P0 fix) — this file's own
+ * header already flagged that a render "never persists a resumable
+ * provider_ref before polling... no interruption point in between" across
+ * its several passes; this closes that specific gap for cancellation
+ * (still not a real checkpoint/resume mechanism for a crash mid-pass, which
+ * remains the documented limitation). See isTrackFailed's header (db.ts)
+ * and generateSceneVisual.ts's own pollUntilDone for the full reasoning.
  */
 async function pollUntilDone(
   merger: AVMerger,
   jobRef: { providerRef: string },
   label: 'duration-match' | 'video-concat' | 'audio-concat' | 'mux' | 'caption',
+  client: SupabaseClient,
+  trackId: string,
 ): Promise<
   | { fileBuffer: Buffer; elapsedMs: number }
   | { failed: true; detail: string; elapsedMs: number }
   | { timedOut: true; elapsedMs: number }
+  | { cancelled: true; elapsedMs: number }
 > {
   const startedAt = Date.now()
   const elapsed = () => Date.now() - startedAt
@@ -75,6 +87,10 @@ async function pollUntilDone(
   const deadline = startedAt + POLL_TIMEOUT_MS
   let pollCount = 0
   while (Date.now() < deadline) {
+    if (await isTrackFailed(client, trackId)) {
+      console.log(`[render:${label}] cancelled at ${elapsedSec()}s — stopping poll early`)
+      return { cancelled: true, elapsedMs: elapsed() }
+    }
     pollCount += 1
     let result: Awaited<ReturnType<AVMerger['poll']>>
     try {
@@ -252,7 +268,8 @@ export async function runRenderLanguageTrack(
     const matchedScenes = await Promise.all(
       sceneRenderInputs.map(async (input) => {
         const jobRef = await avMerger.submitSceneDurationMatch(input.clipUrl, input.audioDurationSeconds)
-        const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match')
+        const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match', client, track.id)
+        if ('cancelled' in outcome) return { cancelled: true as const }
         if (!('fileBuffer' in outcome)) {
           const detail = 'failed' in outcome ? outcome.detail : 'FFmpeg duration-match pass poll timed out'
           throw new ProviderCallError(
@@ -269,7 +286,16 @@ export async function runRenderLanguageTrack(
         return { clipUrl: matchedClipUrl, audioUrl: input.audioUrl }
       }),
     )
-    const scenePairs = matchedScenes
+    // Any scene cancelling mid-poll means the whole render stops here — a
+    // plain `return` inside this function's own try block skips the catch
+    // below, so no failure is recorded on top of whatever already marked
+    // the track 'failed' (a real provider failure or /video/cancel), and
+    // Pass 1a/1b/2/3 (the rest of the render, all still ahead) never start.
+    if (matchedScenes.some((m) => 'cancelled' in m)) {
+      console.log(`[render:duration-match] cancelled — stopping render, not recording a failure`)
+      return { ran: true }
+    }
+    const scenePairs = matchedScenes as { clipUrl: string; audioUrl: string }[]
 
     const { data: captionRow } = await client
       .from('video_captions')
@@ -291,9 +317,13 @@ export async function runRenderLanguageTrack(
       avMerger.submitAudioConcat({ scenes: scenePairs }),
     ])
     const [videoOutcome, audioOutcome] = await Promise.all([
-      pollUntilDone(avMerger, videoJobRef, 'video-concat'),
-      pollUntilDone(avMerger, audioJobRef, 'audio-concat'),
+      pollUntilDone(avMerger, videoJobRef, 'video-concat', client, track.id),
+      pollUntilDone(avMerger, audioJobRef, 'audio-concat', client, track.id),
     ])
+    if ('cancelled' in videoOutcome || 'cancelled' in audioOutcome) {
+      console.log(`[render:video/audio-concat] cancelled — stopping render, not recording a failure`)
+      return { ran: true }
+    }
     if (!('fileBuffer' in videoOutcome)) {
       const detail = 'failed' in videoOutcome ? videoOutcome.detail : 'FFmpeg video-concat pass poll timed out'
       // elapsedMs is included so a failure at/near the ~9min ceiling is
@@ -320,7 +350,11 @@ export async function runRenderLanguageTrack(
       uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-audio-tmp.mp4`, audioOutcome.fileBuffer, 'video/mp4'),
     ])
     const muxJobRef = await avMerger.submitMux(videoTempUrl, audioTempUrl, totalDurationSeconds)
-    const muxOutcome = await pollUntilDone(avMerger, muxJobRef, 'mux')
+    const muxOutcome = await pollUntilDone(avMerger, muxJobRef, 'mux', client, track.id)
+    if ('cancelled' in muxOutcome) {
+      console.log(`[render:mux] cancelled — stopping render, not recording a failure`)
+      return { ran: true }
+    }
     if (!('fileBuffer' in muxOutcome)) {
       const detail = 'failed' in muxOutcome ? muxOutcome.detail : 'FFmpeg mux pass poll timed out'
       throw new ProviderCallError('upload-post', null, `${detail} (after ${(muxOutcome.elapsedMs / 1000).toFixed(1)}s)`)
@@ -354,7 +388,11 @@ export async function runRenderLanguageTrack(
         ),
       ])
       const captionJobRef = await avMerger.submitCaptionBurn(muxTempUrl, assFileUrl)
-      const captionOutcome = await pollUntilDone(avMerger, captionJobRef, 'caption')
+      const captionOutcome = await pollUntilDone(avMerger, captionJobRef, 'caption', client, track.id)
+      if ('cancelled' in captionOutcome) {
+        console.log(`[render:caption] cancelled — stopping render, not recording a failure`)
+        return { ran: true }
+      }
       if (!('fileBuffer' in captionOutcome)) {
         const detail = 'failed' in captionOutcome ? captionOutcome.detail : 'FFmpeg caption pass poll timed out'
         throw new ProviderCallError('upload-post', null, `${detail} (after ${(captionOutcome.elapsedMs / 1000).toFixed(1)}s)`)

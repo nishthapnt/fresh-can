@@ -56,7 +56,7 @@ import { runLocalizeScript } from '../../server/pipeline/steps/video/localizeScr
 import { runSynthesizeVoice } from '../../server/pipeline/steps/video/synthesizeVoice'
 import { runTranscribeAudio } from '../../server/pipeline/steps/video/transcribeAudio'
 import { runRenderLanguageTrack } from '../../server/pipeline/steps/video/renderLanguageTrack'
-import { OpenAIScriptGenerator } from '../../server/pipeline/adapters/openai'
+import { OpenAIScriptGenerator, OpenAIImageValidator } from '../../server/pipeline/adapters/openai'
 import { KieImageGenerator, KieVideoGenerator } from '../../server/pipeline/adapters/kie'
 import { FakeKieImageGenerator, FakeKieVideoGenerator } from '../../server/pipeline/adapters/kieFake'
 import type { ImageGenerator, VideoGenerator } from '../../server/pipeline/adapters/types'
@@ -114,6 +114,12 @@ function sceneImageGenerator(): ImageGenerator {
 }
 function sceneVideoGenerator(): VideoGenerator {
   return env.KIE_FAKE_MODE ? new FakeKieVideoGenerator() : new KieVideoGenerator(env.KIE_API_KEY)
+}
+// Real vision QA gate always, even in KIE_FAKE_MODE — it's a separate
+// OpenAI call, not a KIE one, and there is no fake counterpart (same as
+// OpenAIScriptGenerator above, which KIE_FAKE_MODE never gates either).
+function sceneImageValidator() {
+  return new OpenAIImageValidator(env.OPENAI_API_KEY)
 }
 
 async function fetchPipeline(pipelineId: string): Promise<PipelineRow> {
@@ -252,12 +258,24 @@ async function runSceneVisualsUntilSettled(
   const videoGen = sceneVideoGenerator()
   const uploader = new SupabaseVideoStorageUploader(client)
   const scaler = new UploadPostAVMerger(env.UPLOAD_POST_API_KEY)
+  const imageValidator = sceneImageValidator()
 
   let pipeline = await fetchPipeline(pipelineId)
   for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
     pipeline = await step.run(`scene-visuals-wave-${attempt}`, async () => {
       const current = await fetchPipeline(pipelineId)
-      await runGenerateSceneVisual(client, current, characterRefUrl, imageGen, videoGen, uploader, scaler, 5000, aspectRatio)
+      await runGenerateSceneVisual(
+        client,
+        current,
+        characterRefUrl,
+        imageGen,
+        videoGen,
+        uploader,
+        scaler,
+        5000,
+        aspectRatio,
+        imageValidator,
+      )
       return fetchPipeline(pipelineId)
     })
     if (pipeline.status !== 'generating') return pipeline

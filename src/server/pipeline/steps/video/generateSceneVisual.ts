@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ImageGenerator, VideoGenerator, SceneClipScaler } from '../../adapters/types'
+import type { ImageGenerator, VideoGenerator, SceneClipScaler, ImageValidator } from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
 import type { VideoStorageUploader } from '../../adapters/storage'
 import {
@@ -10,6 +10,8 @@ import {
   upsertVisualAsset,
   getVisualAssets,
   getVideoScenes,
+  isPipelineFailed,
+  getLastFailedStepErrorMessage,
   type PipelineRow,
   type VideoSceneRow,
   type VisualAssetRow,
@@ -18,6 +20,7 @@ import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/
 import { ASPECT_RATIO_RESOLUTIONS } from '../../lib/videoResolution'
 import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
 import { BRAND_PROFILE, composeSceneImagePrompt, composeSceneVideoPrompt } from '../../prompts/index'
+import { extractVisualState } from './generateScript'
 
 const IMAGE_POLL_INTERVAL_MS = 2000
 const IMAGE_POLL_TIMEOUT_MS = 60_000
@@ -78,7 +81,19 @@ const SCALE_POLL_TIMEOUT_MS = 3 * 60_000
  *  burn the full timeout window for nothing. Treated as an immediate,
  *  definite failure instead — this is what lets a RESUMED task (see
  *  runSceneImageStep/runSceneVideoClipStep below) correctly fall through to
- *  a fresh, legitimate resubmission rather than hanging until timeout. */
+ *  a fresh, legitimate resubmission rather than hanging until timeout.
+ *
+ *  `isCancelled` (added 2026-09-22, P0 fix): checked at the TOP of every
+ *  loop iteration, before the next provider poll — see isPipelineFailed's
+ *  own header (db.ts) for why a poll loop needs to notice cancellation
+ *  itself rather than only being stopped BETWEEN steps. KIE.ai and
+ *  upload-post.com have no documented cancel/stop endpoint for an
+ *  already-submitted task (confirmed against both providers' docs the same
+ *  day), so this can't make the PROVIDER stop the work already in flight —
+ *  what it CAN do, and what actually matters here, is stop OUR side from
+ *  continuing to wait on it and, critically, from ever proceeding to the
+ *  next expensive step once cancellation is noticed (see the `cancelled`
+ *  outcome's handling in runSceneImageStep/runSceneVideoClipStep below). */
 async function pollUntilDone<
   TResult extends { status: 'ready' } | { status: 'pending' } | { status: 'failed'; detail: string },
 >(
@@ -86,9 +101,14 @@ async function pollUntilDone<
   timeoutMs: number,
   intervalMs: number,
   logLabel: string,
-): Promise<Extract<TResult, { status: 'ready' }> | { failed: true; detail: string } | { timedOut: true }> {
+  isCancelled: () => Promise<boolean>,
+): Promise<Extract<TResult, { status: 'ready' }> | { failed: true; detail: string } | { timedOut: true } | { cancelled: true }> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (await isCancelled()) {
+      console.log(`[${logLabel}] cancelled — stopping poll early, task left resumable`)
+      return { cancelled: true }
+    }
     let result: TResult
     try {
       result = await poll()
@@ -110,38 +130,47 @@ async function pollUntilDone<
 }
 
 async function pollImageUntilDone(
+  client: SupabaseClient,
+  pipelineId: string,
   imageGenerator: ImageGenerator,
   jobRef: { providerRef: string },
-): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true }> {
+): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true } | { cancelled: true }> {
   return pollUntilDone(
     () => imageGenerator.poll(jobRef),
     IMAGE_POLL_TIMEOUT_MS,
     IMAGE_POLL_INTERVAL_MS,
     'generate_scene_visual:image',
+    () => isPipelineFailed(client, pipelineId),
   )
 }
 
 async function pollVideoUntilDone(
+  client: SupabaseClient,
+  pipelineId: string,
   videoGenerator: VideoGenerator,
   jobRef: { providerRef: string },
-): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true }> {
+): Promise<{ fileUrl: string } | { failed: true; detail: string } | { timedOut: true } | { cancelled: true }> {
   return pollUntilDone(
     () => videoGenerator.poll(jobRef),
     VIDEO_POLL_TIMEOUT_MS,
     VIDEO_POLL_INTERVAL_MS,
     'generate_scene_visual:clip',
+    () => isPipelineFailed(client, pipelineId),
   )
 }
 
 async function pollScaleUntilDone(
+  client: SupabaseClient,
+  pipelineId: string,
   scaler: SceneClipScaler,
   jobRef: { providerRef: string },
-): Promise<{ fileBuffer: Buffer } | { failed: true; detail: string } | { timedOut: true }> {
+): Promise<{ fileBuffer: Buffer } | { failed: true; detail: string } | { timedOut: true } | { cancelled: true }> {
   return pollUntilDone(
     () => scaler.poll(jobRef),
     SCALE_POLL_TIMEOUT_MS,
     SCALE_POLL_INTERVAL_MS,
     'generate_scene_visual:scale',
+    () => isPipelineFailed(client, pipelineId),
   )
 }
 
@@ -153,6 +182,25 @@ function findAsset(
   return assets.find((a) => a.video_scene_id === sceneId && a.asset_type === assetType)
 }
 
+// Marks a failed_retryable step attempt's error_message as carrying a
+// validation correction rather than a genuine provider error — read back by
+// runSceneImageStep's next attempt (via getLastFailedStepErrorMessage) to
+// build that attempt's regenInstructions. See this file's own header for
+// why this rides the EXISTING error_message column instead of a new one.
+const VALIDATION_RETRY_PREFIX = 'VALIDATION_RETRY:'
+
+/** Turns the validator's issue list into a short, targeted correction
+ *  instruction — never a full re-plan of the scene (request #6: "do NOT
+ *  regenerate the entire creative concept from scratch"). Reuses
+ *  composeSceneImagePrompt's existing regenInstructions channel, so this is
+ *  the ONLY new prompt content a validation-triggered retry adds. */
+function buildCorrectionInstruction(issues: string[]): string {
+  return (
+    `Fix this specific issue: ${issues.join('; ')}. Preserve everything else — the established people, ` +
+    'objects, composition, and lighting — exactly as already generated.'
+  )
+}
+
 async function runSceneImageStep(
   client: SupabaseClient,
   pipeline: PipelineRow,
@@ -162,6 +210,15 @@ async function runSceneImageStep(
   uploader: VideoStorageUploader,
   backoffBaseDelayMs: number,
   aspectRatio?: '9:16' | '1:1' | '16:9',
+  /** The immediately preceding scene (by scene_number), if any — its
+   *  visual_state is spliced into this scene's image prompt as compact
+   *  continuity context (composeSceneImagePrompt's previousVisualState).
+   *  Undefined for scene 1, or when the caller has no scene list handy. */
+  previousScene?: VideoSceneRow,
+  /** Optional vision-based QA gate (see ImageValidator's own header,
+   *  adapters/types.ts) — omitted entirely by every existing caller/test,
+   *  which just skips this quality gate, same as before it existed. */
+  imageValidator?: ImageValidator,
 ): Promise<boolean> {
   const generation = pipeline.current_generation
   const alreadySucceeded = await hasSucceededStep(
@@ -218,6 +275,27 @@ async function runSceneImageStep(
         attemptNumber,
       })
 
+      // Targeted regeneration (request #6): if the PREVIOUS attempt at this
+      // exact scene image failed because the validator rejected it (never a
+      // genuine provider failure — those don't carry this prefix), recover
+      // its correction instruction and feed it in as regenInstructions —
+      // the same channel a user's own Regenerate-dialog guidance already
+      // uses. Never a re-plan of the scene, just one targeted fix on top of
+      // it.
+      let regenInstructions = pipeline.regen_instructions
+      if (existing?.status === 'failed') {
+        const lastError = await getLastFailedStepErrorMessage(
+          client,
+          { contentPipelineId: pipeline.id },
+          stepName,
+          generation,
+        )
+        if (lastError?.startsWith(VALIDATION_RETRY_PREFIX)) {
+          const correction = lastError.slice(VALIDATION_RETRY_PREFIX.length)
+          regenInstructions = [pipeline.regen_instructions, correction].filter(Boolean).join(' ')
+        }
+      }
+
       // referenceImageUrl comes from the composition itself, not
       // characterRefUrl directly — composeSceneImagePrompt (2026-09-19) now
       // gates whether the truck's reference photo is used at all on
@@ -231,7 +309,8 @@ async function runSceneImageStep(
         visualDescription: scene.visual_description,
         shotNotes: scene.shot_notes,
         characterRefUrl,
-        regenInstructions: pipeline.regen_instructions,
+        regenInstructions,
+        previousVisualState: previousScene ? extractVisualState(previousScene.narration_intent) : undefined,
       })
 
       console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
@@ -256,13 +335,81 @@ async function runSceneImageStep(
       })
     }
 
-    const outcome = await pollImageUntilDone(imageGenerator, jobRef)
+    const outcome = await pollImageUntilDone(client, pipeline.id, imageGenerator, jobRef)
+
+    if ('cancelled' in outcome) {
+      // Leave the asset exactly as-is (status 'generating', provider_ref
+      // set) — the same resumable shape a mid-poll crash already leaves
+      // (see the RESUMED branch above): no failure is recorded, so a
+      // future retry/regenerate picks up this EXACT KIE task instead of
+      // paying for a new one, and nothing here starts the next expensive
+      // step (the video-clip generation this image would have fed).
+      console.log(`[${stepName}] cancelled mid-poll — leaving task ${jobRef.providerRef} resumable, not recording a failure`)
+      return true
+    }
 
     if ('fileUrl' in outcome) {
       const permanentUrl = await uploader.uploadFromUrl(
         `${pipeline.job_id}/scene-${scene.scene_number}-image.png`,
         outcome.fileUrl,
       )
+
+      // Lightweight vision QA gate (request #5), run once per scene image,
+      // BEFORE this scene's video clip is ever submitted — runGenerateSceneVisual's
+      // own gating (an image asset must already be 'ready' before
+      // runSceneVideoClipStep is even called) is what actually enforces
+      // "before video generation" here; this function just has to avoid
+      // marking the asset 'ready' until validation says so.
+      let validation: { pass: boolean; issues: string[] } = { pass: true, issues: [] }
+      if (imageValidator) {
+        try {
+          validation = await imageValidator.validate({
+            imageUrl: permanentUrl,
+            visualDescription: scene.visual_description,
+            shotNotes: scene.shot_notes,
+          })
+        } catch (err) {
+          // Fail OPEN — see OpenAIImageValidator's own header (adapters/
+          // openai.ts): a validator outage must never block an otherwise-
+          // successful, already-paid-for image from proceeding.
+          const message = err instanceof Error ? err.message : String(err)
+          console.warn(`[${stepName}] image validation call failed, proceeding without it: ${message}`)
+        }
+      }
+
+      if (!validation.pass && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+        // Targeted regeneration (request #6) — reject this image and let
+        // the EXISTING retry/backoff machinery pick it up next wave, same
+        // as a genuine provider failure. The correction instruction that
+        // drives the next attempt's prompt is recovered from this exact
+        // error_message on that next call (see the regenInstructions block
+        // above) — never a new DB column.
+        console.log(`[${stepName}] image validation FAILED (attempt ${attemptNumber}): ${validation.issues.join('; ')}`)
+        await upsertVisualAsset(client, {
+          contentPipelineId: pipeline.id,
+          generation,
+          assetType: 'scene_image',
+          videoSceneId: scene.id,
+          status: 'failed',
+          attemptNumber,
+        })
+        await recordStepAttempt(client, {
+          contentPipelineId: pipeline.id,
+          stepName,
+          generation,
+          attemptNumber,
+          status: 'failed_retryable',
+          provider: 'openai',
+          errorMessage: `${VALIDATION_RETRY_PREFIX}${buildCorrectionInstruction(validation.issues)}`,
+        })
+        return true
+      }
+
+      // Either validation passed, or a validation-driven correction
+      // genuinely ran out of its retry budget — accepted as-is rather than
+      // hard-failing the whole scene over a soft quality gate; a subjective
+      // vision-model disagreement should never be able to block delivery
+      // the way a real provider failure does.
       await upsertVisualAsset(client, {
         contentPipelineId: pipeline.id,
         generation,
@@ -280,7 +427,7 @@ async function runSceneImageStep(
         attemptNumber,
         status: 'succeeded',
         provider: 'kie',
-        outputSnapshot: { fileUrl: permanentUrl },
+        outputSnapshot: { fileUrl: permanentUrl, validationIssues: validation.issues },
       })
     } else {
       const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
@@ -443,7 +590,14 @@ async function runSceneVideoClipStep(
         })
       }
 
-      const outcome = await pollVideoUntilDone(videoGenerator, jobRef)
+      const outcome = await pollVideoUntilDone(client, pipeline.id, videoGenerator, jobRef)
+      if ('cancelled' in outcome) {
+        // Same resumable-no-failure treatment as the image step above —
+        // critically, this also means the downscale pass just below never
+        // starts, since we return before ever reaching it.
+        console.log(`[${stepName}] cancelled mid-poll — leaving task ${jobRef.providerRef} resumable, not recording a failure`)
+        return true
+      }
       if (!('fileUrl' in outcome)) {
         const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
         throw new ProviderCallError('kie', null, detail)
@@ -469,7 +623,14 @@ async function runSceneVideoClipStep(
 
     const target = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
     const scaleJobRef = await scaler.submitScale(rawUrl, target.width, target.height)
-    const scaleOutcome = await pollScaleUntilDone(scaler, scaleJobRef)
+    const scaleOutcome = await pollScaleUntilDone(client, pipeline.id, scaler, scaleJobRef)
+    if ('cancelled' in scaleOutcome) {
+      // rawUrl is already persisted (raw_file_url, above) — a future
+      // retry/regenerate resumes straight into redoing only the downscale,
+      // never re-paying KIE, same as the ordinary "downscale failed" path.
+      console.log(`[${stepName}] cancelled mid-poll — raw KIE clip already saved, not recording a failure`)
+      return true
+    }
     if (!('fileBuffer' in scaleOutcome)) {
       const detail = 'failed' in scaleOutcome ? scaleOutcome.detail : 'downscale poll timed out'
       throw new ProviderCallError('upload_post', null, detail)
@@ -644,6 +805,10 @@ export async function runGenerateSceneVisual(
   scaler: SceneClipScaler,
   backoffBaseDelayMs = 5000,
   aspectRatio?: '9:16' | '1:1' | '16:9',
+  /** Optional vision-based QA gate for scene images — see ImageValidator's
+   *  own header (adapters/types.ts) and runSceneImageStep below. Omitted by
+   *  every existing test, which keeps their exact prior behavior. */
+  imageValidator?: ImageValidator,
 ): Promise<{ ran: boolean }> {
   if (pipeline.status !== 'generating') return { ran: false }
 
@@ -669,6 +834,7 @@ export async function runGenerateSceneVisual(
     let ran = false
     if (clipAsset?.status !== 'ready') {
       if (!imageAsset || imageAsset.status !== 'ready') {
+        const previousScene = scenes.find((s) => s.scene_number === scene.scene_number - 1)
         ran = await runSceneImageStep(
           client,
           pipeline,
@@ -678,6 +844,8 @@ export async function runGenerateSceneVisual(
           uploader,
           backoffBaseDelayMs,
           aspectRatio,
+          previousScene,
+          imageValidator,
         )
       } else {
         ran = await runSceneVideoClipStep(
