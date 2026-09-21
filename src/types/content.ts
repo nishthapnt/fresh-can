@@ -56,11 +56,11 @@ export type ContentAngle =
   | 'call_to_action'
 
 // video only. Passed straight through to Flux Kontext's own aspectRatio
-// param for character-ref/scene-image generation (worker/src/adapters/
-// kie.ts) — Kling image-to-video has no aspect-ratio param of its own, it
-// inherits the shape of whatever reference image it's animating, so this
-// one setting is sufficient to get matching video clips too. Default
-// '9:16' — the native shape for TikTok/Reels/Shorts.
+// param for character-ref/scene-image generation (src/server/pipeline/
+// adapters/kie.ts), and (since the 2026-09-21 Seedance 1.5 Pro swap) to
+// KieVideoGenerator's own required aspect_ratio input too — see kie.ts's
+// KieVideoGenerator header. Default '9:16' — the native shape for
+// TikTok/Reels/Shorts.
 export type AspectRatio = '9:16' | '1:1' | '16:9'
 
 // ─── Database row types ───────────────────────────────────────────────────────

@@ -208,15 +208,56 @@ export class KieSceneImageGenerator implements ImageGenerator {
 }
 
 /**
- * KIE.ai scene video-clip generation — Kling 2.6 image-to-video, the
- * production model, via the unified Market job endpoints (POST
- * /api/v1/jobs/createTask, GET /api/v1/jobs/recordInfo), verified against
- * docs.kie.ai/market/kling/image-to-video and docs.kie.ai/market/common/
- * get-task-detail on 2026-09-12. `referenceImageUrl` is always the scene's
- * already-generated scene_image — this is what keeps the character/likeness
- * consistent (Kling animates from that one locked frame; it never
- * regenerates the subject's appearance independently), so a caller must
- * never pass a bare text-only prompt with no image here.
+ * KIE.ai scene video-clip generation — Bytedance Seedance 1.5 Pro
+ * image-to-video, the production model, via the unified Market job
+ * endpoints (POST /api/v1/jobs/createTask, GET /api/v1/jobs/recordInfo),
+ * verified against docs.kie.ai/market/bytedance/seedance-1-5-pro on
+ * 2026-09-21. `referenceImageUrl` is always the scene's already-generated
+ * scene_image — this is what keeps the character/likeness consistent
+ * (Seedance animates from that one locked frame, passed as `input_urls[0]`;
+ * it never regenerates the subject's appearance independently), so a caller
+ * must never pass a bare text-only prompt with no image here.
+ *
+ * Swapped 2026-09-21 from Kling 2.6 (`kling-2.6/image-to-video`) to
+ * Seedance 1.5 Pro. Field-level differences from the Kling call this
+ * replaces: `input_urls` (plural array, same as Kling's `image_urls`) not
+ * `image_url`; `generate_audio: false` not `sound: false`; `duration` is a
+ * plain number (Seedance accepts 4-12s) rather than the '5'|'10' string
+ * Kling required — `input.durationSeconds` is still bucketed to '5'/'10' by
+ * lib/sceneClipDuration.ts (kept as-is per that function's own header) and
+ * just gets Number()-coerced here. Unlike Kling, Seedance's `aspect_ratio`
+ * is a required input field rather than something it infers from the
+ * reference frame's own shape — threaded through from the same
+ * content_jobs.aspect_ratio value already used for the character-ref/
+ * scene-image generation, so both stay in sync.
+ *
+ * Confirmed NOT safe to assume (2026-09-21, same day): Seedance does NOT
+ * reliably render at exactly the requested `duration` the way Kling/Hailuo
+ * did — a real render showed caption/audio desync traced to exactly that,
+ * because renderLanguageTrack.ts/avMerger.ts's buildSceneDurationMatchCommand
+ * used to assume the clip's real length matched what was requested here.
+ * Fixed the same day by no longer assuming it anywhere downstream — see
+ * buildSceneDurationMatchCommand's header (avMerger.ts) for the actual fix
+ * and sceneClipDuration.ts's header for what pickClipDurationSeconds is
+ * (and is no longer) used for.
+ *
+ * `resolution: '720p'` is set explicitly (2026-09-21) to keep Seedance's
+ * per-clip cost at or below Kling's. Unlike Kling, Seedance bills by
+ * resolution x duration (tokens = height x width x 24fps x duration / 1024,
+ * $1.2/million tokens with audio off — derived from fal.ai's published rate
+ * for the same underlying model, NOT independently confirmed against
+ * kie.ai's own dashboard). At 720p a no-audio clip is roughly 47% of
+ * Kling's per-clip cost at both 5s and 10s; 1080p (this pipeline's actual
+ * delivery resolution, ASPECT_RATIO_RESOLUTIONS in videoResolution.ts)
+ * would be roughly break-even at 5s but ~6% MORE than Kling at 10s, so it
+ * doesn't reliably satisfy "same or less." The trade-off: Kling's native
+ * output already landed near the 1080x1920 delivery target (so
+ * SceneClipScaler only ever downscaled slightly), but Seedance at 720p
+ * natively outputs ~720x1280 — below that target — so every clip now gets
+ * UPSCALED to delivery resolution instead, which will look softer than
+ * Kling's clips did. Watch the first real renders for visible softness
+ * before assuming this trade-off is acceptable at scale; bump back to
+ * `1080p` here if it isn't.
  *
  * Reverted 2026-09-19 back from a 2026-09-17 TEST-CHEAP MODE swap to Hailuo
  * 02 Standard (`hailuo/02-image-to-video-standard`, 512P, `image_url`
@@ -227,8 +268,8 @@ export class KieSceneImageGenerator implements ImageGenerator {
  * standard'`, `input: { prompt, image_url: referenceImageUrl, duration:
  * durationSeconds === '5' ? 6 : 10, resolution: '512P' }` (git history) —
  * note Hailuo rejects `duration: 5` outright and needs that remap, and
- * takes `image_url` singular where Kling takes `image_urls` (plural,
- * 400s on the singular form).
+ * takes `image_url` singular where Kling/Seedance take the plural array
+ * form (400s on the singular form).
  */
 export class KieVideoGenerator implements VideoGenerator {
   constructor(
@@ -246,15 +287,19 @@ export class KieVideoGenerator implements VideoGenerator {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: 'kling-2.6/image-to-video',
+        model: 'bytedance/seedance-1.5-pro',
         input: {
           prompt: input.prompt,
-          image_urls: [input.referenceImageUrl],
+          input_urls: [input.referenceImageUrl],
+          aspect_ratio: input.aspectRatio,
+          // Cost lever, not a quality default — see this class's header for
+          // the per-resolution cost math and the upscale trade-off it buys.
+          resolution: '720p',
           // Narration audio is composited separately at render time
           // (avMerger.ts) — this call never carries the language-specific
-          // narration, so no ambient/sound track is requested here either.
-          sound: false,
-          duration: input.durationSeconds,
+          // narration, so no ambient/audio track is requested here either.
+          generate_audio: false,
+          duration: Number(input.durationSeconds),
         },
       }),
     })

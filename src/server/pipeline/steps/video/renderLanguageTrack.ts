@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AVMerger } from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
-import { normalizeCaptionCues } from '../../adapters/avMerger'
+import { buildCaptionAssFile } from '../../adapters/avMerger'
 import type { VideoStorageUploader } from '../../adapters/storage'
 import {
   claimTrack,
@@ -18,7 +18,6 @@ import {
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
-import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
 
 // FFmpeg render is the longest-running external call in the whole pipeline
 // (ARCHITECTURE.MD §3.1) — generous poll timeout, unlike the ~1-3 min
@@ -220,16 +219,15 @@ export async function runRenderLanguageTrack(
         sceneNumber: scene.scene_number,
         clipUrl: clip.file_url,
         audioUrl: audio.file_url,
-        // Never probed — Kling/Hailuo reliably render at exactly the
-        // duration requested, so this is recomputed deterministically from
-        // the same input generateSceneVisual.ts used to request the clip
-        // (see pickClipDurationSeconds's own header for why that's safe).
-        clipDurationSeconds: Number(pickClipDurationSeconds(scene.target_duration_ms)),
         // The REAL AssemblyAI-measured duration, once transcribeAudio.ts
         // has run (it overwrites synthesizeVoice.ts's word-count estimate
         // in this same column) — falls back to whatever's stored if a
         // track somehow reached here without that write, which shouldn't
         // happen (transcribe_captions is a hard gate before awaiting_shared).
+        // This is the ONLY duration submitSceneDurationMatch needs now —
+        // see buildSceneDurationMatchCommand's header (avMerger.ts) for why
+        // the clip's own assumed generated length was dropped 2026-09-21
+        // (it was the root cause of a real caption/audio desync).
         audioDurationSeconds: (audio.duration_ms ?? 0) / 1000,
       }
     })
@@ -253,11 +251,7 @@ export async function runRenderLanguageTrack(
     // video/audio concat passes below use for their own two halves.
     const matchedScenes = await Promise.all(
       sceneRenderInputs.map(async (input) => {
-        const jobRef = await avMerger.submitSceneDurationMatch(
-          input.clipUrl,
-          input.clipDurationSeconds,
-          input.audioDurationSeconds,
-        )
+        const jobRef = await avMerger.submitSceneDurationMatch(input.clipUrl, input.audioDurationSeconds)
         const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match')
         if (!('fileBuffer' in outcome)) {
           const detail = 'failed' in outcome ? outcome.detail : 'FFmpeg duration-match pass poll timed out'
@@ -315,12 +309,17 @@ export async function runRenderLanguageTrack(
     // Pass 2: mux the two independently-concatenated streams back into one
     // file. upload-post.com's `files` field takes fetchable URLs, not raw
     // bytes, so both pass-1 outputs are re-hosted at temp paths first
-    // purely to hand this provider URLs for them.
+    // purely to hand this provider URLs for them. totalDurationSeconds
+    // (sum of every scene's real audio length — the same value each
+    // scene's own duration-match pass targeted above) is what
+    // submitMux's fade-to-black/silence needs to know where "the end" is
+    // — see avMerger.ts's buildMuxCommand.
+    const totalDurationSeconds = sceneRenderInputs.reduce((sum, s) => sum + s.audioDurationSeconds, 0)
     const [videoTempUrl, audioTempUrl] = await Promise.all([
       uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-video-tmp.mp4`, videoOutcome.fileBuffer, 'video/mp4'),
       uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-audio-tmp.mp4`, audioOutcome.fileBuffer, 'video/mp4'),
     ])
-    const muxJobRef = await avMerger.submitMux(videoTempUrl, audioTempUrl)
+    const muxJobRef = await avMerger.submitMux(videoTempUrl, audioTempUrl, totalDurationSeconds)
     const muxOutcome = await pollUntilDone(avMerger, muxJobRef, 'mux')
     if (!('fileBuffer' in muxOutcome)) {
       const detail = 'failed' in muxOutcome ? muxOutcome.detail : 'FFmpeg mux pass poll timed out'
@@ -328,12 +327,16 @@ export async function runRenderLanguageTrack(
     }
 
     // Pass 3: only when there are caption cues to burn in — a render with
-    // no captions is already done after the mux pass. Burning captions in
-    // as a *further* pass (via -vf, a linear filter chain with no named
-    // pads) is what avoids ever needing a ';' even with many cues (see
-    // buildCaptionCommand's header). The mux pass's output is re-hosted at
-    // a temp path first, same reason as above.
-    const cues = normalizeCaptionCues(captionRow?.timing_data)
+    // no captions is already done after the mux pass. Burning captions via
+    // ffmpeg's `subtitles=` filter reading an uploaded ASS file (see
+    // avMerger.ts's buildCaptionAssFile) — not inline drawtext — is what
+    // keeps real narration text out of the command string entirely (a
+    // real render was rejected by upload-post.com's command filter over
+    // an ordinary word, see that function's header). The ASS file is
+    // built and uploaded here (not inside avMerger.ts) for the same
+    // reason the mux pass's output is re-hosted at a temp path first: this
+    // provider's `files` field takes fetchable URLs, not raw content.
+    const assContent = buildCaptionAssFile(captionRow?.timing_data, aspectRatio)
     let finalBuffer = muxOutcome.fileBuffer
     // captionElapsedMs stays null (not 0) when there were no cues, so the
     // success snapshot below can tell "no caption pass ran" apart from "the
@@ -341,13 +344,16 @@ export async function runRenderLanguageTrack(
     // whether it's specifically the caption pass (re-encoding the WHOLE
     // merged video, not just per-scene clips) that risks the ceiling.
     let captionElapsedMs: number | null = null
-    if (cues.length > 0) {
-      const muxTempUrl = await uploader.uploadBuffer(
-        `${pipeline.job_id}/${track.language}-mux-tmp.mp4`,
-        muxOutcome.fileBuffer,
-        'video/mp4',
-      )
-      const captionJobRef = await avMerger.submitCaptionBurn(muxTempUrl, captionRow?.timing_data, aspectRatio)
+    if (assContent) {
+      const [muxTempUrl, assFileUrl] = await Promise.all([
+        uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-mux-tmp.mp4`, muxOutcome.fileBuffer, 'video/mp4'),
+        uploader.uploadBuffer(
+          `${pipeline.job_id}/${track.language}-captions-tmp.ass`,
+          Buffer.from(assContent, 'utf-8'),
+          'text/plain',
+        ),
+      ])
+      const captionJobRef = await avMerger.submitCaptionBurn(muxTempUrl, assFileUrl)
       const captionOutcome = await pollUntilDone(avMerger, captionJobRef, 'caption')
       if (!('fileBuffer' in captionOutcome)) {
         const detail = 'failed' in captionOutcome ? captionOutcome.detail : 'FFmpeg caption pass poll timed out'

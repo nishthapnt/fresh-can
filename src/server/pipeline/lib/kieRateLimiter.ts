@@ -1,6 +1,6 @@
 // Throttles new-generation-request submissions to KIE.ai — Flux Kontext
-// (KieImageGenerator), Kling image-to-video (KieVideoGenerator), and
-// nano-banana-2 (NanoBananaImageGenerator) all share one KIE.ai account/API
+// (KieImageGenerator), Seedance 1.5 Pro image-to-video (KieVideoGenerator),
+// and nano-banana-2 (NanoBananaImageGenerator) all share one KIE.ai account/API
 // key, so they share one budget here too. Matches KIE's documented
 // account-wide limit (2026-09-14, KIE.ai "Rate Limits & Concurrency"): up to
 // 20 new generation requests per 10 seconds, with 100+ concurrent running

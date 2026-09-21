@@ -128,15 +128,15 @@ describe('KieImageGenerator (Flux Kontext — docs.kie.ai)', () => {
   })
 })
 
-describe('KieVideoGenerator (Kling 2.6 image-to-video — docs.kie.ai/market)', () => {
-  it('submit() sends model=kling-2.6/image-to-video with the scene image in image_urls and sound=false', async () => {
+describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/market)', () => {
+  it('submit() sends model=bytedance/seedance-1.5-pro with the scene image in input_urls, resolution=720p, and generate_audio=false', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       capturedBody = init?.body as string
       return {
         ok: true,
         status: 200,
-        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'task_kling_1' } }),
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'task_seedance_1' } }),
         text: async () => '',
       }
     }) as unknown as typeof fetch
@@ -145,15 +145,18 @@ describe('KieVideoGenerator (Kling 2.6 image-to-video — docs.kie.ai/market)', 
       prompt: 'the truck pulls up to the curb',
       referenceImageUrl: 'https://example.com/scene-1.png',
       durationSeconds: '5',
+      aspectRatio: '9:16',
     })
-    expect(ref.providerRef).toBe('task_kling_1')
+    expect(ref.providerRef).toBe('task_seedance_1')
     expect(JSON.parse(capturedBody!)).toEqual({
-      model: 'kling-2.6/image-to-video',
+      model: 'bytedance/seedance-1.5-pro',
       input: {
         prompt: 'the truck pulls up to the curb',
-        image_urls: ['https://example.com/scene-1.png'],
-        sound: false,
-        duration: '5',
+        input_urls: ['https://example.com/scene-1.png'],
+        aspect_ratio: '9:16',
+        resolution: '720p',
+        generate_audio: false,
+        duration: 5,
       },
     })
   })
@@ -162,7 +165,12 @@ describe('KieVideoGenerator (Kling 2.6 image-to-video — docs.kie.ai/market)', 
     const fetchImpl = mockFetch({ jsonBody: { code: 200, msg: 'success', data: {} } })
     const gen = new KieVideoGenerator('test-key', fetchImpl)
     await expect(
-      gen.submit({ prompt: 'x', referenceImageUrl: 'https://example.com/a.png', durationSeconds: '5' }),
+      gen.submit({
+        prompt: 'x',
+        referenceImageUrl: 'https://example.com/a.png',
+        durationSeconds: '5',
+        aspectRatio: '9:16',
+      }),
     ).rejects.toThrow(ProviderCallError)
   })
 

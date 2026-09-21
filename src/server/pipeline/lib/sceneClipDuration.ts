@@ -1,16 +1,19 @@
 // Kling 2.6 only accepts "5" or "10" — round the scene's planned budget to
 // whichever is closer, per ARCHITECTURE.MD §4.2's "duration is a budget,
-// not an exact figure" framing. Pulled out of generateSceneVisual.ts
-// (2026-09-19) into a shared constant so renderLanguageTrack.ts's
-// per-scene duration-match pass (avMerger.ts's
-// buildSceneDurationMatchCommand) can recompute the SAME clip duration a
-// scene's video was actually generated at, without probing the file —
-// Kling/Hailuo reliably render at the exact duration requested, so this
-// function's output IS the real clip length. The two call sites must stay
-// in lockstep (this is what generateSceneVisual.ts requests from KIE.ai;
-// renderLanguageTrack.ts needs to know what it got back), which is
-// exactly the kind of two-call-site drift risk this codebase already
-// pulls constants out for (see ASPECT_RATIO_RESOLUTIONS's own history).
+// not an exact figure" framing. Kept as this same '5'|'10' bucketing after
+// the 2026-09-21 swap to Seedance 1.5 Pro (which would accept any 4-12s
+// value) so the model swap didn't also require touching this logic — see
+// kie.ts's KieVideoGenerator header. Only ever used now to build the
+// REQUEST sent to generateSceneVisual.ts's video-generation call — nothing
+// downstream trusts this as the clip's real, actual generated length
+// anymore. It used to also be (2026-09-19 - 2026-09-21) recomputed by
+// renderLanguageTrack.ts's per-scene duration-match pass on the assumption
+// that Kling/Hailuo's response reliably matched the request exactly; that
+// assumption held for Kling but broke for Seedance (real clips can come
+// back a different length than requested), which surfaced as a real
+// caption/audio desync — see avMerger.ts's buildSceneDurationMatchCommand
+// header for the fix (it no longer takes or assumes any "current" clip
+// duration at all).
 export function pickClipDurationSeconds(targetDurationMs: number): '5' | '10' {
   return targetDurationMs > 7500 ? '10' : '5'
 }

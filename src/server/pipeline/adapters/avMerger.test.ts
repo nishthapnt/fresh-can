@@ -3,7 +3,8 @@ import {
   buildVideoConcatCommand,
   buildAudioConcatCommand,
   buildMuxCommand,
-  buildCaptionCommand,
+  buildCaptionAssFile,
+  buildCaptionBurnCommand,
   buildScaleCommand,
   buildSceneDurationMatchCommand,
   normalizeCaptionCues,
@@ -74,43 +75,45 @@ describe('buildAudioConcatCommand', () => {
 })
 
 describe('buildMuxCommand', () => {
-  it('takes the video and audio URLs as its two inputs, remuxed via -c copy', () => {
+  it('takes the video and audio URLs as its two inputs, re-encoded (fade requires it, unlike the old -c copy remux)', () => {
     const { files, fullCommand, outputExtension } = buildMuxCommand(
       'https://example.com/video.mp4',
       'https://example.com/audio.mp4',
+      10,
     )
     expect(files).toEqual(['https://example.com/video.mp4', 'https://example.com/audio.mp4'])
     expect(fullCommand).toContain('-i {input0} -i {input1}')
-    expect(fullCommand).toContain('-c copy')
+    expect(fullCommand).toContain('-c:v libx264')
+    expect(fullCommand).toContain('-c:a aac')
     expect(fullCommand).toContain('-shortest')
     expect(outputExtension).toBe('mp4')
   })
 
-  it('never contains a semicolon or filter_complex (no filtergraph at all)', () => {
-    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4')
+  it('fades video and audio to black/silence over the last 0.6s of the real total duration — regression for a real render ending abruptly, mid-motion', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
+    expect(fullCommand).toContain('fade=t=out:st=9.40:d=0.60')
+    expect(fullCommand).toContain('afade=t=out:st=9.40:d=0.60')
+  })
+
+  it('never fades before 0 even for a total duration shorter than the fade window', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 0.3)
+    expect(fullCommand).toContain('st=0.00')
+  })
+
+  it('never contains a semicolon or filter_complex (single -vf/-af each, no filtergraph)', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
     expect(fullCommand).not.toContain(';')
     expect(fullCommand).not.toContain('-filter_complex')
   })
 })
 
-describe('buildCaptionCommand', () => {
-  it('throws when there are no caption cues', () => {
-    expect(() => buildCaptionCommand('https://example.com/merged.mp4', { not: 'an array' })).toThrow()
-    expect(() => buildCaptionCommand('https://example.com/merged.mp4', undefined)).toThrow()
+describe('buildCaptionAssFile', () => {
+  it('returns null when there are no caption cues', () => {
+    expect(buildCaptionAssFile({ not: 'an array' })).toBeNull()
+    expect(buildCaptionAssFile(undefined)).toBeNull()
   })
 
-  it('takes the merged video as its sole input and passes audio through with -c:a copy', () => {
-    const words = [{ text: 'hello', start: 0, end: 400 }]
-    const { files, fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
-    expect(files).toEqual(['https://example.com/merged.mp4'])
-    // Bare {input}, not {input0} — confirmed live that upload-post.com's
-    // single-file code path rejects an indexed placeholder outright.
-    expect(fullCommand).toContain('-i {input}')
-    expect(fullCommand).not.toContain('{input0}')
-    expect(fullCommand).toContain('-c:a copy')
-  })
-
-  it('chains drawtext filters for caption cues via -vf, chunked into lines, in timeline order', () => {
+  it('emits Dialogue events for caption cues, chunked into lines, in timeline order', () => {
     const words = [
       { text: 'hello', start: 0, end: 400 },
       { text: 'world', start: 400, end: 800 },
@@ -121,48 +124,38 @@ describe('buildCaptionCommand', () => {
       { text: 'today', start: 2100, end: 2400 },
       { text: 'and', start: 2400, end: 2500 },
     ]
-    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
+    const ass = buildCaptionAssFile(words)
     // Width-aware chunking (2026-09-19) on the default 9:16 frame wraps
     // this into 3 lines, not a flat "7 words per line" split — see the
-    // dedicated describe block below for the regression this replaced.
-    expect(fullCommand).toContain("drawtext=text='hello world this is'")
-    expect(fullCommand).toContain("drawtext=text='fresh-can foods today'")
-    expect(fullCommand).toContain("drawtext=text='and'")
-    expect(fullCommand).toContain('-vf "')
+    // dedicated normalizeCaptionCues describe block for the regression
+    // this replaced.
+    expect(ass).toContain('hello world this is')
+    expect(ass).toContain('fresh-can foods today')
+    expect(ass).toMatch(/Dialogue:.*,and\n?$/)
+    expect(ass).toContain('[Events]')
   })
 
-  it('escapes colons and single quotes in caption text', () => {
-    // Regression test: the single-quote escape used to have an extra
-    // backslash ('\\'' instead of ffmpeg's real '\'' close-escape-reopen
-    // sequence — confirmed broken live, a real caption with an apostrophe
-    // ("Fresh-CAN's") rendered the REST of that drawtext filter's own
-    // options (fontcolor=...:enable=between(...)) as literal on-screen
-    // text instead of applying them, because the quote never actually
-    // closed and reopened.
+  it('never needs escaping for apostrophes/colons — regression for the whole class of drawtext-escaping bugs this rewrite removes (a real caption with an apostrophe used to break the rest of that filter)', () => {
     const words = [{ text: "it's: fresh", start: 0, end: 500 }]
-    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
-    expect(fullCommand).toContain("it'\\''s\\: fresh")
+    const ass = buildCaptionAssFile(words)
+    expect(ass).toContain("it's: fresh")
   })
 
-  it('never contains a semicolon or bracket-labeled pads, regardless of cue count', () => {
-    const words = Array.from({ length: 20 }, (_, i) => ({
-      text: `word${i}`,
-      start: i * 300,
-      end: i * 300 + 250,
-    }))
-    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
-    expect(fullCommand).not.toContain(';')
-    expect(fullCommand).not.toContain('[vconcat]')
-    expect(fullCommand).not.toContain('-filter_complex')
+  it('strips literal braces (ASS override-tag delimiters) rather than risk a malformed tag', () => {
+    const words = [{ text: 'a {weird} word', start: 0, end: 500 }]
+    const ass = buildCaptionAssFile(words)
+    expect(ass).toContain('a weird word')
+    expect(ass).not.toContain('{weird}')
   })
 
-  it('caps bitrate instead of using CRF — this pass re-encodes the final render, so an uncapped CRF here could re-inflate an already size-bounded video-concat pass', () => {
+  it('pins PlayResX/PlayResY to the real delivery resolution for the given aspect ratio', () => {
     const words = [{ text: 'hello', start: 0, end: 400 }]
-    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words)
-    expect(fullCommand).toContain('-b:v 3500k')
-    expect(fullCommand).toContain('-maxrate 3500k')
-    expect(fullCommand).toContain('-bufsize 7000k')
-    expect(fullCommand).not.toContain('-crf')
+    const ass916 = buildCaptionAssFile(words, '9:16')!
+    expect(ass916).toContain('PlayResX: 1080')
+    expect(ass916).toContain('PlayResY: 1920')
+    const ass169 = buildCaptionAssFile(words, '16:9')!
+    expect(ass169).toContain('PlayResX: 1920')
+    expect(ass169).toContain('PlayResY: 1080')
   })
 
   it('wraps into MORE, shorter lines on the narrower 9:16 frame than on the wider 16:9 frame, for the same words', () => {
@@ -180,22 +173,44 @@ describe('buildCaptionCommand', () => {
       { text: 'food', start: 2200, end: 2400 },
       { text: 'insecurity', start: 2400, end: 3000 },
     ]
-    const narrow = buildCaptionCommand('https://example.com/merged.mp4', words, '9:16')
-    const wide = buildCaptionCommand('https://example.com/merged.mp4', words, '16:9')
-    const countDrawtext = (cmd: string) => cmd.split('drawtext=').length - 1
-    expect(countDrawtext(narrow.fullCommand)).toBeGreaterThan(countDrawtext(wide.fullCommand))
+    const narrow = buildCaptionAssFile(words, '9:16')!
+    const wide = buildCaptionAssFile(words, '16:9')!
+    const countDialogues = (ass: string) => ass.split('Dialogue:').length - 1
+    expect(countDialogues(narrow)).toBeGreaterThan(countDialogues(wide))
   })
 
-  it('shrinks fontsize only for a single word too long to fit on its own line, never for an ordinary short cue', () => {
+  it('shrinks fontsize (via an inline {\\fsN} override) only for a single word too long to fit on its own line, never for an ordinary short cue', () => {
     const longWord = 'a'.repeat(60) // long enough to exceed even the widest (16:9) safe line width alone
-    const words = [{ text: longWord, start: 0, end: 1000 }]
-    const { fullCommand } = buildCaptionCommand('https://example.com/merged.mp4', words, '9:16')
-    expect(fullCommand).toContain(`drawtext=text='${longWord}'`)
-    expect(fullCommand).not.toContain('fontsize=h*0.033')
+    const long = buildCaptionAssFile([{ text: longWord, start: 0, end: 1000 }], '9:16')!
+    expect(long).toContain(longWord)
+    expect(long).toMatch(/\{\\fs\d+\}a+/)
 
-    const shortWords = [{ text: 'hello', start: 0, end: 400 }]
-    const { fullCommand: shortCommand } = buildCaptionCommand('https://example.com/merged.mp4', shortWords, '9:16')
-    expect(shortCommand).toContain('fontsize=h*0.033')
+    const short = buildCaptionAssFile([{ text: 'hello', start: 0, end: 400 }], '9:16')!
+    expect(short).not.toContain('\\fs')
+  })
+})
+
+describe('buildCaptionBurnCommand', () => {
+  it('takes the merged video and ASS file as two inputs, burns via the subtitles filter, and passes audio through with -c:a copy', () => {
+    const { files, fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
+    expect(fullCommand).toContain('-i {input0}')
+    expect(fullCommand).toContain('subtitles={input1}')
+    expect(fullCommand).toContain('-c:a copy')
+  })
+
+  it('never contains a semicolon or bracket-labeled pads', () => {
+    const { fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(fullCommand).not.toContain(';')
+    expect(fullCommand).not.toContain('-filter_complex')
+  })
+
+  it('caps bitrate instead of using CRF — this pass re-encodes the final render, so an uncapped CRF here could re-inflate an already size-bounded video-concat pass', () => {
+    const { fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(fullCommand).toContain('-b:v 3500k')
+    expect(fullCommand).toContain('-maxrate 3500k')
+    expect(fullCommand).toContain('-bufsize 7000k')
+    expect(fullCommand).not.toContain('-crf')
   })
 })
 
@@ -261,7 +276,6 @@ describe('buildSceneDurationMatchCommand', () => {
   it('takes the clip URL as its sole input and drops audio', () => {
     const { files, outputExtension, fullCommand } = buildSceneDurationMatchCommand(
       'https://example.com/clip.mp4',
-      5,
       8,
     )
     expect(files).toEqual(['https://example.com/clip.mp4'])
@@ -269,29 +283,35 @@ describe('buildSceneDurationMatchCommand', () => {
     expect(fullCommand).toContain('-an')
   })
 
-  it('pads with the SHORTFALL (not the target) when the clip is shorter than the audio, then hard-trims to the target', () => {
-    // Regression case for the real drift this fixes: a 5s clip against an
-    // 8s real narration needs 3s of held-frame padding, landing on exactly
-    // 8s — not 8s of padding (which would overshoot to 13s).
-    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 5, 8)
-    expect(fullCommand).toContain('stop_duration=3.00')
+  it('always pads by the FULL target duration and hard-trims to it — regression for a real caption/audio desync caused by assuming the input clip\'s real length instead', () => {
+    // Old behavior computed stop_duration as a SHORTFALL against an assumed
+    // input length (pickClipDurationSeconds's '5'/'10' bucket) — correct
+    // only when that assumption held (true for Kling/Hailuo, NOT true for
+    // Seedance 1.5 Pro, confirmed live 2026-09-21). Padding by the full
+    // target instead means this function is correct regardless of the real
+    // input length, which it no longer takes as a parameter at all: the
+    // padded clip is always >= targetDurationSeconds long, and -t always
+    // trims it to exactly that — any padding beyond what was actually
+    // needed is just a content-free hold on the clip's own last frame.
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8)
+    expect(fullCommand).toContain('stop_duration=8.00')
     expect(fullCommand).toContain('-t 8.00')
   })
 
-  it('adds no padding (stop_duration=0) when the clip is already longer than the audio — -t alone trims it', () => {
-    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 10, 6)
-    expect(fullCommand).toContain('stop_duration=0.00')
+  it('pads by the full target even for a small target — still correct whether the real input clip is longer or shorter than it', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 6)
+    expect(fullCommand).toContain('stop_duration=6.00')
     expect(fullCommand).toContain('-t 6.00')
   })
 
   it('uses the bare {input} placeholder, not {input0}', () => {
-    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 5, 8)
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8)
     expect(fullCommand).toContain('-i {input}')
     expect(fullCommand).not.toContain('{input0}')
   })
 
   it('never contains a semicolon', () => {
-    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 5, 8)
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8)
     expect(fullCommand).not.toContain(';')
   })
 })
@@ -348,11 +368,12 @@ describe('UploadPostAVMerger', () => {
       return { ok: true, status: 202, json: async () => ({ job_id: 'job-1m' }), text: async () => '' }
     }) as unknown as typeof fetch
     const merger = new UploadPostAVMerger('secret-key', fetchImpl)
-    const ref = await merger.submitMux('https://example.com/v.mp4', 'https://example.com/a.mp4')
+    const ref = await merger.submitMux('https://example.com/v.mp4', 'https://example.com/a.mp4', 10)
     expect(ref.providerRef).toBe('job-1m')
     const body = JSON.parse(capturedBody!)
     expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
     expect(body.full_command).not.toContain(';')
+    expect(body.full_command).toContain('fade=t=out:st=9.40:d=0.60')
   })
 
   it('submitScale() sends Apikey auth and the built scale command for the given clip/dimensions', async () => {
@@ -373,7 +394,7 @@ describe('UploadPostAVMerger', () => {
     expect(body.full_command).not.toContain(';')
   })
 
-  it('submitSceneDurationMatch() sends Apikey auth and the built duration-match command for the given clip/durations', async () => {
+  it('submitSceneDurationMatch() sends Apikey auth and the built duration-match command for the given clip/target duration', async () => {
     let capturedHeaders: Record<string, string> = {}
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -382,12 +403,12 @@ describe('UploadPostAVMerger', () => {
       return { ok: true, status: 202, json: async () => ({ job_id: 'job-duration-match' }), text: async () => '' }
     }) as unknown as typeof fetch
     const merger = new UploadPostAVMerger('secret-key', fetchImpl)
-    const ref = await merger.submitSceneDurationMatch('https://example.com/clip.mp4', 5, 8)
+    const ref = await merger.submitSceneDurationMatch('https://example.com/clip.mp4', 8)
     expect(ref.providerRef).toBe('job-duration-match')
     expect(capturedHeaders.Authorization).toBe('Apikey secret-key')
     const body = JSON.parse(capturedBody!)
     expect(body.files).toEqual(['https://example.com/clip.mp4'])
-    expect(body.full_command).toContain('stop_duration=3.00')
+    expect(body.full_command).toContain('stop_duration=8.00')
     expect(body.full_command).toContain('-t 8.00')
   })
 
@@ -397,19 +418,17 @@ describe('UploadPostAVMerger', () => {
     await expect(merger.submitVideoConcat(ONE_SCENE)).rejects.toThrow(ProviderCallError)
   })
 
-  it('submitCaptionBurn() sends the merged video URL as the sole file and a semicolon-free command', async () => {
+  it('submitCaptionBurn() sends the merged video and ASS file URLs and a semicolon-free command', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       capturedBody = init?.body as string
       return { ok: true, status: 202, json: async () => ({ job_id: 'job-2' }), text: async () => '' }
     }) as unknown as typeof fetch
     const merger = new UploadPostAVMerger('secret-key', fetchImpl)
-    const ref = await merger.submitCaptionBurn('https://example.com/merged.mp4', [
-      { text: 'hi', start: 0, end: 300 },
-    ])
+    const ref = await merger.submitCaptionBurn('https://example.com/merged.mp4', 'https://example.com/captions.ass')
     expect(ref.providerRef).toBe('job-2')
     const body = JSON.parse(capturedBody!)
-    expect(body.files).toEqual(['https://example.com/merged.mp4'])
+    expect(body.files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
     expect(body.full_command).not.toContain(';')
   })
 

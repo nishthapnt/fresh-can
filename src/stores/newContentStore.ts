@@ -15,10 +15,10 @@ export type ImageStyle  = 'photo' | 'infographic'
 // default) is converted to null before persisting.
 export type ContentAngle = 'auto' | 'community_story' | 'behind_scenes' | 'fresh_produce' | 'stat_fact' | 'call_to_action'
 // video only. Passed straight through to Flux Kontext's aspectRatio param
-// for character-ref/scene-image generation — Kling image-to-video has no
-// aspect-ratio param of its own, it inherits whatever reference image it's
-// animating, so this one setting is enough to get matching video clips too.
-// Default '9:16': the native shape for TikTok/Reels/Shorts.
+// for character-ref/scene-image generation, and (since the 2026-09-21
+// Seedance 1.5 Pro swap) to KieVideoGenerator's own required aspect_ratio
+// input too — see kie.ts's KieVideoGenerator header. Default '9:16': the
+// native shape for TikTok/Reels/Shorts.
 export type AspectRatio = '9:16' | '1:1' | '16:9'
 
 const SESSION_KEY = 'fc_new_content'

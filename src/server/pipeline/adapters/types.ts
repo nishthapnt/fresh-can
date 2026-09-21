@@ -157,6 +157,12 @@ export interface VideoGenerationInput {
    *  keeping the bucketing means swapping the underlying model doesn't also
    *  require touching the scene-duration-picking logic. */
   durationSeconds: '5' | '10'
+  /** content_jobs.aspect_ratio, the same value already sent to Flux
+   *  Kontext for character-ref/scene-image generation. Kling never needed
+   *  this (it inherited the shape of whatever frame it animated), but
+   *  Seedance 1.5 Pro requires an explicit `aspect_ratio` input — see
+   *  kie.ts's KieVideoGenerator header. */
+  aspectRatio: '9:16' | '1:1' | '16:9'
 }
 
 export interface VideoJobRef {
@@ -221,30 +227,31 @@ export type AVMergeResult =
  *  silently truncates the resulting audio to ~2 seconds regardless of
  *  scene count (confirmed live 2026-09-12), so video and audio are instead
  *  concatenated INDEPENDENTLY (submitVideoConcat/submitAudioConcat) and
- *  reunited by a plain -c copy remux (submitMux). See renderLanguageTrack.ts
- *  for the full orchestration (including the temp re-uploads needed
- *  between passes, since this provider's `files` field takes fetchable
- *  URLs, not raw bytes). */
+ *  reunited by a fade-to-black/silence remux (submitMux). See
+ *  renderLanguageTrack.ts for the full orchestration (including the temp
+ *  re-uploads needed between passes, since this provider's `files` field
+ *  takes fetchable URLs, not raw bytes). */
 export interface AVMerger {
   submitVideoConcat(input: AVMergeInput): Promise<AVMergeJobRef>
   submitAudioConcat(input: AVMergeInput): Promise<AVMergeJobRef>
   /** videoUrl/audioUrl are submitVideoConcat's/submitAudioConcat's own
    *  outputs, re-hosted by the caller so this provider can fetch them as
-   *  plain input files. */
-  submitMux(videoUrl: string, audioUrl: string): Promise<AVMergeJobRef>
+   *  plain input files. totalDurationSeconds is the track's real total
+   *  narration length (sum of every scene's real audio duration) — see
+   *  avMerger.ts's buildMuxCommand for why it's needed (fades the last
+   *  ~0.6s to black/silence, the deterministic half of the "abrupt
+   *  ending" fix). */
+  submitMux(videoUrl: string, audioUrl: string, totalDurationSeconds: number): Promise<AVMergeJobRef>
   /** Only ever called when there are caption cues to burn in — a render
    *  with no captions stops after the mux pass (its output IS the final
-   *  render). mergedVideoUrl is the mux pass's output, re-hosted by the
-   *  caller so this provider can fetch it as a plain input file.
-   *  `aspectRatio` (content_jobs.aspect_ratio, default '9:16') resolves to
-   *  the job's real delivery resolution so caption lines wrap against the
-   *  actual frame width instead of a fixed word count — see
-   *  avMerger.ts's buildCaptionCommand for why this matters. */
-  submitCaptionBurn(
-    mergedVideoUrl: string,
-    captionTimingData: unknown,
-    aspectRatio?: '9:16' | '1:1' | '16:9',
-  ): Promise<AVMergeJobRef>
+   *  render). mergedVideoUrl is the mux pass's output; assFileUrl is the
+   *  caller's own upload of buildCaptionAssFile's generated ASS subtitle
+   *  content (see avMerger.ts's buildCaptionAssFile for why caption text
+   *  lives in an uploaded FILE here, not inline in the command string —
+   *  2026-09-21, a real render was rejected by upload-post.com's command
+   *  filter over an ordinary narration word). Both URLs re-hosted by the
+   *  caller so this provider can fetch them as plain input files. */
+  submitCaptionBurn(mergedVideoUrl: string, assFileUrl: string): Promise<AVMergeJobRef>
   /** Matches ONE scene's shared video clip to the CALLING track's real
    *  narration length (hold last frame / trim — see avMerger.ts's
    *  buildSceneDurationMatchCommand) before that scene's clip is fed into
@@ -255,12 +262,13 @@ export interface AVMerger {
    *  generates it. Keeping them on separate interfaces documents which
    *  step actually uses which capability, same reasoning SceneClipScaler's
    *  own header gives for being split from this interface in the first
-   *  place. */
-  submitSceneDurationMatch(
-    clipUrl: string,
-    currentDurationSeconds: number,
-    targetDurationSeconds: number,
-  ): Promise<AVMergeJobRef>
+   *  place.
+   *
+   *  No `currentDurationSeconds` parameter (removed 2026-09-21) — the clip's
+   *  real input length is deliberately never assumed here; see
+   *  buildSceneDurationMatchCommand's header for the caption/audio desync
+   *  this fixed. */
+  submitSceneDurationMatch(clipUrl: string, targetDurationSeconds: number): Promise<AVMergeJobRef>
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }
 
@@ -278,7 +286,7 @@ export interface AVMerger {
  *
  * Exists to keep concatenated/rendered output within Supabase Storage's
  * project-wide file size limit without a perceptible quality loss: Flux
- * Kontext/Kling's native output for a given aspect ratio already targets
+ * Kontext/Seedance's native output for a given aspect ratio already targets
  * roughly the right pixel budget (kie.ts's own aspectRatio param), but can
  * still land a bit over it — confirmed live 2026-09-13, a real 8-scene
  * 9:16 render's un-downscaled clips summed to 140.6MB and failed to

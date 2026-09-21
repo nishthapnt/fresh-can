@@ -581,6 +581,79 @@ describe('composeSceneImagePrompt', () => {
     const scene = composeSceneImagePrompt(testBrand, baseJob)
     expect(scene.prompt).toContain('never as the reason this scene exists')
   })
+
+  it("never exceeds KieImageGenerator's real ~3000-char prompt cap, even with a maximally long visual_description/shot_notes/regenInstructions — regression for \"The prompt word cannot exceed 3000 characters\" (confirmed live against KIE.ai, recurred 3 times before this guard was added)", () => {
+    // Against the REAL BRAND_PROFILE, not testBrand's short placeholders —
+    // the fixed overhead that matters in production is Fresh-CAN's real,
+    // already-hand-trimmed prose (see containerDescriptor's own comment
+    // history in fresh-can.ts for why hand-trimming alone isn't durable).
+    const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(30)
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-length-guard',
+      sceneNumber: 3,
+      visualDescription: `The family approaches the Fresh-CAN truck. ${longText}`,
+      shotNotes: longText,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+      regenInstructions: longText,
+    })
+    // showSubject=true (the larger-fixed-overhead branch) — confirms this
+    // exercised the containerDescriptor path, not the cheaper NO_SUBJECT one.
+    expect(scene.referenceImageUrl).toBeDefined()
+    expect(scene.prompt.length).toBeLessThanOrEqual(3000)
+    // The fixed safety/brand clauses must survive truncation fully intact —
+    // only the free-text fields are ever allowed to shrink.
+    expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
+    expect(scene.prompt).toContain('ONLY entrance')
+    expect(scene.prompt).toContain('cinematographic craft')
+  })
+
+  it('does not truncate a normal, realistic scene at all', () => {
+    const visualDescription =
+      'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear doors'
+    const shotNotes = 'Slow push-in, shallow depth of field'
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-length-guard-3',
+      sceneNumber: 1,
+      visualDescription,
+      shotNotes,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+    })
+    expect(scene.prompt).toContain(visualDescription)
+    expect(scene.prompt).toContain(shotNotes)
+  })
+
+  it('includes the realistic-hands/skin guardrail when there is room for it', () => {
+    // A minimal scene (short visual_description, no shot_notes/regen) —
+    // real headroom under the cap, so this quality nice-to-have (unlike
+    // the safety-critical guardrails above) fits without needing to drop
+    // it. See REALISTIC_PEOPLE's own comment for why it's NOT protected
+    // the way FOOD_MUST_LOOK_CLEAN etc. are.
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-realism-1',
+      sceneNumber: 1,
+      visualDescription: 'A woman smiles at the camera.',
+      shotNotes: null,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+    })
+    expect(scene.prompt).toContain('Hands must be anatomically correct')
+  })
+
+  it('drops the realistic-hands/skin guardrail (never the real scene content) when a normal scene leaves no room for it — regression for a first pass that made it unconditional and left ~6 chars of headroom for ANY real scene', () => {
+    const visualDescription =
+      'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear doors'
+    const shotNotes = 'Slow push-in, shallow depth of field'
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-realism-2',
+      sceneNumber: 1,
+      visualDescription,
+      shotNotes,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+    })
+    expect(scene.prompt).toContain(visualDescription)
+    expect(scene.prompt).toContain(shotNotes)
+    expect(scene.prompt).not.toContain('Hands must be anatomically correct')
+    expect(scene.prompt.length).toBeLessThanOrEqual(3000)
+  })
 })
 
 describe('composeSceneVideoPrompt', () => {
@@ -611,8 +684,52 @@ describe('composeSceneVideoPrompt', () => {
   it('animates subject action, ambient environmental motion, and camera motion as three distinct layers, never camera as a substitute for scene action', () => {
     const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
     expect(prompt).toContain('three distinct layers')
-    expect(prompt).toContain('steam, wind, moving fabric, shifting light')
+    expect(prompt).toContain('steam, smoke, wind moving hair, fabric, or leaves, water, shifting light')
     expect(prompt).toContain('Camera movement is never a substitute for actual subject or environmental motion')
+  })
+
+  it('forbids illogical motion on static objects (e.g. produce) with no visible cause — regression for real Seedance renders showing vegetables/groceries drifting on their own', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('never motion with no real cause')
+    expect(prompt).toContain('produce, packaged goods, and other solid objects at rest must stay completely still')
+    expect(prompt).toContain('unless a visible hand, wind, or other real force is actually moving them')
+  })
+
+  it("never exceeds Seedance's real ~2500-char video prompt cap, even with a maximally long visual_description/shot_notes", () => {
+    const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(40)
+    const prompt = composeSceneVideoPrompt({ visualDescription: longText, shotNotes: longText })
+    expect(prompt.length).toBeLessThanOrEqual(2500)
+    // The fixed motion-safety clause must survive truncation fully intact.
+    expect(prompt).toContain('never motion with no real cause')
+    expect(prompt).toContain('never a staged product-reveal move')
+  })
+
+  it('does not truncate a normal, realistic scene at all', () => {
+    const visualDescription = 'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear doors'
+    const shotNotes = 'Slow push-in, shallow depth of field'
+    const prompt = composeSceneVideoPrompt({ visualDescription, shotNotes })
+    expect(prompt).toContain(visualDescription)
+    expect(prompt).toContain(shotNotes)
+  })
+
+  it('adds no settle-the-motion instruction for a non-final scene', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null, isFinalScene: false })
+    expect(prompt).not.toContain('FINAL shot')
+  })
+
+  it('asks the FINAL scene to settle its motion into a held ending instead of getting cut off mid-movement — regression for a real render ending abruptly', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null, isFinalScene: true })
+    expect(prompt).toContain('FINAL shot')
+    expect(prompt).toContain('settled, held final beat')
+    expect(prompt).toContain('not get cut off mid-motion')
+  })
+
+  it('never exceeds the char cap even for the FINAL scene with maximally long visual_description/shot_notes', () => {
+    const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(40)
+    const prompt = composeSceneVideoPrompt({ visualDescription: longText, shotNotes: longText, isFinalScene: true })
+    expect(prompt.length).toBeLessThanOrEqual(2500)
+    // The settle-motion clause is fixed content — must survive truncation.
+    expect(prompt).toContain('FINAL shot')
   })
 })
 

@@ -315,6 +315,20 @@ export const videoTrackRender = inngest.createFunction(
     id: 'video-track-render',
     triggers: [{ event: 'content/video.track.render' }],
     concurrency: { key: 'event.data.trackId', limit: 1 },
+    // Added 2026-09-21 — this file's own header ("the Inngest route's
+    // maxDuration must be set high enough to cover a realistic render")
+    // flagged this as a known risk but nothing ever actually set it,
+    // leaving Inngest's own default function-execution ceiling in effect.
+    // Confirmed live the same day: a real render's `render-0` step errored
+    // out after ~4 minutes (well under renderLanguageTrack.ts's own 20-min
+    // POLL_TIMEOUT_MS, so this wasn't that file's own timeout firing) —
+    // right around when a real caption-burn pass first started actually
+    // completing instead of instantly failing validation (see
+    // avMerger.ts's buildCaptionAssFile header for that fix), so total
+    // render wall-clock time only just started exceeding whatever this
+    // ceiling was. 30m gives real headroom over the 20-min per-poll-loop
+    // ceiling render can legitimately take across its several passes.
+    timeouts: { finish: '30m' },
   },
   async ({ event, step }) => {
     const { trackId, pipelineId, jobId } = event.data as {

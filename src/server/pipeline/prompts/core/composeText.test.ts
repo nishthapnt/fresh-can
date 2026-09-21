@@ -353,6 +353,33 @@ describe('composeVideoScriptSystemPrompt', () => {
     const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
     expect(prompt).not.toContain("user's own creative idea")
   })
+
+  it('requires BOTH a genuine connection to Fresh-CAN\'s mission AND an explicit, spoken mention of the Fresh-CAN name — regression for two real generations in a row that had no recognizable connection to the brand (first: none at all; second: the name treated as merely "ideal" and never actually said)', () => {
+    // 2026-09-21, three rounds the same day: (1) pure reassurance ("warmth/
+    // community already qualifies") was too soft — zero connection. (2)
+    // required a connection but called the literal name merely "ideal,
+    // one option among several" — still let the model satisfy it with vague
+    // "fresh/local" language and never say "Fresh-CAN". (3) this version:
+    // the name is now a hard requirement, layered on top of (not instead
+    // of) the substantive mission connection — still distinguished from the
+    // still-forbidden old bug (reciting the mission statement/statistics,
+    // or forcing the vehicle into a scene it doesn't fit).
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).toContain('required, not optional')
+    expect(prompt).toContain('fresh, affordable, local groceries directly into communities')
+    expect(prompt).toContain('the Fresh-CAN name itself must be said explicitly, out loud')
+    expect(prompt).toContain('REQUIRED, not merely ideal')
+    expect(prompt).toContain('never satisfied by "fresh" or ')
+    expect(prompt).toContain('never a slogan, statistic, or pitch stated on top of the scene')
+    // Still coexists with (appears after, never replaces) the original
+    // anti-hijack rule.
+    expect(prompt.indexOf('never a reason to insert brand or mission messaging')).toBeLessThan(
+      prompt.indexOf('does not mean the story can ignore Fresh-CAN'),
+    )
+  })
 })
 
 describe('composeLocalizeScriptSystemPrompt', () => {

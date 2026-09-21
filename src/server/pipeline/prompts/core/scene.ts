@@ -41,6 +41,20 @@ export function isContainerRelevant(text: string, defaultRelevant: boolean): boo
 // constantly and force the truck into scenes that have nothing to do with
 // it — the exact "illogical scene" failure mode this exists to prevent.
 // Only fires on an unambiguous, explicit mention of the unit itself.
+//
+// A 2026-09-21 attempt replaced this with an explicit per-scene
+// `features_unit` field the script-planning LLM would set directly
+// (persisted on a new video_scenes column) — a technically cleaner
+// decision point, but reverted the same day: it needed a schema migration
+// the user explicitly didn't want, and on reflection the real complaint
+// wasn't really about THIS mechanism specifically — whether the truck
+// appears is fine to keep deriving from the script's own words. The actual
+// fix for "videos read as either entirely about the truck or completely
+// unrelated to the brand" belongs in composeVideoScriptSystemPrompt
+// instead: the whole STORY should read as something that fits a grocery-
+// access brand's own social feed (theme: food, family, community, care),
+// independent of whether this specific keyword match fires on any given
+// scene. See that function's own comment for the actual fix.
 const FRESH_CAN_UNIT_MENTION =
   /\b(fresh-?can|the unit|the truck|the container|mobile grocery|mobile store|mobile unit|qr code)\b/i
 

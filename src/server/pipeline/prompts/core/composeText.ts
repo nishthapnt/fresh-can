@@ -235,7 +235,46 @@ export interface VideoScriptSystemPromptOptions {
  * exists so this branch can quote a short, purely-factual line instead —
  * the same "remove the competing content, don't just reframe it" judgment
  * already applied to the category brief/statistics above.
+ *
+ * 2026-09-21: the anti-hijack fix above worked almost too well — real user
+ * feedback was that generated videos now read as either forcibly about the
+ * truck (whenever a scene happened to mention it) or with NO connection to
+ * the brand campaign at all, nothing recognizable as belonging to Fresh-
+ * CAN's own social feed. First attempt at CAMPAIGN_FIT (later the same day)
+ * was pure reassurance ("real warmth/community already qualifies, nothing
+ * needs to be added") — too soft: the very next real generation still had
+ * zero recognizable connection to Fresh-CAN at all, just the scene idea
+ * with no brand thread anywhere. Second attempt required a genuine
+ * CONNECTION but treated the literal brand name as merely "ideal," one of
+ * several equally-valid options alongside generic "fresh/local" language —
+ * still too easy for the model to satisfy with vague food-freshness talk
+ * and never actually say "Fresh-CAN." Rewritten a third time: the name
+ * itself is now a hard requirement, not a preference, layered on TOP of
+ * (not instead of) the substantive connection to Fresh-CAN's real mission
+ * — a bare name-drop with no real thematic tie-in doesn't satisfy this
+ * either. The key distinction that keeps this from reopening the hijack
+ * bug: MESSAGING (reciting the mission statement, statistics, a slogan,
+ * forcing the vehicle into a scene it doesn't fit) is still forbidden; ONE
+ * natural, specific, spoken mention of the name itself, grounded in a
+ * genuine narrative connection to what Fresh-CAN actually does, is now
+ * required.
  */
+const CAMPAIGN_FIT =
+  'That does not mean the story can ignore Fresh-CAN, though — every video is made for Fresh-CAN\'s own brand ' +
+  'campaign, so it must still genuinely connect to Fresh-CAN\'s real mission and goals, no matter how creative ' +
+  'the idea gets. This is required, not optional, and has two parts, both required together: (1) find the ' +
+  'honest, natural bridge between the idea above and what Fresh-CAN actually does — bringing fresh, ' +
+  'affordable, local groceries directly into communities — and let it show through the story\'s own real ' +
+  'details: food that reads as genuinely fresh and local, a real neighbourhood or community feeling, people ' +
+  'getting good food easily; and (2) the Fresh-CAN name itself must be said explicitly, out loud, somewhere in ' +
+  'the narration across the video — this is REQUIRED, not merely ideal, and is never satisfied by "fresh" or ' +
+  '"local" language alone, no matter how strong the thematic connection is otherwise. Find the single most ' +
+  'natural moment already in the story for it — wherever food, its origin, a delivery, or a visit is already ' +
+  'part of the scene — and have the narration name Fresh-CAN there directly, the way a real person would ' +
+  'actually say it out loud in that moment. The difference from reciting the mission statement or forcing the ' +
+  'vehicle in: this is ONE specific, natural mention of the name, grounded in the story\'s own real details, ' +
+  'never a slogan, statistic, or pitch stated on top of the scene.'
+
 export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoScriptSystemPromptOptions): string {
   const preamble = opts.sceneNotes
     ? `Build this video's story and every one of its scenes around the user's own creative idea: ` +
@@ -244,7 +283,7 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
       `That is background context for tone and brand accuracy only: a fixed constraint on how the brand's ` +
       `vehicle, app, or other branding must look or sound IF the idea above genuinely calls for them, never a ` +
       `second angle, and never a reason to insert brand or mission messaging into a scene the idea doesn't ` +
-      `call for. Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
+      `call for. ${CAMPAIGN_FIT} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
     : brandContext(brand, opts.category) + statsLine(brand) + '\n\n'
 
   return (
@@ -295,7 +334,10 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'to exist; if removing it would not harm the story, do not add it. Maintain natural continuity across ' +
     'scenes that share the same moment, characters, or place — the same people, their clothing, and the ' +
     'setting should carry between consecutive scenes describing that same moment, unless the story moves ' +
-    'somewhere new.' +
+    'somewhere new. The FINAL scene must land the video on a genuine sense of closure, not cut off mid-action ' +
+    "— its action should resolve into a settled, natural concluding beat (a finished gesture, a held look, a " +
+    'moment landing) appropriate to the story\'s own scale, never a big staged finale or a jump straight from ' +
+    'motion to black.' +
     (opts.sceneNotes
       ? ' Every scene must still serve the creative idea given at the very start of this prompt — never drift ' +
         'into generic brand, mission, or food-desert messaging unless that idea itself genuinely calls for it, ' +

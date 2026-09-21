@@ -81,17 +81,29 @@ import type { BrandProfile } from '../types'
 // exterior's own framing strings (below) now explicitly call out and
 // disregard every one of those other real elements, whichever photo is
 // used as the edit source.
+// Trimmed a third time, 2026-09-21 (mechanical only — no rule, enumerated
+// specific, or test-asserted anchor phrase dropped) after a real generation
+// hit KieImageGenerator's 3000-char cap yet again with composeSceneImagePrompt's
+// fixed overhead still measuring ~2793 chars, leaving only ~200 chars for
+// mood/scene/shot-notes/regen text combined. Two cuts, both removing pure
+// restatement rather than any constraint: "— always this exact maroon-red"
+// (the color-invariance rule is already covered by the later "Keep this
+// structure, color... identical every time" sentence) and ", under any
+// circumstance" / ", always" (both redundant emphasis on an already-absolute
+// NEVER/ONLY rule). See composeSceneImagePrompt's own header in
+// core/compose.ts for why mechanical trimming alone can't be the real fix —
+// this pass is paired with a hard length cap there.
 const CONTAINER_DESCRIPTOR =
   'The Fresh-CAN mobile grocery store: a white box truck with a dark maroon-red steel cargo container ' +
-  'mounted on back — always this exact maroon-red. The cab is plain white, unbranded; all branding is on ' +
+  'mounted on back. The cab is plain white, unbranded; all branding is on ' +
   'the container only. The white "Fresh [maple leaf icon] CAN" wordmark, never distorted, appears ONLY on ' +
   'the two side panels, centered, once per side, and nowhere else on the vehicle. No other text, ' +
   'graphics, decals, stripes, URLs, or vents anywhere on the container. The front face (where it meets ' +
   'the cab) and the rear face are both plain maroon-red with no wordmark, signage, or QR code — the ' +
   'rear\'s only feature is its entrance, a black-frame glass double door, flush at bumper height, with no ' +
   'external staircase. NEVER render a door, hatch, customer service window, vent, or any other opening ' +
-  "or fixture on the front face or either side of the container, under any circumstance — the rear " +
-  "double door above is the vehicle's ONLY entrance and ONLY opening, on any face, always, and the only " +
+  "or fixture on the front face or either side of the container — the rear " +
+  "double door above is the vehicle's ONLY entrance and ONLY opening, on any face, and the only " +
   'place customers are ever served. Keep this structure, color, and single side-panel wordmark identical ' +
   'every time. The side panels are the only place the Fresh-CAN logo may appear — never on another ' +
   'vehicle, sign, storefront, or object, unless the scene explicitly calls for one elsewhere.'
@@ -121,7 +133,7 @@ export const BRAND_PROFILE: BrandProfile = {
   // elsewhere in the org) — not invented for this worker.
   missionStatement:
     'Fresh-CAN is a Canadian company that deploys AI-assisted mobile grocery stores — built inside converted ' +
-    'shipping containers — directly into food desert communities across Canada, partnering with local farmers ' +
+    'shipping containers — directly into communities across Canada, partnering with local farmers ' +
     'to stock affordable, fresh produce. Customers use the free Fresh-CAN app to find the nearest unit, scan ' +
     'in with a QR code, shop cashlessly, and leave without a checkout line.',
 
@@ -262,7 +274,7 @@ export const BRAND_PROFILE: BrandProfile = {
     'light grey wood-look laminate flooring and bright overhead fluorescent lighting. Black wire shelving ' +
     'units on one side of the aisle, stocked with bagged snacks and packaged groceries. Black-framed ' +
     'glass-door refrigerated cases on the other side, each topped with a red header sign bearing a white ' +
-    '"Fresh [maple leaf icon] CAN" wordmark, stocked with bottled beverages and fresh salad containers ' +
+    '"Fresh [maple leaf icon] CAN" wordmark, stocked with beverages and fresh salad containers ' +
     '(some containers individually labeled with a small "Fresh CAN" sticker). A stainless steel counter ' +
     'and sink near a plain white door at the far end of the aisle. Keep this exact interior layout, ' +
     'fixtures, and branding identical every time it appears in an image — this is a fixed brand element, ' +
@@ -345,8 +357,19 @@ export const BRAND_PROFILE: BrandProfile = {
     { key: 'urban_daylight', detail: 'Clear daytime light in an urban setting, crisp and modern mood.' },
   ],
 
-  // Real ElevenLabs voice IDs (male voices only, by request — no female
-  // narration voice configured for either language at this time).
+  // Fallback ONLY — real ElevenLabs voice IDs, used by synthesizeVoice.ts
+  // solely when a job has no per-job voiceIdOverride (pre-existing jobs
+  // from before per-job voice selection existed, or a caller that omits
+  // the arg, e.g. videoPipeline.e2e.test.ts). Since 2026-09-17 ("add
+  // per-job voice selection"), every real job carries its own selected
+  // voice on content_jobs.voice_id_en/voice_id_fr — picked from
+  // src/lib/videoVoices.ts's VIDEO_VOICES list (4 male + 4 female per
+  // language) via the dashboard's VoiceCardGroup picker — which
+  // src/inngest/functions/video.ts reads and passes into
+  // synthesizeVoice.ts as voiceIdOverride, always preferred over these two
+  // IDs when present (synthesizeVoice.ts: `voiceIdOverride ??
+  // BRAND_PROFILE.videoVoiceIds?.[track.language]`). These two are each
+  // just one specific male voice, not a brand-wide "male only" policy.
   videoVoiceIds: {
     EN: 'epkQ8pqDcY2DxhmFi8xl',
     FR: 'n2pCwUKS6q9Iur03Rten',

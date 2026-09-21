@@ -326,6 +326,7 @@ async function runSceneVideoClipStep(
   uploader: VideoStorageUploader,
   backoffBaseDelayMs: number,
   scaler: SceneClipScaler,
+  isFinalScene: boolean,
   aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
 ): Promise<boolean> {
   const generation = pipeline.current_generation
@@ -412,6 +413,7 @@ async function runSceneVideoClipStep(
         const prompt = composeSceneVideoPrompt({
           visualDescription: scene.visual_description,
           shotNotes: scene.shot_notes,
+          isFinalScene,
         })
 
         console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
@@ -419,6 +421,7 @@ async function runSceneVideoClipStep(
           prompt,
           referenceImageUrl: sceneImageUrl,
           durationSeconds: pickClipDurationSeconds(scene.target_duration_ms),
+          aspectRatio,
         })
 
         // Persist the task id BEFORE polling — this is the fix. Previously
@@ -647,6 +650,12 @@ export async function runGenerateSceneVisual(
   const generation = pipeline.current_generation
   const scenes = await getVideoScenes(client, pipeline.id)
   if (scenes.length === 0) return { ran: false }
+  // Not "last element of scenes" — getVideoScenes's ordering isn't a
+  // contract this file should depend on. Used to tell
+  // composeSceneVideoPrompt which scene is the video's actual ending, so
+  // it can ask that scene's motion to settle instead of getting cut off
+  // mid-movement — see compose.ts's FINAL_SCENE_SETTLE_CLAUSE.
+  const maxSceneNumber = Math.max(...scenes.map((s) => s.scene_number))
 
   let lastPersistedCount = pipeline.scenes_visuals_ready_count
   let announcedInProgress = pipeline.current_step === 'generating_scene_visuals'
@@ -680,6 +689,7 @@ export async function runGenerateSceneVisual(
           uploader,
           backoffBaseDelayMs,
           scaler,
+          scene.scene_number === maxSceneNumber,
           aspectRatio,
         )
       }

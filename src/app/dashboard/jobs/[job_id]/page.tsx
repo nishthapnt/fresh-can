@@ -779,7 +779,31 @@ function MiniStatusBadge({ status }: { status: string }) {
   )
 }
 
-function VideoTrackCard({ track }: { track: VideoTrackRow }) {
+function VideoTrackCard({ jobId, track }: { jobId: string; track: VideoTrackRow }) {
+  // Self-contained (no lift-to-parent refresh call needed): a successful
+  // retry flips the track's status server-side (waiting_on_shared —
+  // src/app/api/jobs/[jobId]/video/tracks/[lang]/retry/route.ts), and this
+  // page's own videoStatus poll picks that up on its next tick, same as
+  // every other status change already shown here.
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
+
+  const handleRetry = async () => {
+    setRetrying(true)
+    setRetryError(null)
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/video/tracks/${track.language}/retry`, { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `Retry failed (status ${res.status})`)
+      }
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : 'Retry failed')
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   return (
     <Card className="border-gray-200">
       <CardContent className="flex items-center justify-between p-4">
@@ -791,8 +815,17 @@ function VideoTrackCard({ track }: { track: VideoTrackRow }) {
           {track.status === 'failed' && track.last_error && (
             <p className="mt-1 text-xs text-red-600">{track.last_error}</p>
           )}
+          {retryError && <p className="mt-1 text-xs text-red-600">Retry failed: {retryError}</p>}
         </div>
-        <MiniStatusBadge status={track.status} />
+        <div className="flex items-center gap-2">
+          {track.status === 'failed' && (
+            <Button variant="outline" size="sm" onClick={handleRetry} disabled={retrying}>
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} />
+              {retrying ? 'Retrying…' : 'Retry'}
+            </Button>
+          )}
+          <MiniStatusBadge status={track.status} />
+        </div>
       </CardContent>
     </Card>
   )
@@ -949,7 +982,7 @@ function VideoTabContent({
              EN-only/FR-only (one card) and BOTH (two cards), per §11. */}
           <div className="space-y-2">
             {tracks.map((track) => (
-              <VideoTrackCard key={track.id} track={track} />
+              <VideoTrackCard key={track.id} jobId={job.id} track={track} />
             ))}
           </div>
         </>

@@ -15,10 +15,10 @@ interface CaptionCue {
   endMs: number
 }
 
-// Same fontsize expression buildCaptionCommand burns in (fraction of frame
-// HEIGHT, so it scales correctly across all three delivery resolutions —
-// see that function's own header). Needed here too so chunking can budget
-// each line's WIDTH against the same font size the render will actually use.
+// Same fontsize buildCaptionAssFile renders at (fraction of frame HEIGHT,
+// so it scales correctly across all three delivery resolutions — see that
+// function's own header). Needed here too so chunking can budget each
+// line's WIDTH against the same font size the render will actually use.
 const CAPTION_FONTSIZE_RATIO = 0.033
 
 // A generous (i.e. safety-biased) estimate of a Latin sans-serif
@@ -56,7 +56,7 @@ function estimatedTextWidthPx(text: string, fontSizePx: number): number {
  * far too wide (long words like "struggle"/"partners"), and nothing ever
  * checked the actual rendered width against the frame. `frameWidthPx` lets
  * the caller pass the REAL pixel width the caption will render at (see
- * buildCaptionCommand), so the same word list wraps into more/shorter
+ * buildCaptionAssFile), so the same word list wraps into more/shorter
  * lines on a narrow 9:16 frame than on a wide 16:9 one. Falls back to a
  * fixed word count only when no frame width is known (kept for callers/
  * tests that don't care about exact wrapping). */
@@ -121,23 +121,26 @@ export function normalizeCaptionCues(
   return cues
 }
 
-/** Escapes text for ffmpeg's drawtext filter, per ffmpeg's own escaping
- *  rules for text wrapped in single quotes inside a filtergraph string.
- *
- *  CONFIRMED BROKEN against a real render (2026-09-19): the single-quote
- *  replacement had an extra backslash — `'\\''` (two backslashes) instead
- *  of ffmpeg's actual documented close-escape-reopen sequence `'\''` (one
- *  backslash, the same trick POSIX shells use to embed an apostrophe in a
- *  single-quoted string). With the extra backslash, any narration
- *  containing a real apostrophe (e.g. "Fresh-CAN's", "farmer's") never
- *  properly closed and reopened the quote — ffmpeg kept reading raw
- *  filter syntax as literal quoted text from that point on, which is
- *  exactly why a real caption showed literal `:fontcolor=white:fontsize=
- *  h*0.033:x=(w-text_w)/2:y=h-h*0.083:box=1:...:enable=between(t,...)`
- *  burned into the frame as visible text instead of being applied as
- *  drawtext options. Fixed to the correct single-backslash sequence. */
-function escapeDrawtextValue(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "'\\''")
+/** Escapes text for an ASS subtitle event's Text field — ASS uses `{...}`
+ *  for inline override tags, so a literal brace in real narration (never
+ *  expected, but not impossible) could otherwise open/break tag parsing;
+ *  stripped outright rather than risk a malformed override tag reaching
+ *  libass, since ASS has no clean literal-brace escape. Backslash doubled
+ *  for the same defensive reason (`\` also starts certain ASS sequences). */
+function escapeAssText(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/[{}]/g, '')
+}
+
+/** ASS Dialogue timestamp format: `H:MM:SS.cc` (centiseconds, 2-digit). */
+function msToAssTime(ms: number): string {
+  const totalCentiseconds = Math.max(0, Math.round(ms / 10))
+  const centiseconds = totalCentiseconds % 100
+  const totalSeconds = Math.floor(totalCentiseconds / 100)
+  const seconds = totalSeconds % 60
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  const minutes = totalMinutes % 60
+  const hours = Math.floor(totalMinutes / 60)
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`
 }
 
 /**
@@ -233,131 +236,169 @@ export function buildAudioConcatCommand(scenes: AVMergeInput['scenes']): {
   return { files, fullCommand, outputExtension: 'mp4' }
 }
 
+// Deterministic half of the "abrupt ending" fix (2026-09-21) — the other
+// half asks composeSceneVideoPrompt's final scene to settle its own motion
+// (compose.ts's FINAL_SCENE_SETTLE_CLAUSE), but that's model compliance,
+// never a guarantee. This is: whatever the render's real final content
+// looks like, a short fade-to-black/silence over the last FADE_OUT_SECONDS
+// makes the cut read as an intentional ending rather than a hard jump-cut,
+// unconditionally. Short enough (well under a second) to not read as its
+// own deliberate "outro" moment — just enough to soften the literal edge.
+const FADE_OUT_SECONDS = 0.6
+
 /**
  * Builds the ffmpeg command that muxes the (independently concatenated)
- * video-only and audio-only outputs back into one file — a plain `-c copy`
- * remux, no filtergraph at all, so it can never need a ';' regardless.
- * `-shortest` here is meaningful (unlike it apparently being a no-op in the
- * old mixed-concat command): video and audio come from two genuinely
- * separate encodes that can differ by a fraction of a second, and this is
- * the single place that reconciles them into one final duration.
+ * video-only and audio-only outputs back into one file, fading both to
+ * black/silence over the last FADE_OUT_SECONDS of `totalDurationSeconds`
+ * (the track's real total narration length — same value every scene's
+ * duration-match pass targets, see buildSceneDurationMatchCommand). Re-
+ * encodes (`-c:v libx264`/`-c:a aac`) rather than the previous `-c copy`
+ * remux — required for `fade`/`afade` to apply at all, same trade-off the
+ * caption-burn pass already accepts for its own filter. `-shortest` is
+ * still meaningful: video and audio come from two genuinely separate
+ * encodes that can differ by a fraction of a second, and this is the
+ * single place that reconciles them into one final duration. Single input
+ * per stream, single linear filter each, so — like buildScaleCommand —
+ * this can never need a ';' regardless.
  */
-export function buildMuxCommand(videoUrl: string, audioUrl: string): {
+export function buildMuxCommand(videoUrl: string, audioUrl: string, totalDurationSeconds: number): {
   files: string[]
   fullCommand: string
   outputExtension: string
 } {
-  const fullCommand = `ffmpeg -y -i {input0} -i {input1} -c copy -shortest {output}`
+  const fadeStart = Math.max(0, totalDurationSeconds - FADE_OUT_SECONDS)
+  const fullCommand =
+    `ffmpeg -y -i {input0} -i {input1} ` +
+    `-vf "fade=t=out:st=${fadeStart.toFixed(2)}:d=${FADE_OUT_SECONDS.toFixed(2)}" ` +
+    `-af "afade=t=out:st=${fadeStart.toFixed(2)}:d=${FADE_OUT_SECONDS.toFixed(2)}" ` +
+    `-c:v libx264 -preset ultrafast -crf 23 -c:a aac -shortest {output}`
   return { files: [videoUrl, audioUrl], fullCommand, outputExtension: 'mp4' }
 }
 
 /**
- * Picks the fontsize ratio (of frame height, same unit buildCaptionCommand
- * renders at) for ONE cue. Normally this is just the shared
- * CAPTION_FONTSIZE_RATIO every cue uses — but normalizeCaptionCues can still
- * emit a cue wider than the safe budget in exactly one case: a single
- * "word" (a long URL, a long name) with nothing narrower to fall back to.
- * Rather than let that one cue overflow the frame the way the original bug
- * did, shrink ONLY that cue's fontsize by exactly the ratio needed to bring
- * its estimated width back within budget — computed here in plain JS
- * (never as an ffmpeg-side expression/min(), which would need an escaped
- * comma in the filter string — see escapeDrawtextValue's own "not
- * independently verified" flag; not worth that additional escaping risk for
- * a rare edge case).
+ * Builds the ASS (Advanced SubStation Alpha) subtitle FILE CONTENT for one
+ * render's captions — the caller uploads this (see renderLanguageTrack.ts)
+ * and hands its URL to buildCaptionBurnCommand below. Replaces the old
+ * chained-drawtext approach (removed 2026-09-21) after a real render was
+ * flatly rejected by upload-post.com: `{"error":"Comando contiene
+ * caracteres o patrones no permitidos: rm "}`. Their backend runs some
+ * command-injection guard against the FULL command string, and the old
+ * approach embedded real transcribed narration TEXT directly into that
+ * string (`drawtext=text='...'`) — any word merely CONTAINING "rm " as a
+ * substring (warm, farm, term, confirm, perform...), all entirely
+ * plausible in this brand's own narration, tripped their filter, with no
+ * way to predict or avoid every such word from our side. (The old
+ * escapeDrawtextValue's own header already documented one earlier,
+ * related incident — a broken apostrophe escape — from this exact same
+ * "real narration text lives inside the ffmpeg command string" design.)
+ * This rewrite removes that whole class of risk: caption text now lives
+ * in an uploaded FILE, so the ffmpeg command string itself only ever
+ * contains a filename, never any actual narration content — no future
+ * word or character pattern in real narration can trip upload-post.com's
+ * filter this way again.
+ *
+ * Returns null when there are no cues — caller skips the caption pass
+ * entirely in that case (the mux pass's own output is already a valid
+ * final render).
+ *
+ * Style block mirrors the old drawtext styling as closely as ASS allows:
+ * white text (PrimaryColour), a semi-transparent black box behind it
+ * (BackColour + BorderStyle=3, ASS's "opaque box" mode — the direct
+ * equivalent of drawtext's box=1:boxcolor=black@0.5), bottom-center
+ * placement (Alignment=2) with MarginV computed the same way the old
+ * y=h-h*0.083 was. PlayResX/PlayResY pin ASS's own coordinate system to
+ * the real delivery resolution, so pixel sizes below need no further
+ * scaling math the way drawtext's `h*ratio` expressions did.
  */
-function fontsizeRatioFor(text: string, baseFontSizePx: number, maxLineWidthPx: number): string {
-  const estimatedWidthPx = estimatedTextWidthPx(text, baseFontSizePx)
-  if (estimatedWidthPx <= maxLineWidthPx) return String(CAPTION_FONTSIZE_RATIO)
-  return (CAPTION_FONTSIZE_RATIO * (maxLineWidthPx / estimatedWidthPx)).toFixed(4)
+export function buildCaptionAssFile(
+  captionTimingData: unknown,
+  aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
+): string | null {
+  const { width: frameWidthPx, height: frameHeightPx } = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
+  const baseFontSizePx = Math.round(frameHeightPx * CAPTION_FONTSIZE_RATIO)
+  const maxLineWidthPx = frameWidthPx * SAFE_WIDTH_FRACTION
+  const marginVPx = Math.round(frameHeightPx * 0.083)
+
+  const cues = normalizeCaptionCues(captionTimingData, frameWidthPx, baseFontSizePx)
+  if (cues.length === 0) return null
+
+  // Per-cue fontsize override via ASS's inline `{\fsN}` tag — same rare
+  // edge case the old fontsizeRatioFor handled (normalizeCaptionCues can
+  // still emit one cue wider than the safe budget: a single "word" — a
+  // long URL, a long name — with nothing narrower to fall back to), just
+  // expressed as an ASS override tag instead of an ffmpeg `h*ratio`
+  // expression. Scoped to that one Dialogue line only; every other line
+  // uses the Style's own Fontsize.
+  const events = cues
+    .map((cue) => {
+      const estimatedWidthPx = estimatedTextWidthPx(cue.text, baseFontSizePx)
+      const fontsizeOverride =
+        estimatedWidthPx > maxLineWidthPx
+          ? `{\\fs${Math.round(baseFontSizePx * (maxLineWidthPx / estimatedWidthPx))}}`
+          : ''
+      const text = `${fontsizeOverride}${escapeAssText(cue.text)}`
+      return `Dialogue: 0,${msToAssTime(cue.startMs)},${msToAssTime(cue.endMs)},Default,,0,0,0,,${text}`
+    })
+    .join('\n')
+
+  return (
+    '[Script Info]\n' +
+    'ScriptType: v4.00+\n' +
+    `PlayResX: ${frameWidthPx}\n` +
+    `PlayResY: ${frameHeightPx}\n` +
+    'ScaledBorderAndShadow: yes\n\n' +
+    '[V4+ Styles]\n' +
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, ' +
+    'Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, ' +
+    'MarginR, MarginV, Encoding\n' +
+    // Arial: not a real guarantee the render host has it installed, but the
+    // conventional fallback-safe choice for libass/fontconfig setups (most
+    // map it to a substitute like Liberation Sans rather than failing) —
+    // NOT independently confirmed against upload-post.com's actual font
+    // availability, same "flag the live-unconfirmed assumption" pattern
+    // this codebase already uses elsewhere (see kie.ts's Seedance duration
+    // comment for the convention).
+    `Style: Default,Arial,${baseFontSizePx},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,3,` +
+    `${Math.round(baseFontSizePx * 0.2)},0,2,10,10,${marginVPx},1\n\n` +
+    '[Events]\n' +
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n' +
+    `${events}\n`
+  )
 }
 
 /**
- * Builds the raw ffmpeg command string for the CAPTION-BURN pass: a single
- * input (the mux pass's output), burning in drawtext cues via `-vf`
- * (ffmpeg's *simple* filtergraph — a linear ','-chain with no named pads at
- * all), while the audio stream is passed straight through with `-c:a copy`.
- * Because `-vf` never needs bracket-labeled pads, this command structurally
- * cannot require a ';' regardless of how many caption cues there are — see
- * buildVideoConcatCommand's header for why avoiding ';' matters here too
- * (upload-post.com's full_command denylist).
+ * Builds the ffmpeg command for the CAPTION-BURN pass: the mux pass's
+ * output plus the already-uploaded ASS file (buildCaptionAssFile's
+ * output, re-hosted by the caller — see renderLanguageTrack.ts), burned
+ * in via ffmpeg's `subtitles=` filter — the standard, purpose-built ffmpeg
+ * mechanism for this (unlike the old per-cue drawtext chain, it reads
+ * caption content from a FILE, never embedding it in the command string
+ * itself — see buildCaptionAssFile's header for why that matters).
+ * `-c:a copy`: audio passes through untouched, same as the old version.
+ * Single input, single linear `-vf` chain, so — like buildScaleCommand —
+ * this can never need a ';' regardless.
  *
- * Caller is expected to skip this pass entirely when there are no cues
- * (normalizeCaptionCues(...).length === 0) — the mux pass's own output is
- * already a valid final render in that case.
- *
- * `aspectRatio` (added 2026-09-19, default '9:16' matching the rest of the
- * pipeline) resolves to the job's REAL delivery resolution
- * (ASPECT_RATIO_RESOLUTIONS — the exact pixel size every scene clip is
- * already downscaled to before this pass ever runs), which is what lets
- * normalizeCaptionCues wrap lines against the actual frame width instead of
- * a fixed word count. Fixes a real generation where a caption line ran off
- * both the left and right edges of a 9:16 frame: the old `wordsPerLine = 7`
- * chunking had no idea how wide the frame was or how wide 7 words would
- * render, so a line of long words (e.g. "...struggle. FreshCan partners
- * wi...") simply overflowed with nothing to stop it.
+ * NOT YET CONFIRMED live: that upload-post.com's `{inputN}` placeholder
+ * substitution works for a token used INSIDE a filter argument
+ * (`subtitles={input1}`), not just immediately after `-i` the way every
+ * other use of `{inputN}` in this file is written (see
+ * buildVideoConcatCommand/buildMuxCommand). If their substitution turns
+ * out to be `-i`-position-specific, add a harmless unused `-i {input1}`
+ * too — ffmpeg tolerates an extra unmapped input — with the filter still
+ * referencing the same local-path token.
  */
-export function buildCaptionCommand(
+export function buildCaptionBurnCommand(
   mergedVideoUrl: string,
-  captionTimingData: unknown,
-  aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
+  assFileUrl: string,
 ): {
   files: string[]
   fullCommand: string
   outputExtension: string
 } {
-  const { width: frameWidthPx, height: frameHeightPx } = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
-  const baseFontSizePx = frameHeightPx * CAPTION_FONTSIZE_RATIO
-  const maxLineWidthPx = frameWidthPx * SAFE_WIDTH_FRACTION
-
-  const cues = normalizeCaptionCues(captionTimingData, frameWidthPx, baseFontSizePx)
-  if (cues.length === 0) {
-    throw new Error('buildCaptionCommand: no caption cues to burn in — caller should skip this pass')
-  }
-
-  // fontsize/y as fractions of frame height (drawtext evaluates these as
-  // expressions, not just plain ints), not fixed pixel values — this used
-  // to be a hardcoded fontsize=48/y=h-120, tuned by eye against the square
-  // 1440x1440 frames every render produced before aspect ratio became
-  // selectable (worker/src/adapters/kie.ts's aspectRatio param). Fixed
-  // pixels only looked right at that one frame height; a 9:16 (1080x1920)
-  // or 16:9 (1920x1080) render would get disproportionately tiny/huge text
-  // and a bottom margin that's too close to or too far from the edge. The
-  // fractions below (0.033/0.083) are exactly what 48px/120px worked out
-  // to at h=1440, so the square case looks identical and every other
-  // aspect ratio now scales correctly too.
-  const drawtextFilters = cues.map((cue) => {
-    const startSec = (cue.startMs / 1000).toFixed(2)
-    const endSec = (cue.endMs / 1000).toFixed(2)
-    const text = escapeDrawtextValue(cue.text)
-    const fontsizeRatio = fontsizeRatioFor(cue.text, baseFontSizePx, maxLineWidthPx)
-    return (
-      `drawtext=text='${text}':fontcolor=white:fontsize=h*${fontsizeRatio}:` +
-      `x=(w-text_w)/2:y=h-h*0.083:box=1:boxcolor=black@0.5:boxborderw=10:` +
-      `enable='between(t,${startSec},${endSec})'`
-    )
-  })
-  const vf = drawtextFilters.join(',')
-
-  // Same -preset ultrafast rationale as buildConcatCommand — this pass also
-  // re-encodes the full video stream (drawtext forces it), just over one
-  // input instead of several. Same -b:v/-maxrate/-bufsize bitrate cap as
-  // buildVideoConcatCommand too, and for the same reason: this pass's
-  // OUTPUT is the final render uploaded to Supabase Storage, so a CRF-only
-  // re-encode here could re-inflate a video-concat pass that was correctly
-  // size-bounded going in.
-  //
-  // {input}, not {input0}: confirmed live 2026-09-12 that upload-post.com's
-  // backend rejects a single-file full_command containing an indexed
-  // placeholder — it calls a single-input code path (_full_cmd(cmd,
-  // fin_list[0], fout)) that does literal string substitution on the bare
-  // {input}/{output} tokens, and raises "full_command debe contener
-  // {input} y {output}" (a ValueError, not a timeout) if {input0} is used
-  // instead. Only relevant for exactly one file — buildConcatCommand's
-  // multi-file {input0}/{input1}/... indexing is a different, working code
-  // path on their side.
-  const fullCommand = `ffmpeg -y -i {input} -vf "${vf}" -c:v libx264 -preset ultrafast -b:v 3500k -maxrate 3500k -bufsize 7000k -c:a copy {output}`
-
-  return { files: [mergedVideoUrl], fullCommand, outputExtension: 'mp4' }
+  const fullCommand =
+    `ffmpeg -y -i {input0} -vf "subtitles={input1}" ` +
+    `-c:v libx264 -preset ultrafast -b:v 3500k -maxrate 3500k -bufsize 7000k -c:a copy {output}`
+  return { files: [mergedVideoUrl, assFileUrl], fullCommand, outputExtension: 'mp4' }
 }
 
 /**
@@ -365,15 +406,14 @@ export function buildCaptionCommand(
  * ratio's standard social-delivery resolution — 1080x1920 (9:16),
  * 1080x1080 (1:1), or 1920x1080 (16:9), matched to whatever the job's
  * content_jobs.aspect_ratio selected (worker/src/adapters/kie.ts's own
- * aspectRatio param already requests this shape from Flux Kontext/Kling,
+ * aspectRatio param already requests this shape from Flux Kontext/Seedance,
  * but their native output can still land slightly above it — e.g. a real
  * 9:16 clip came back at 1084x1912, and a 1:1 one at 1440x1440, both
  * modestly over their ~2-megapixel-budget target). A single input, single
- * linear `-vf scale=` chain, so — like buildCaptionCommand — it
- * structurally can never need a ';' regardless of target size.
+ * linear `-vf scale=` chain, so — like buildMuxCommand — it structurally
+ * can never need a ';' regardless of target size.
  *
- * {input}, not {input0}: same single-file rule buildCaptionCommand's
- * header documents — confirmed live 2026-09-12 that upload-post.com's
+ * {input}, not {input0}: confirmed live 2026-09-12 that upload-post.com's
  * single-input code path rejects an indexed placeholder outright
  * (ValueError, not a timeout). An EARLIER version of this same downscale
  * step existed, used `{input0}`, and was removed after every attempt
@@ -386,8 +426,8 @@ export function buildScaleCommand(
   width: number,
   height: number,
 ): { files: string[]; fullCommand: string; outputExtension: string } {
-  // -an: KIE.ai's scene clips are generated with sound=false (no audio
-  // stream at all — see kie.ts) — dropping audio explicitly rather than
+  // -an: KIE.ai's scene clips are generated with generate_audio=false (no
+  // audio stream at all — see kie.ts) — dropping audio explicitly rather than
   // assuming there's none to carry through. -crf 23: same "make the
   // existing default explicit" reasoning as buildVideoConcatCommand — the
   // downscale itself (fewer pixels in) is what actually shrinks the file;
@@ -413,28 +453,42 @@ export function buildScaleCommand(
  * pass's `-shortest` was silently truncating the last ~7.4s of narration
  * and captions instead of anything ever reconciling scene-by-scene.
  *
- * `currentDurationSeconds` doesn't need to be measured/probed — Kling/
- * Hailuo reliably render at the exact duration requested
- * (pickClipDurationSeconds's own '5'|'10'), so callers recompute it
- * deterministically from the same scene.target_duration_ms input rather
- * than reading it off the file. `tpad`'s `stop_duration` is the amount of
- * ADDITIONAL padding to add (not a target total), so it's computed here
- * as the shortfall; the trailing `-t` always hard-caps the output to
- * exactly targetDurationSeconds regardless of which direction padding
- * went, so one command handles both "clip too short" (tpad extends it,
- * `-t` is then a no-op) and "clip too long" (tpad adds nothing, `-t`
- * trims it down) with no branching. Single input, single linear `-vf`
- * chain, so — like buildScaleCommand — it structurally can never need a
- * ';' regardless of the numbers involved.
+ * Rewritten 2026-09-21 to drop the `currentDurationSeconds` parameter this
+ * used to take — that value was never measured/probed, it was recomputed
+ * from the same `pickClipDurationSeconds` bucket used to REQUEST the clip
+ * ('5'|'10'), on the assumption the video model reliably renders at exactly
+ * that requested duration. True for Kling/Hailuo, confirmed NOT reliably
+ * true for Seedance 1.5 Pro (swapped in 2026-09-21) — a real render showed
+ * caption/audio desync traced to exactly this: when a real clip comes back
+ * shorter than the assumed bucket, `padSeconds = target - assumed`
+ * under-pads, the video track ends up shorter than the audio/caption
+ * track, video-concat and audio-concat are built independently (see
+ * buildVideoConcatCommand/buildAudioConcatCommand below) then only
+ * stream-copy-muxed with a trim-only `-shortest` — so a single scene's
+ * shortfall shifts every LATER scene's picture earlier relative to the
+ * correctly-timed narration/captions, and any net shortfall truncates
+ * trailing audio/captions off the end.
+ *
+ * Fix: pad by the FULL targetDurationSeconds (a known-real value — the
+ * calling track's own AssemblyAI-measured narration length) instead of a
+ * computed shortfall against an assumed input length. This makes the
+ * command correct regardless of the real input clip's actual duration,
+ * which this function no longer needs to know at all: `tpad`'s
+ * stop_duration only ever needs to be AT LEAST as long as the real
+ * shortfall, and any excess is just a static hold on the clip's own last
+ * frame — content-free padding the trailing `-t` always trims back off,
+ * whether that excess came from over-padding (this fix) or from the input
+ * already being longer than target (the original "clip too long" case,
+ * unaffected). One command still handles both directions with no
+ * branching, and stays a single input / single linear `-vf` chain — like
+ * buildScaleCommand, it structurally can never need a ';'.
  */
 export function buildSceneDurationMatchCommand(
   clipUrl: string,
-  currentDurationSeconds: number,
   targetDurationSeconds: number,
 ): { files: string[]; fullCommand: string; outputExtension: string } {
-  const padSeconds = Math.max(0, targetDurationSeconds - currentDurationSeconds)
   const fullCommand =
-    `ffmpeg -y -i {input} -vf "tpad=stop_mode=clone:stop_duration=${padSeconds.toFixed(2)}" ` +
+    `ffmpeg -y -i {input} -vf "tpad=stop_mode=clone:stop_duration=${targetDurationSeconds.toFixed(2)}" ` +
     `-t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset ultrafast -crf 23 -an {output}`
   return { files: [clipUrl], fullCommand, outputExtension: 'mp4' }
 }
@@ -456,20 +510,17 @@ export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
 
   /** videoUrl/audioUrl are submitVideoConcat's/submitAudioConcat's outputs,
    *  re-hosted by the caller (see buildMuxCommand's header). */
-  async submitMux(videoUrl: string, audioUrl: string): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildMuxCommand(videoUrl, audioUrl))
+  async submitMux(videoUrl: string, audioUrl: string, totalDurationSeconds: number): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildMuxCommand(videoUrl, audioUrl, totalDurationSeconds))
   }
 
   /** Only ever called when there are caption cues to burn in (see
-   *  buildCaptionCommand's header); mergedVideoUrl is the mux pass's
-   *  output, re-hosted by the caller so upload-post.com's `files` field (a
-   *  list of fetchable URLs, same as every other input it takes) can see it. */
-  async submitCaptionBurn(
-    mergedVideoUrl: string,
-    captionTimingData: unknown,
-    aspectRatio?: '9:16' | '1:1' | '16:9',
-  ): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildCaptionCommand(mergedVideoUrl, captionTimingData, aspectRatio))
+   *  buildCaptionAssFile's header); mergedVideoUrl is the mux pass's
+   *  output and assFileUrl is buildCaptionAssFile's own output, both
+   *  re-hosted by the caller so upload-post.com's `files` field (a list of
+   *  fetchable URLs, same as every other input it takes) can see them. */
+  async submitCaptionBurn(mergedVideoUrl: string, assFileUrl: string): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildCaptionBurnCommand(mergedVideoUrl, assFileUrl))
   }
 
   /** Called from generateSceneVisual.ts, not renderLanguageTrack.ts — see
@@ -481,12 +532,8 @@ export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
 
   /** Called from renderLanguageTrack.ts, once per scene, before the video
    *  concat pass — see buildSceneDurationMatchCommand's own header. */
-  async submitSceneDurationMatch(
-    clipUrl: string,
-    currentDurationSeconds: number,
-    targetDurationSeconds: number,
-  ): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildSceneDurationMatchCommand(clipUrl, currentDurationSeconds, targetDurationSeconds))
+  async submitSceneDurationMatch(clipUrl: string, targetDurationSeconds: number): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildSceneDurationMatchCommand(clipUrl, targetDurationSeconds))
   }
 
   private async submitCommand(command: {

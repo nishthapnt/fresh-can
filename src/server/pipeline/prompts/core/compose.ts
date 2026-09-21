@@ -361,6 +361,26 @@ const NO_UNEXPLAINED_PROPS =
   'Do not add props, vehicles, signage, or background objects beyond what the scene above describes or ' +
   'clearly implies — no unexplained extras just to fill the frame.'
 
+// Added 2026-09-21 — guards against the two most common AI-image rendering
+// artifacts (malformed hands, uncanny/synthetic-looking skin), neither of
+// which the existing guardrails above cover: those are all about scene
+// LOGIC (what's in frame, whether it's plausible), never about whether a
+// person the scene DOES call for renders like a real photo.
+//
+// Deliberately NOT in fixedParts below (unlike every other guardrail
+// here) — real measurement showed composeSceneImagePrompt's fixed overhead
+// was already within single-digit characters of KIE's 3000 cap for a
+// perfectly ordinary scene, so protecting this unconditionally would have
+// truncated real scene content on nearly every generation. This is a
+// quality nice-to-have, not a correctness/safety constraint the way
+// FOOD_MUST_LOOK_CLEAN or PHYSICALLY_PLAUSIBLE_SCENE are — so it's the
+// FIRST thing the truncation cascade below drops when a scene runs long,
+// included only when there's genuinely room. Kept intentionally short for
+// exactly this reason: every character here is a character less available
+// for real scene content on borderline-length scenes.
+const REALISTIC_PEOPLE =
+  'Hands must be anatomically correct — never extra or missing fingers; skin must look real, not synthetic.'
+
 // Added 2026-09-19 as the OTHER half of composeSceneImagePrompt's new
 // per-scene relevance gate (see showSubject there) — the explicit
 // instruction a non-relevant scene gets INSTEAD of containerDescriptor/the
@@ -577,6 +597,42 @@ interface SceneImageJob {
   regenInstructions?: string | null
 }
 
+// Hard ceiling under KieImageGenerator's real, confirmed 3000-char cap
+// ("The prompt word cannot exceed 3000 characters") — added 2026-09-21
+// after a real generation hit that cap for a THIRD time despite two prior
+// rounds of hand-trimming the fixed brand/guardrail prose (see
+// containerDescriptor's and REFERENCE_IS_GUIDE_NOT_COPY's comment history).
+// Neither round added an actual ceiling — they just bought back margin that
+// the next incident-driven safety clause (CINEMATIC_QUALITY,
+// NO_UNSCRIPTED_PEOPLE, NO_UNEXPLAINED_PROPS, all also 2026-09-19) ate right
+// back up. The fixed overhead alone measures ~2822 chars even after that
+// trimming (showSubject=true branch, real BRAND_PROFILE) — confirmed by
+// direct measurement, not estimated — so a merely-average visual_description
+// /shot_notes/regenInstructions — all free text, all unbounded upstream (see
+// generateScript.ts's normalizeScriptOutput and the /video/regenerate route)
+// — can still push the total over 3000 and fail the whole scene.
+//
+// 2995, not 3000: KIE's own error text is unambiguous ("cannot exceed 3000
+// characters", not a word-tokenization limit), so this only needs a few
+// characters of margin against an off-by-one on their side, NOT the ~100
+// chars a first pass at this used — that turned out to eat nearly the
+// entire scene-content budget (fixedLen ~2822 left only ~78 chars for
+// visualDescription+shotNotes+regenInstructions combined, truncating even
+// short, ordinary scenes). At 2995, ordinary scenes have ~170 chars of
+// headroom before this cap's cascading truncation ever engages at all.
+const SCENE_IMAGE_PROMPT_CHAR_LIMIT = 2995
+
+// Cuts at the last word boundary at/under maxChars rather than mid-word, so
+// a truncated scene never ends the prompt on a fragment. Never lengthens
+// input — maxChars <= 0 always returns ''.
+function truncateToFit(text: string, maxChars: number): string {
+  if (maxChars <= 0) return ''
+  if (text.length <= maxChars) return text
+  const cut = text.slice(0, maxChars)
+  const lastSpace = cut.lastIndexOf(' ')
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd()
+}
+
 export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob): ImageComposition {
   // Added 2026-09-19: this composer used to ALWAYS attach the character-ref
   // truck photo and containerDescriptor, for every scene, regardless of
@@ -590,9 +646,74 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   // short topic strings would false-positive on ordinary sentences and
   // force the truck into scenes that have nothing to do with it — see
   // isVideoSceneAboutUnit's own comment in scene.ts for why it only fires
-  // on an explicit, unambiguous mention of the unit itself.
+  // on an explicit, unambiguous mention of the unit itself, and for the
+  // 2026-09-21 note on why a same-day attempt to replace this with an
+  // explicit LLM-authored field was reverted (needed a schema migration
+  // the user didn't want) — the real "videos feel disconnected from the
+  // brand" fix lives in composeVideoScriptSystemPrompt instead, not here.
   const sceneText = `${job.visualDescription} ${job.shotNotes ?? ''}`
   const showSubject = isVideoSceneAboutUnit(sceneText)
+
+  // Everything below is a fixed brand/safety constraint sent in full,
+  // always — see SCENE_IMAGE_PROMPT_CHAR_LIMIT's header for why these can
+  // never be the thing that gets cut when a prompt runs long. REALISTIC_PEOPLE
+  // is deliberately NOT in this list — see the cascade below for why.
+  const fixedParts = [
+    moodClause(brand, job.pipelineId),
+    FOOD_MUST_LOOK_CLEAN,
+    PHYSICALLY_PLAUSIBLE_SCENE,
+    CINEMATIC_QUALITY,
+    NO_UNSCRIPTED_PEOPLE,
+    NO_UNEXPLAINED_PROPS,
+    SCENE_IS_CREATIVE_BRIEF,
+    showSubject ? brand.containerDescriptor : NO_SUBJECT_IN_SCENE,
+    showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
+    showSubject ? brand.noNewTextInstruction : brand.noTextInstruction,
+  ].filter(Boolean)
+  const fixedLen = fixedParts.join(' ').length
+
+  // The only free text in this prompt — LLM-generated (visualDescription/
+  // shotNotes) or user-typed (regenInstructions) — and so the only part
+  // that can grow past what fixedParts leaves room for. Cascading
+  // truncation, lowest-value first: REALISTIC_PEOPLE (a quality nice-to-have
+  // added 2026-09-21 — unlike everything in fixedParts above, it's not
+  // preventing actively wrong/unsafe content, just improving rendering
+  // quality, so it's the first thing dropped rather than eating into the
+  // scene's own content — real measurement showed its fixed cost alone
+  // left almost no room for a typical scene otherwise), then
+  // regenInstructions (a refinement on an already-generated scene), then
+  // shotNotes (secondary cinematography detail), then — only as a last
+  // resort — visualDescription itself, since it's the actual creative
+  // brief the scene is built around.
+  let visualDescription = job.visualDescription
+  let shotNotes = job.shotNotes ?? ''
+  let regenInstructions = job.regenInstructions ?? ''
+  let includeRealismClause = true
+
+  const totalLen = () =>
+    fixedLen +
+    1 + // join space between the scene/shotNotes block and fixedParts, always present
+    `Scene ${job.sceneNumber}: ${visualDescription}`.length +
+    (shotNotes ? 1 + `Shot notes: ${shotNotes}.`.length : 0) +
+    (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) +
+    (includeRealismClause ? 1 + REALISTIC_PEOPLE.length : 0)
+
+  let overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  if (overflow > 0 && includeRealismClause) {
+    includeRealismClause = false
+    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  }
+  if (overflow > 0 && regenInstructions) {
+    regenInstructions = truncateToFit(regenInstructions, regenInstructions.length - overflow)
+    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  }
+  if (overflow > 0 && shotNotes) {
+    shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
+    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  }
+  if (overflow > 0) {
+    visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
+  }
 
   const parts = [
     // Dropped "of a marketing video" (2026-09-19) — that framing itself
@@ -601,8 +722,8 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // in the script/scene plan's own visual_description (see
     // composeVideoScriptSystemPrompt's sceneNotes/anti-ad handling) — this
     // composer just needs to render it faithfully, not re-frame it as an ad.
-    `Scene ${job.sceneNumber}: ${job.visualDescription}`,
-    job.shotNotes ? `Shot notes: ${job.shotNotes}.` : '',
+    `Scene ${job.sceneNumber}: ${visualDescription}`,
+    shotNotes ? `Shot notes: ${shotNotes}.` : '',
     // Same mood per pipeline (not per scene) — keeps lighting/atmosphere
     // consistent across all of one video's scenes, same reasoning as
     // composeBlogImage's hero/inline pairing. Deferential (moodClause, not
@@ -614,6 +735,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     CINEMATIC_QUALITY,
     NO_UNSCRIPTED_PEOPLE,
     NO_UNEXPLAINED_PROPS,
+    includeRealismClause ? REALISTIC_PEOPLE : '',
     // Same instruction blog/photo images use (SCENE_IS_CREATIVE_BRIEF) —
     // added 2026-09-19. Without this the model has nothing pushing back
     // against reference-photo edit-mode's own bias toward a clean,
@@ -651,7 +773,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     parts.push(NO_SUBJECT_IN_SCENE)
     parts.push(brand.noTextInstruction)
   }
-  if (job.regenInstructions) parts.push(`${job.regenInstructions}.`)
+  if (regenInstructions) parts.push(`${regenInstructions}.`)
 
   return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl }
 }
@@ -659,12 +781,17 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
 interface SceneVideoJob {
   visualDescription: string
   shotNotes: string | null
+  /** True only for the LAST scene in the video. Adds a settle-the-motion
+   *  instruction so the clip doesn't get cut off mid-movement — see this
+   *  function's own header for why the "abrupt ending" bug is really a
+   *  motion problem, not just a script/pacing one. */
+  isFinalScene?: boolean
 }
 
-/** Prompt for Kling 2.6 image-to-video (worker/src/adapters/kie.ts's
+/** Prompt for Seedance 1.5 Pro image-to-video (worker/src/adapters/kie.ts's
  *  KieVideoGenerator) — motion/camera direction only. The subject's
  *  appearance is NOT re-described here; it's already locked in the
- *  scene_image frame this call animates from (image_urls[0]), so repeating
+ *  scene_image frame this call animates from (input_urls[0]), so repeating
  *  a physical description would be redundant at best.
  *
  *  "no staged product-reveal moves" (added 2026-09-19) is the motion-side
@@ -681,18 +808,83 @@ interface SceneVideoJob {
  *  asks the script step to plan. This keeps the one rule that actually
  *  matters (no product-hero orbit/push-in AROUND THE SUBJECT, no jump
  *  cuts) while giving real cinematographic technique explicit positive
- *  permission instead of discouraging it by default. */
+ *  permission instead of discouraging it by default.
+ *
+ *  Ambient-motion clause tightened 2026-09-21 after real Seedance renders
+ *  showed illogical motion on static objects — e.g. produce/vegetables in
+ *  a grocery scene drifting or shifting with no visible cause. The old
+ *  wording ("any natural ambient motion already implied by the setting...
+ *  so the environment never freezes into a still backdrop") actively
+ *  pressured the model to find SOMETHING to animate whenever a scene had
+ *  no steam/wind/fabric of its own, and solid objects sitting in frame
+ *  (produce, packaged goods) were the most visually salient thing left to
+ *  move — this is the video-motion equivalent of the image prompt's
+ *  PHYSICALLY_PLAUSIBLE_SCENE constraint, which has no counterpart here.
+ *  Now explicitly scopes which motion is allowed (steam, smoke, wind on
+ *  hair/fabric/leaves, water, shifting light — all passive/environmental)
+ *  and states the rule a static object must pass before it's allowed to
+ *  move at all (a real, visible cause), rather than leaving "ambient
+ *  motion" open to whatever the model invents to avoid a "still backdrop."
+ *
+ *  SCENE_VIDEO_PROMPT_CHAR_LIMIT added the same day, mirroring
+ *  composeSceneImagePrompt's SCENE_IMAGE_PROMPT_CHAR_LIMIT — Seedance's
+ *  video endpoint has its own documented prompt cap (`input.prompt`:
+ *  3-2500 characters per docs.kie.ai/market/bytedance/seedance-1-5-pro,
+ *  separate from and tighter than the image endpoint's 3000), and this
+ *  function's fixed suffix + a long visual_description/shot_notes (both
+ *  free text, unbounded upstream — see generateScript.ts) could exceed it
+ *  the same way composeSceneImagePrompt's fixed overhead did. shotNotes is
+ *  truncated before visualDescription (the actual creative brief), same
+ *  lowest-value-first cascade as the image prompt's guard.
+ *
+ *  `isFinalScene` clause added 2026-09-21 — real renders showed the video
+ *  ending abruptly, mid-motion. Root cause is upstream too
+ *  (renderLanguageTrack.ts/avMerger.ts's buildSceneDurationMatchCommand
+ *  hard-trims each scene's clip to the track's real narration length via
+ *  `-t`), but if the LAST scene's own motion is still actively moving
+ *  (a pan, a walk) at that exact trim point, the cut looks jarring no
+ *  matter how precise the trim is — this asks the model to settle motion
+ *  into a held beat by the end of the shot so that trim point lands on
+ *  something that already reads as an ending. Paired with a render-level
+ *  fade-out (avMerger.ts's buildMuxCommand) as the deterministic half of
+ *  this fix — this clause is the soft, model-compliance half. */
+const SCENE_VIDEO_PROMPT_CHAR_LIMIT = 2450
+
+const FINAL_SCENE_SETTLE_CLAUSE =
+  ' This is the FINAL shot of the video — ease subject and camera motion into a settled, held final beat by ' +
+  'the end of the shot rather than staying in active movement right up to the cut; the last moment on screen ' +
+  'should already read as an ending, not get cut off mid-motion.'
+
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
-  const shot = job.shotNotes ? ` ${job.shotNotes}` : ''
-  return (
-    `${job.visualDescription}${shot} Animate this as three distinct layers: the subject's own action described ` +
-    'above; any natural ambient motion already implied by the setting (steam, wind, moving fabric, shifting ' +
-    'light) so the environment never freezes into a still backdrop; and camera motion as a separate layer on ' +
-    'top of those two — follow whatever camera direction is given above (pans, tilts, tracking, slow dolly, ' +
-    'rack focus) with smooth, real-camera motion. Camera movement is never a substitute for actual subject or ' +
-    'environmental motion. Never a jump cut, and never a staged product-reveal move like a slow orbit or a ' +
-    'dramatic hero push-in around the subject.'
-  )
+  const suffix =
+    " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
+    'motion already implied by the setting — steam, smoke, wind moving hair, fabric, or leaves, water, ' +
+    'shifting light — so the environment never freezes into a still backdrop, but never motion with no real ' +
+    'cause: produce, packaged goods, and other solid objects at rest must stay completely still unless a ' +
+    'visible hand, wind, or other real force is actually moving them; and camera motion as a separate layer ' +
+    'on top of those two — follow whatever camera direction is given above (pans, tilts, tracking, slow ' +
+    'dolly, rack focus) with smooth, real-camera motion. Camera movement is never a substitute for actual ' +
+    'subject or environmental motion. Never a jump cut, and never a staged product-reveal move like a slow ' +
+    'orbit or a dramatic hero push-in around the subject.' +
+    (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
+
+  let visualDescription = job.visualDescription
+  let shotNotes = job.shotNotes ?? ''
+
+  const totalLen = () =>
+    visualDescription.length + (shotNotes ? 1 + shotNotes.length : 0) + suffix.length
+
+  let overflow = totalLen() - SCENE_VIDEO_PROMPT_CHAR_LIMIT
+  if (overflow > 0 && shotNotes) {
+    shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
+    overflow = totalLen() - SCENE_VIDEO_PROMPT_CHAR_LIMIT
+  }
+  if (overflow > 0) {
+    visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
+  }
+
+  const shot = shotNotes ? ` ${shotNotes}` : ''
+  return `${visualDescription}${shot}${suffix}`
 }
 
 export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageComposition {
