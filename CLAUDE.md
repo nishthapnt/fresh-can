@@ -157,6 +157,28 @@ single-process safety the old worker's tick loop relied on. See
 There is no standalone worker process anymore — `npm run dev` at the repo
 root is the only thing to start.
 
+## ✍️ PROMPT ARCHITECTURE (Layer 0-4)
+
+Every prompt/generation-guiding step across blog/image_post/video is
+layered: **Layer 0** brand truth as structured data
+(`src/server/pipeline/prompts/brand/fresh-can.ts`, typed by
+`prompts/types.ts`'s `BrandProfile`) → **Layer 1** intent interpretation, an
+LLM step that turns a raw submission into a `CreativeBrief`
+(`steps/shared/interpretIntent.ts`, runs once per job before any
+content-type planning) → **Layer 2** per-content-type planning contracts,
+strict JSON (`ImagePostPlan` for image_post, per-scene fields on video's
+script output, blog's outline + a shared `ReferenceCopy` pass grounding
+hero/inline images in the *finished* copy, not just the outline headline)
+→ **Layer 3** render prompt composition, built from small reusable blocks
+(`prompts/core/compose.ts`/`composeText.ts`) → **Layer 4** guard: character
+budgets (`prompts/core/limits.ts`) and structural contradiction prevention
+(`prompts/core/contradictions.ts`). Unit presence (`'none'|'background'|
+'featured'`) is always LLM-decided per scene/image with a rationale, never
+a keyword match — the `keywords` form field/DB column still exists but no
+prompt path reads it. See `docs/PROMPT_ARCHITECTURE.md` for the full model
+and `docs/PROMPT_REFACTOR_CHANGELOG.md` for what was removed and where its
+responsibility moved.
+
 ---
 
 ## 📐 CODING STANDARDS

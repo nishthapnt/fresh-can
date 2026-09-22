@@ -15,9 +15,103 @@ Layer 3  RENDER PROMPTS     plan + brand truth → model-specific prompt, typed 
 Layer 4  GUARD              budget enforcement, validation, QA checks
 ```
 
-Phase 1 (this doc's current content) implements Layer 0 only. Layers 1-4 land
-in later phases — see `PROMPT_REFACTOR_BRIEF.md` §4 for the full target shape
-of each.
+All 8 phases (§4-§13) are complete as of Phase 8 (Session 19,
+2026-09-22) — see the per-phase sections below for how each layer landed.
+This section is the standing reference; the phase sections that follow are
+its build history, kept for the reasoning behind each rule.
+
+## Reference — where to change what
+
+**Layer 0, brand facts** — `prompts/brand/<brand>.ts` (one file per brand,
+`fresh-can.ts` is the only one that exists today), typed by
+`prompts/types.ts`'s `BrandProfile`. Nothing outside this file may contain a
+brand-specific literal string (rule G4, enforced by `compose.test.ts`'s
+brand-agnosticism suite — swap in the "Acme Fresh Mart" fixture and zero
+`Fresh-CAN`/`Fresh CAN` substrings should appear in any composed output).
+Tone/voice: `voiceGuidelines`/`bannedWords`. Business-model facts and their
+negatives: `journey`/`positiveVisualTruths`/`businessModelNegatives`. The
+physical unit: `unit.{identity,full,interior,wordmarkText}` (tiered — see
+Phase 1 below for why). Reference photos: `referenceImages.exterior[]`,
+each `{url, whatItShows, disregard[]}`.
+
+**Layer 1, intent interpretation** — `steps/shared/interpretIntent.ts` +
+`composeText.ts`'s `composeIntentSystemPrompt`. Turns the raw admin
+submission (topic/scene notes/category) into a `CreativeBrief`
+(`prompts/types.ts`) — `unitRelevance: {value, rationale}`,
+`improvements`, and content-type-specific fields. Runs once per job,
+before any content-type-specific planning. Lightweight idempotency (no
+claim/backoff loop — see `db.ts`'s `hasSucceededStep`/`recordStepAttempt`);
+a failed interpretation falls back to `NEUTRAL_FALLBACK_BRIEF`, never
+blocks the pipeline.
+
+**Layer 2, planning contracts** — one plan type per content type, all in
+`prompts/types.ts`: `ImagePostPlan` (image_post, via `steps/image/planImage.ts`),
+video's per-scene fields on `ScriptSceneOutput`/`SceneLayer2Fields`
+(`steps/video/generateScript.ts` — `story`/`look`/`cast_bible[]`/`locations[]`
+at the script level, `beat`/`cast_present`/`unit_presence`/`setting`/
+`contains_food`/`is_final_scene` per scene), and blog's outline
+`sections[]` + the separate `ReferenceCopy` pass
+(`steps/blog/generateReferenceCopy.ts`, Phase 6 — grounds hero/inline
+images in the *finished* copy, not just the outline headline). Every plan
+is strict JSON, normalized defensively (`normalize*` functions reject
+malformed shapes rather than guessing), and stored in existing jsonb
+columns — `pipeline_steps.output_snapshot` for the audit trail,
+`video_scenes.narration_intent`/`content_drafts.draft_data` for what a
+later step reads back. No schema migration was needed for any of this.
+
+**Layer 3, render prompt composition (the block system)** —
+`prompts/core/compose.ts` (image prompts) and `composeText.ts` (text/JSON
+prompts). Composers are built from small, named, reusable blocks rather
+than one long string per content type:
+- `unitBrandingBlock(brand, presence)` / `noTextVariantFor(brand, presence)`
+  / `noTextExceptUnitBranding()` — the unit-presence-aware branding and
+  no-stray-text guidance, shared across every image composer.
+- `watermarkSafeZoneBlock()` — reserves the top-right corner (brief §11).
+- `describeReferencePhoto(reference)` / `disregardClause(disregard)` —
+  turns a `BrandReferenceImage` into prompt text, honoring its `disregard[]`.
+- `oneWordmarkOnly(wordmarkText)` — exactly one wordmark instance, brand-
+  parameterized (fixed in Phase 8 — see that section for the bug this
+  replaced).
+- `continuityClauseFrom(previousVisualState)` — carries a scene's
+  people/objects forward so consecutive scenes don't contradict each other.
+- `truncateToFit(text, maxChars)` — the last-resort budget enforcement
+  every image composer calls before returning (Layer 4).
+Each content type's exported composer (`composeHeroPrompt`,
+`composeInlinePrompt`, `composeCharacterRefPrompt`, `composeSceneImagePrompt`,
+`composeSceneVideoPrompt`, `composePhotoPrompt`) assembles these blocks
+plus brand data plus the Layer 2 plan into one final prompt string.
+`composeText.ts`'s JSON-schema composers (`composeOutlineSystemPrompt`,
+`composeImagePlanSystemPrompt`, `composeVideoScriptSystemPrompt`,
+`composeReferenceCopySystemPrompt`, `composeLocalizeScriptSystemPrompt`,
+`composeCopySystemPrompt`, `composeAdCopySystemPrompt`) follow the same
+"assemble from named pieces, brand-parameterized" pattern.
+
+**Layer 4, guard** — `prompts/core/limits.ts`'s `PROMPT_LIMITS` (the single
+source of truth for every per-endpoint character budget — see the file's
+own header for which adapter each number is verified against) and
+`prompts/core/contradictions.ts`'s `assertNoContradiction(prompt, brand)`
+(throws `PromptContradictionError` if e.g. a no-branding scene and a
+unit-description block both landed in the same prompt — a structural
+check, not just a test). Budget enforcement happens by construction
+(unit descriptor tier chosen by relevance, not truncated after the fact)
+with `truncateToFit` as the logged last resort, never the primary
+mechanism.
+
+**Unit-presence rubric** — every content type resolves to the same
+three-tier `UnitPresence` (`prompts/core/compose.ts`): `'none'` (no
+reference image, explicit no-branding block), `'background'` (the
+lightweight `identity` descriptor, plausible but not the subject),
+`'featured'` (the `full` descriptor, the unit is the subject). The
+decision is always LLM-made, per scene/image, never a keyword match — and
+as of Phase 8, always carries a rationale: `ImagePostPlan.unitPresenceRationale`
+(required — `planImage`'s whole purpose is this decision) and video's
+per-scene `unit_presence_rationale` (optional, matching every other
+lenient Layer 2 per-scene field). An undefined/missing `unit_presence`
+is treated as `'none'` by the composer — the safe default is always "don't
+force the unit in," never the reverse.
+
+**Removed concepts** — see `docs/PROMPT_REFACTOR_CHANGELOG.md` for the
+full list of what was removed and where its responsibility moved.
 
 ## Phase 1 — Brand truth as data
 

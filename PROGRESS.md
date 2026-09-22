@@ -1615,6 +1615,35 @@
 - Fixed the video-clause G4 violations found during this audit rather than filing them for a future phase, since they're the same class of bug this phase's own test-suite work exists to catch, and the fix was mechanical (parameterize on `brand.name`) with no design decision involved.
 
 **⭐ Pick Up Next Session**
-- The 8-phase `PROMPT_REFACTOR_BRIEF.md` plan is now complete. Phase 9 (docs — brief §14: finish `docs/PROMPT_ARCHITECTURE.md`, update `CLAUDE.md`/`ARCHITECTURE.MD`, changelog) has not been explicitly requested yet.
+- The 8-phase `PROMPT_REFACTOR_BRIEF.md` plan is now complete. Phase 9 (docs) done Session 20.
+- Independently of the phase sequence: `cast_bible` verbatim injection into scene-image prompts (Phase 7's recommended follow-up).
+- Still open, unactioned: owner review of §16.3 (reference-photo pre-correction), §16.6 (interior counter/sink wording), §16.7 (2018 statistic), the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation (Session 17).
+
+### Session 20 — 2026-09-22 — Prompt architecture refactor, Phase 9: Documentation deliverables (§14)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §14 — finish `docs/PROMPT_ARCHITECTURE.md` as the standing design reference, update `CLAUDE.md`/`ARCHITECTURE.MD` for the new flow (intent step, plan contracts, keywords removal, blog ordering change), and a short changelog of removed concepts. Last item in the original 9-phase plan.*
+
+1. Added a consolidated "Reference — where to change what" section to `docs/PROMPT_ARCHITECTURE.md`, ahead of the existing per-phase build history: covers Layer 0-4 file/function pointers, the block system (`unitBrandingBlock`, `noTextVariantFor`, `watermarkSafeZoneBlock`, `oneWordmarkOnly`, `continuityClauseFrom`, `truncateToFit`), the JSON contracts (`CreativeBrief`, `ImagePostPlan`, video's per-scene Layer 2 fields, blog's `ReferenceCopy`), `PROMPT_LIMITS`/`assertNoContradiction`, and the unit-presence rubric.
+2. Created `docs/PROMPT_REFACTOR_CHANGELOG.md` — a table of every concept the refactor removed (keywords reads, keyword-regex unit-presence gating, `scene.ts`, hardcoded moods/category briefs, headline-only blog images, ungrouped budget constants, prose-substring e2e dispatch, hardcoded brand-name literals) and what replaced it.
+3. Added a "Prompt Architecture" section to `CLAUDE.md` — the Layer 0-4 model in ~15 lines, the keywords-field status, pointers to both new docs.
+4. Added §19 to `ARCHITECTURE.MD` (a pipeline/worker/schema-focused document that predates and doesn't cover prompt composition) — points to `docs/PROMPT_ARCHITECTURE.md`, and corrects §2.1/§2.4's now-stale keywords/blog-image-ordering descriptions rather than rewriting the historical `[SOURCE]`-labeled sections themselves.
+
+**📁 Files Changed**
+- `docs/PROMPT_ARCHITECTURE.md` — new Reference section.
+- `docs/PROMPT_REFACTOR_CHANGELOG.md` — new file.
+- `CLAUDE.md` — new "Prompt Architecture" section.
+- `ARCHITECTURE.MD` — new §19.
+
+**Decisions Made**
+- Did not do the brief §6.6-adjacent "move the long incident-archaeology comments out of `compose.ts`/`composeText.ts` into the doc" sweep — those comments already exist per-phase in `docs/PROMPT_ARCHITECTURE.md`'s history sections, and a wholesale comment-trimming pass across stable, working, already-tested code is a large, high-risk, low-value diff relative to what this phase's brief item was actually asking for (a documentation *deliverable*, not a code cleanup). Flagging this explicitly rather than silently skipping it.
+- Left `ARCHITECTURE.MD`'s historical `[SOURCE]`-labeled sections (§2.1, §2.4, etc.) untouched and added a correcting note instead of editing them in place — that document is an explicitly time-stamped, legend-labeled analysis snapshot (2026-09-07), not a living reference; rewriting its `[SOURCE]` sections to match current reality would misrepresent what was actually observed at the time.
+
+**⭐ Pick Up Next Session**
+- All 9 phases of `PROMPT_REFACTOR_BRIEF.md` are now complete.
 - Independently of the phase sequence: `cast_bible` verbatim injection into scene-image prompts (Phase 7's recommended follow-up).
 - Still open, unactioned: owner review of §16.3 (reference-photo pre-correction), §16.6 (interior counter/sink wording), §16.7 (2018 statistic), the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation (Session 17).

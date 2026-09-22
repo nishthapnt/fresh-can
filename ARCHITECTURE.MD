@@ -1219,6 +1219,32 @@ Following §17.4's two product decisions, this section records what changed stru
 
 ---
 
+## 19. Prompt Architecture Refactor (2026-09-22) — out of scope for this document
+
+This document is a pipeline/worker/schema architecture analysis; it does
+not cover how generation prompts themselves are built. That's now
+documented separately in `docs/PROMPT_ARCHITECTURE.md` (layer model: brand
+truth as data → intent interpretation → planning contracts → render prompt
+composition → budget/contradiction guards), with `docs/PROMPT_REFACTOR_CHANGELOG.md`
+listing everything the refactor removed and where its responsibility
+moved. Two corrections to keep the sections above from reading as
+contradictory:
+
+- **`keywords`** (§2.1, §12's `content_pipelines` input snapshot): the form
+  field and DB column both still exist exactly as described here, but as
+  of the prompt refactor, no generation prompt reads them anymore — a
+  `CreativeBrief` (LLM-interpreted from the actual submission) replaced
+  keyword-based creative direction. Dropping the field/column itself would
+  need a migration and hasn't been requested.
+- **Blog image generation**: §2.4's blog pipeline description predates a
+  later change where hero/inline images are now grounded in the finished
+  blog copy (a dedicated reference-copy pass), not generated from the
+  outline/headline alone. Doesn't change anything about the job/pipeline
+  state machine described above — a Layer 2/3 prompt-composition change,
+  not an architecture one.
+
+---
+
 ## If I Were Rebuilding Fresh-CAN
 
 I'd keep Postgres (Supabase is fine to keep as the managed Postgres + storage layer — there's no need to rip that out) and keep the Next.js dashboard's shape largely intact, since its pages, components, and approval UX are reasonable and don't need a rewrite. The part that actually needs to go is **n8n as the stateful orchestrator** — not because n8n is a bad tool, but because this system asks it to hold hours of state per job in a single execution with no persistence, no idempotency, and no failure reporting, which is a job description no visual-workflow tool is well suited for at this scale of complexity (six branches, ten duplicated retry loops, per-language forking).
