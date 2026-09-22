@@ -49,6 +49,73 @@ export interface SceneVisualState {
 }
 
 /**
+ * Layer 2 (PROMPT_REFACTOR_BRIEF.md §4.3) — video plan additions, all
+ * optional/lenient (Phase 3: not yet validated as a strict contract — that's
+ * Phase 5's guard layer). Field names stay snake_case to mirror the JSON the
+ * model returns directly, same convention `ScriptSceneOutput`/
+ * `SceneVisualState` already use. Persisted inside `video_scenes.
+ * narration_intent`'s existing jsonb alongside `visual_state` — no migration.
+ */
+export interface VideoScriptStory {
+  hook?: string
+  arc?: string
+  resolution?: string
+  cta?: string | null
+}
+
+/** AI-authored per PROMPT_REFACTOR_BRIEF.md §4.3 — replaces the fixed
+ *  neutral mood default `compose.ts`'s `moodClause` falls back to when no
+ *  plan exists (Phase 1 §6.3). Phase 4 wires this into the scene-image/
+ *  scene-video composers; until then it's generated and stored, not yet
+ *  read downstream. */
+export interface VideoScriptLook {
+  time_of_day?: string
+  lighting?: string
+  palette?: string
+  style_direction?: string
+  camera_language?: string
+}
+
+/** Locked physical description reused verbatim across every scene that
+ *  contains this person — the backbone of cross-scene continuity (brief
+ *  §4.3/§9.2). Not yet spliced into any image prompt (Phase 4). */
+export interface CastBibleEntry {
+  id: string
+  role?: string
+  age_range?: string
+  appearance?: string
+  wardrobe?: string
+  distinguishing_details?: string
+}
+
+export interface VideoLocation {
+  id: string
+  description?: string
+  continuity_details?: string
+}
+
+/**
+ * Layer 2 (PROMPT_REFACTOR_BRIEF.md §4.3) — image-post's plan, produced by
+ * the new `steps/image/planImage.ts` (image_post had no Layer 2 planning
+ * step before Phase 3). Not yet read by `composePhotoPrompt`/
+ * `composeAdCopySystemPrompt` (Phase 4).
+ */
+export interface ImagePostPlan {
+  designIntent: string
+  subject: string
+  composition: string
+  unitPresence: 'none' | 'background' | 'featured'
+  setting: 'exterior' | 'interior' | 'unrelated'
+  containsFood: boolean
+  castDescription?: string
+  textPlan: { headline: string; subtitle: string } | null
+  /** Always 'top-right' today (brief §10) — kept as a field, not a
+   *  constant, so a future brand/layout with a different watermark
+   *  position doesn't need a new type. */
+  safeZone: 'top-right'
+}
+
+/**
  * Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — the admin's raw idea, interpreted
  * into a structured brief. Produced once per pipeline generation by
  * `steps/shared/interpretIntent.ts`, shared by all three content types.

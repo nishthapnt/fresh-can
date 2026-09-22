@@ -65,7 +65,7 @@ import { SupabaseVideoStorageUploader } from '../../server/pipeline/adapters/sto
 import { ElevenLabsVoiceSynthesizer } from '../../server/pipeline/adapters/elevenlabs'
 import { AssemblyAITranscriptionService } from '../../server/pipeline/adapters/assemblyai'
 import { UploadPostAVMerger } from '../../server/pipeline/adapters/avMerger'
-import { BRAND_PROFILE, composeCharacterRefPrompt } from '../../server/pipeline/prompts/index'
+import { BRAND_PROFILE, composeCharacterRefPrompt, type CreativeBrief } from '../../server/pipeline/prompts/index'
 import { env } from '../../server/pipeline/env'
 
 type Step = GetStepTools<typeof inngest>
@@ -180,21 +180,13 @@ export const videoGenerate = inngest.createFunction(
     const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
 
     const job = await step.run('fetch-job', () => fetchVideoJobFields(jobId))
-    const scriptInput: VideoScriptJobInput = {
-      topic: job.topic,
-      category: job.category,
-      targetAudience: job.target_audience,
-      scriptType: job.script_type ?? 'SOLUTION',
-      jobLanguage: job.language ?? 'EN',
-      durationSeconds: job.video_duration_seconds ?? 36,
-      sceneNotes: job.scene_notes,
-    }
 
     let pipeline = await fetchPipeline(pipelineId)
+    let creativeBrief: CreativeBrief | undefined
     if (pipeline.status === 'created' || pipeline.status === 'drafting') {
-      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — generated and logged now;
-      // not yet consumed by generate_script (Phase 3 wires this in).
-      await step.run('interpret-intent', () =>
+      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — now feeds generate_script
+      // below (Phase 3).
+      creativeBrief = await step.run('interpret-intent', () =>
         interpretIntent(
           client,
           { contentPipelineId: pipelineId },
@@ -211,6 +203,17 @@ export const videoGenerate = inngest.createFunction(
         ),
       )
     }
+    const scriptInput: VideoScriptJobInput = {
+      topic: job.topic,
+      category: job.category,
+      targetAudience: job.target_audience,
+      scriptType: job.script_type ?? 'SOLUTION',
+      jobLanguage: job.language ?? 'EN',
+      durationSeconds: job.video_duration_seconds ?? 36,
+      sceneNotes: job.scene_notes,
+      creativeBrief,
+    }
+
     for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
       pipeline = await step.run(`generate-script-${attempt}`, async () => {
         const current = await fetchPipeline(pipelineId)

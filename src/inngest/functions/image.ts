@@ -19,6 +19,7 @@ import {
   type TrackRow,
 } from '../../server/pipeline/db'
 import { interpretIntent } from '../../server/pipeline/steps/shared/interpretIntent'
+import { planImage } from '../../server/pipeline/steps/image/planImage'
 import { runGenerateAdCopy, type AdCopyJobInput } from '../../server/pipeline/steps/image/generateAdCopy'
 import { runGeneratePhoto } from '../../server/pipeline/steps/image/generatePhoto'
 import { runGenerateCaption, type CaptionJobInput } from '../../server/pipeline/steps/image/generateCaption'
@@ -198,10 +199,8 @@ export const imageGenerate = inngest.createFunction(
     const imageStyle = resolveImageStyle(job.image_style)
 
     if (pipeline.status === 'created' || pipeline.status === 'drafting') {
-      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — generated and logged now;
-      // not yet consumed by generate_ad_copy/composePhotoPrompt (Phase 3
-      // wires this in).
-      await step.run('interpret-intent', () =>
+      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — feeds plan_image below.
+      const creativeBrief = await step.run('interpret-intent', () =>
         interpretIntent(
           client,
           { contentPipelineId: pipelineId },
@@ -216,6 +215,16 @@ export const imageGenerate = inngest.createFunction(
             sceneNotes: job.scene_notes,
           },
         ),
+      )
+      // Layer 2 (PROMPT_REFACTOR_BRIEF.md §4.3) — image_post's first
+      // planning step. Generated and logged now; not yet consumed by
+      // generate_ad_copy/composePhotoPrompt (Phase 4 wires this in).
+      await step.run('plan-image', () =>
+        planImage(client, { contentPipelineId: pipelineId }, pipeline.current_generation, scriptGenerator, BRAND_PROFILE, {
+          imageStyle,
+          scene: photoScene(job),
+          creativeBrief,
+        }),
       )
     }
 

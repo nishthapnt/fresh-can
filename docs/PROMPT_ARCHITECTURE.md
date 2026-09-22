@@ -189,12 +189,78 @@ neutral `CreativeBrief` (`unitRelevance: 'none'`) rather than failing the
 pipeline — this step exists to *improve* generation, not become a new
 single point of failure for one that worked without it before.
 
+## Phase 3 — Planning contracts (Layer 2)
+
+The `CreativeBrief` (Phase 2) now feeds real generation for the first time —
+`composeVideoScriptSystemPrompt`, `composeOutlineSystemPrompt`, and the new
+`composeImagePlanSystemPrompt` all take it as an optional parameter, folded
+in via `creativeBriefContext()` (`composeText.ts`) as grounding ("treat as
+your own prior thinking"), never a second, competing instruction. None of
+this phase's richer plan output is read by `compose.ts`'s image/video prompt
+builders yet — that's Phase 4.
+
+### Video — extends the existing Layer 2 step, doesn't add a new one
+
+`generateScript.ts` already plans the whole script+scene set in one call, so
+Phase 3 extends its schema rather than adding a step: top-level `story`
+(`hook`/`arc`/`resolution`/`cta`), `look` (AI-authored mood/lighting/
+palette/style/camera-language — the eventual replacement for Phase 1's fixed
+`NEUTRAL_MOOD_DEFAULT` fallback, once Phase 4 wires it in), `cast_bible[]`
+(locked physical descriptions, reused verbatim — the continuity backbone
+brief §9.2 calls for), `locations[]`; per-scene `beat`, `cast_present[]`,
+`props_present[]`, `unit_presence`, `setting`, `contains_food`,
+`is_final_scene`. All optional/lenient (`normalizeScriptOutput`'s existing
+pattern, extended) — Phase 5 is where a strict contract with real validation
+lands, not Phase 3. Storage: `story`/`look`/`cast_bible`/`locations` go in
+`content_drafts.draft_data` (video's one shared, pipeline-level JSON blob);
+the per-scene fields ride inside `video_scenes.narration_intent` alongside
+`visual_state`. No migration either way.
+
+**Deliberately conservative choice:** `STORY_PLANNING_CLAUSE`'s internal
+"classify Fresh-CAN's role in this story" step (point 4) is the product of
+several real, documented production incidents (Sessions 8–9) tuning exactly
+how hard the brand gets pulled into a script. The brief's `unitRelevance`
+now gives the model a pre-computed starting judgment for that same question.
+Phase 3 passes it in as **grounding the model can confirm or refine with the
+full scene context it's about to plan**, not a value that replaces the
+model's own in-context classification — trusting a less-contextual upstream
+judgment over a call already tuned against real failures was judged too
+risky to do silently. Revisit if production data says otherwise.
+
+### Image post — a genuinely new Layer 2 step
+
+image_post had no planning step at all before Phase 3 (only `infographic`-
+style jobs got any planning pass, via `generate_ad_copy`'s headline/
+subtitle). New `steps/image/planImage.ts` runs for **both** `photo` and
+`infographic` styles, producing `ImagePostPlan` (`designIntent`, `subject`,
+`composition`, `unitPresence`, `setting`, `containsFood`, `castDescription?`,
+`textPlan` — `null` for `photo`, required for `infographic`, enforced by the
+system prompt itself — `safeZone: 'top-right'`). Grounded in Phase 1's
+`businessModelNegatives`/`forbiddenInScene` arrays — their first real use in
+any prompt — so the plan itself never proposes a composition Layer 3 would
+have to reject. Same lightweight idempotency pattern as `interpretIntent`
+(`hasSucceededStep`/`recordStepAttempt`, no claim/backoff loop), storage via
+`pipeline_steps.output_snapshot` (image_post has no per-item plan table the
+way video has `video_scenes`).
+
+### Blog — outline generation is brief-grounded; image-brief ordering is still Phase 6
+
+`composeOutlineSystemPrompt` takes the brief as a 4th optional parameter,
+folded in alongside `sceneNotes`. Deliberately **not** touching image-brief
+timing this phase — brief §4.3's "image briefs derived from the finished
+copy" genuinely needs the ordering change already scoped as Phase 6; wiring
+a "reference copy" pass in here would have been the kind of piecemeal,
+partly-thrown-away work this refactor has been avoiding since Phase 1.
+
 ## Not yet done (later phases)
 
 - `isContainerRelevant`/`isVideoSceneAboutUnit` keyword-regex unit gating
-  (`prompts/core/scene.ts`) — still in use; replaced by an LLM-authored
-  `unitPresence` field once Layer 2 plans exist (Phase 3/4, brief §6.4/§8).
-- The `CreativeBrief` from Phase 2 is not yet read by any composer — Phase 3
-  wires it into the planning steps.
+  (`prompts/core/scene.ts`) — still in use; replaced by the LLM-authored
+  `unitPresence` fields Phase 3 now produces (video per-scene, image plan),
+  once Phase 4 actually wires them into the composers.
+- None of Phase 3's plan output (`story`/`look`/`cast_bible`/`locations`,
+  per-scene `unit_presence`/`setting`/`contains_food`, `ImagePostPlan`) is
+  read by any composer yet — Phase 4.
+- Blog's image-brief-from-finished-copy ordering change — Phase 6.
 - The full `PromptBlock` conditional-inclusion composer rewrite (Phase 4).
 - Per-endpoint budget config and contradiction validation (Phase 5).

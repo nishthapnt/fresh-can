@@ -12,7 +12,16 @@ import {
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
-import { BRAND_PROFILE, composeVideoScriptSystemPrompt, type SceneVisualState } from '../../prompts/index'
+import {
+  BRAND_PROFILE,
+  composeVideoScriptSystemPrompt,
+  type SceneVisualState,
+  type CreativeBrief,
+  type VideoScriptStory,
+  type VideoScriptLook,
+  type CastBibleEntry,
+  type VideoLocation,
+} from '../../prompts/index'
 
 export interface VideoScriptJobInput {
   topic: string
@@ -37,6 +46,11 @@ export interface VideoScriptJobInput {
    *  composeVideoScriptSystemPrompt for how it's used). Optional/nullable
    *  for a pre-existing job created before the field became required. */
   sceneNotes?: string | null
+  /** Layer 1's interpreted brief (PROMPT_REFACTOR_BRIEF.md §4.2), produced
+   *  by steps/shared/interpretIntent.ts. Optional so a caller that hasn't
+   *  run that step yet (or a legacy job predating it) still works exactly
+   *  as before — see composeVideoScriptSystemPrompt for how it's used. */
+  creativeBrief?: CreativeBrief
 }
 
 export interface ScriptSceneOutput {
@@ -52,6 +66,18 @@ export interface ScriptSceneOutput {
    *  visual_description does — it's a quality enhancement on top of
    *  already-working scene content, not core content of its own. */
   visual_state?: SceneVisualState
+  /** Layer 2 additions (PROMPT_REFACTOR_BRIEF.md §4.3) — all optional/
+   *  lenient, same treatment as visual_state above. Not yet read by any
+   *  composer (Phase 4 wires unit_presence/setting/contains_food into the
+   *  scene-image/scene-video prompts and retires the keyword-regex gate
+   *  isVideoSceneAboutUnit currently does that job). */
+  beat?: string
+  cast_present?: string[]
+  props_present?: string[]
+  unit_presence?: 'none' | 'background' | 'featured'
+  setting?: 'exterior' | 'interior' | 'unrelated'
+  contains_food?: boolean
+  is_final_scene?: boolean
 }
 
 export interface VideoScriptOutput {
@@ -59,6 +85,13 @@ export interface VideoScriptOutput {
   visual_description: string
   duration_seconds: number
   scenes: ScriptSceneOutput[]
+  /** Layer 2 additions (PROMPT_REFACTOR_BRIEF.md §4.3) — see each type's own
+   *  header (prompts/types.ts) for what it's for and why it's optional this
+   *  phase. */
+  story?: VideoScriptStory
+  look?: VideoScriptLook
+  cast_bible?: CastBibleEntry[]
+  locations?: VideoLocation[]
 }
 
 /** Coerces a numeric-looking string to a number — models routinely quote
@@ -104,6 +137,84 @@ function normalizeVisualState(value: unknown): SceneVisualState | undefined {
   }
 }
 
+function coerceBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+const UNIT_PRESENCE_VALUES = new Set(['none', 'background', 'featured'])
+const SETTING_VALUES = new Set(['exterior', 'interior', 'unrelated'])
+
+function normalizeEnum<T extends string>(value: unknown, allowed: Set<string>): T | undefined {
+  return typeof value === 'string' && allowed.has(value) ? (value as T) : undefined
+}
+
+/** Lenient, best-effort parse of the top-level story/look objects — same
+ *  never-fails-the-whole-script treatment as normalizeVisualState. Every
+ *  field is itself optional, so a partially-specified object is still kept
+ *  rather than discarded wholesale. */
+function normalizeStory(value: unknown): VideoScriptStory | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const out: VideoScriptStory = {}
+  if (typeof v.hook === 'string') out.hook = v.hook
+  if (typeof v.arc === 'string') out.arc = v.arc
+  if (typeof v.resolution === 'string') out.resolution = v.resolution
+  if (typeof v.cta === 'string' || v.cta === null) out.cta = v.cta
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function normalizeLook(value: unknown): VideoScriptLook | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const out: VideoScriptLook = {}
+  if (typeof v.time_of_day === 'string') out.time_of_day = v.time_of_day
+  if (typeof v.lighting === 'string') out.lighting = v.lighting
+  if (typeof v.palette === 'string') out.palette = v.palette
+  if (typeof v.style_direction === 'string') out.style_direction = v.style_direction
+  if (typeof v.camera_language === 'string') out.camera_language = v.camera_language
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Cast bible / locations both require a real `id` (they're referenced by
+ *  id from scenes' cast_present) — an entry with no id is dropped rather
+ *  than kept with a made-up one, since a scene referencing a missing id is
+ *  a safer failure mode than two different ids silently meaning the same
+ *  person. */
+function normalizeCastBible(value: unknown): CastBibleEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const entries: CastBibleEntry[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const v = raw as Record<string, unknown>
+    if (typeof v.id !== 'string' || v.id.trim() === '') continue
+    entries.push({
+      id: v.id,
+      role: typeof v.role === 'string' ? v.role : undefined,
+      age_range: typeof v.age_range === 'string' ? v.age_range : undefined,
+      appearance: typeof v.appearance === 'string' ? v.appearance : undefined,
+      wardrobe: typeof v.wardrobe === 'string' ? v.wardrobe : undefined,
+      distinguishing_details: typeof v.distinguishing_details === 'string' ? v.distinguishing_details : undefined,
+    })
+  }
+  return entries.length > 0 ? entries : undefined
+}
+
+function normalizeLocations(value: unknown): VideoLocation[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const entries: VideoLocation[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const v = raw as Record<string, unknown>
+    if (typeof v.id !== 'string' || v.id.trim() === '') continue
+    entries.push({
+      id: v.id,
+      description: typeof v.description === 'string' ? v.description : undefined,
+      continuity_details: typeof v.continuity_details === 'string' ? v.continuity_details : undefined,
+    })
+  }
+  return entries.length > 0 ? entries : undefined
+}
+
 /** Normalizes a parsed script response into VideoScriptOutput, or returns
  *  null if it's missing/malformed in a way that can't be safely coerced.
  *  Deliberately lenient on number-as-string (see coerceNumber) and on
@@ -139,10 +250,26 @@ export function normalizeScriptOutput(parsed: unknown): VideoScriptOutput | null
       narration_intent: scene.narration_intent,
       target_duration_seconds: targetDurationSeconds,
       visual_state: normalizeVisualState(scene.visual_state),
+      beat: typeof scene.beat === 'string' ? scene.beat : undefined,
+      cast_present: toStringArray(scene.cast_present),
+      props_present: toStringArray(scene.props_present),
+      unit_presence: normalizeEnum(scene.unit_presence, UNIT_PRESENCE_VALUES),
+      setting: normalizeEnum(scene.setting, SETTING_VALUES),
+      contains_food: coerceBoolean(scene.contains_food),
+      is_final_scene: coerceBoolean(scene.is_final_scene),
     })
   }
 
-  return { script: p.script, visual_description: p.visual_description, duration_seconds: durationSeconds, scenes }
+  return {
+    script: p.script,
+    visual_description: p.visual_description,
+    duration_seconds: durationSeconds,
+    scenes,
+    story: normalizeStory(p.story),
+    look: normalizeLook(p.look),
+    cast_bible: normalizeCastBible(p.cast_bible),
+    locations: normalizeLocations(p.locations),
+  }
 }
 
 /** Reads a scene's visual_state back out of its stored narration_intent
@@ -215,6 +342,7 @@ export async function runGenerateScript(
           scriptType: input.scriptType,
           targetDurationSeconds: input.durationSeconds,
           sceneNotes: input.sceneNotes,
+          creativeBrief: input.creativeBrief,
         }),
         userPrompt:
           `Topic: ${input.topic}\nCategory: ${input.category}\n` +
@@ -251,6 +379,16 @@ export async function runGenerateScript(
           visual_description: output.visual_description,
           duration_seconds: output.duration_seconds,
           scenes: output.scenes,
+          // Layer 2 shared/pipeline-level plan fields (PROMPT_REFACTOR_BRIEF.md
+          // §4.3) — content_drafts.draft_data is video's one shared,
+          // pipeline-level JSON blob (there's no sibling column for
+          // "applies to the whole script, not one scene"), so story/look/
+          // cast_bible/locations live here rather than duplicated onto
+          // every scene's own narration_intent.
+          story: output.story,
+          look: output.look,
+          cast_bible: output.cast_bible,
+          locations: output.locations,
         },
       })
 
@@ -261,9 +399,20 @@ export async function runGenerateScript(
           sceneNumber: s.scene_number,
           visualDescription: s.visual_description,
           shotNotes: s.shot_notes ?? null,
-          // visual_state rides inside this same JSON column — see
-          // extractVisualState's own header for why that's not a new column.
-          narrationIntent: { text: s.narration_intent, visual_state: s.visual_state },
+          // visual_state and the Layer 2 per-scene fields below all ride
+          // inside this same JSON column — see extractVisualState's own
+          // header for why that's not a new column.
+          narrationIntent: {
+            text: s.narration_intent,
+            visual_state: s.visual_state,
+            beat: s.beat,
+            cast_present: s.cast_present,
+            props_present: s.props_present,
+            unit_presence: s.unit_presence,
+            setting: s.setting,
+            contains_food: s.contains_food,
+            is_final_scene: s.is_final_scene,
+          },
           targetDurationMs: Math.round(s.target_duration_seconds * 1000),
         })),
       })

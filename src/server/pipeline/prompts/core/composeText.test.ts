@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   composeIntentSystemPrompt,
+  composeImagePlanSystemPrompt,
   composeOutlineSystemPrompt,
   composeCopySystemPrompt,
   composeCaptionSystemPrompt,
@@ -8,7 +9,18 @@ import {
   composeVideoScriptSystemPrompt,
   composeLocalizeScriptSystemPrompt,
 } from './composeText'
-import type { BrandProfile } from '../types'
+import type { BrandProfile, CreativeBrief } from '../types'
+
+const TEST_CREATIVE_BRIEF: CreativeBrief = {
+  intent: 'community story',
+  coreMessage: 'TEST CORE MESSAGE',
+  audience: 'TEST AUDIENCE',
+  emotionalTone: 'TEST EMOTIONAL TONE',
+  desiredResponse: 'TEST DESIRED RESPONSE',
+  unitRelevance: { value: 'incidental', rationale: 'TEST UNIT RELEVANCE RATIONALE' },
+  improvements: 'TEST IMPROVEMENTS',
+  constraintsFromAdmin: 'TEST ADMIN CONSTRAINT',
+}
 
 const testBrand: BrandProfile = {
   name: 'Test Brand',
@@ -78,6 +90,56 @@ describe('composeIntentSystemPrompt', () => {
   })
 })
 
+describe('composeImagePlanSystemPrompt', () => {
+  it('requires the full ImagePostPlan JSON shape', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })
+    for (const field of [
+      '"designIntent"',
+      '"subject"',
+      '"composition"',
+      '"unitPresence"',
+      '"setting"',
+      '"containsFood"',
+      '"castDescription"',
+      '"textPlan"',
+      '"safeZone"',
+    ]) {
+      expect(prompt).toContain(field)
+    }
+    expect(prompt).toContain('"none" | "background" | "featured"')
+  })
+
+  it('requires textPlan to be null for photo style', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })
+    expect(prompt).toContain('MUST be null for this job')
+  })
+
+  it('requires textPlan to be populated for infographic style', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'infographic', scene: 'A family shops.' })
+    expect(prompt).toContain('is required for this job')
+  })
+
+  it('includes business-model negatives and scene negatives as grounding', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })
+    expect(prompt).toContain('TEST BUSINESS MODEL NEGATIVE')
+  })
+
+  it('reserves the top-right watermark safe zone', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })
+    expect(prompt).toContain('logo watermark is composited there')
+  })
+
+  it('folds a given CreativeBrief in', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' }, TEST_CREATIVE_BRIEF)
+    expect(prompt).toContain('TEST CORE MESSAGE')
+  })
+
+  it('omits the brief when none is given', () => {
+    const prompt = composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })
+    expect(prompt).not.toContain('TEST CORE MESSAGE')
+  })
+})
+
 describe('composeOutlineSystemPrompt', () => {
   it('keeps the literal phrase "content strategist" (blogPipeline e2e test routes mocks on it)', () => {
     expect(composeOutlineSystemPrompt(testBrand, 'Test Category')).toContain('content strategist')
@@ -117,6 +179,22 @@ describe('composeOutlineSystemPrompt', () => {
   it('omits the scene-idea clause entirely when none is given (pre-existing job with no scene_notes)', () => {
     const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category')
     expect(prompt).not.toContain('creative idea for the post')
+  })
+
+  it('folds a given CreativeBrief in alongside sceneNotes', () => {
+    const prompt = composeOutlineSystemPrompt(
+      testBrand,
+      'Test Category',
+      'A senior reaching a mobile unit at dusk',
+      TEST_CREATIVE_BRIEF,
+    )
+    expect(prompt).toContain('TEST CORE MESSAGE')
+    expect(prompt).toContain('TEST ADMIN CONSTRAINT')
+  })
+
+  it('omits the brief when none is given', () => {
+    const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category', 'A senior reaching a mobile unit at dusk')
+    expect(prompt).not.toContain('TEST CORE MESSAGE')
   })
 })
 
@@ -281,6 +359,51 @@ describe('composeVideoScriptSystemPrompt', () => {
     for (const field of ['scene_number', 'visual_description', 'shot_notes', 'narration_intent', 'target_duration_seconds']) {
       expect(prompt).toContain(field)
     }
+  })
+
+  it('includes the Layer 2 plan schema (story/look/cast_bible/locations, per-scene unit_presence/setting/contains_food) — PROMPT_REFACTOR_BRIEF.md §4.3', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    for (const field of [
+      '"story"',
+      '"look"',
+      '"cast_bible"',
+      '"locations"',
+      '"beat"',
+      '"cast_present"',
+      '"props_present"',
+      '"unit_presence"',
+      '"setting"',
+      '"contains_food"',
+      '"is_final_scene"',
+    ]) {
+      expect(prompt).toContain(field)
+    }
+  })
+
+  it('folds a given CreativeBrief into the scene-idea-led preamble, alongside sceneNotes', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+      creativeBrief: TEST_CREATIVE_BRIEF,
+    })
+    expect(prompt).toContain('TEST CORE MESSAGE')
+    expect(prompt).toContain('TEST UNIT RELEVANCE RATIONALE')
+    expect(prompt).toContain('TEST ADMIN CONSTRAINT')
+    expect(prompt).toContain('starting point to confirm or refine')
+  })
+
+  it('omits the brief entirely when none is given — unaffected by Phase 3 for a caller that predates it', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, {
+      ...baseOpts,
+      sceneNotes: 'A senior reaching a mobile unit at dusk',
+    })
+    expect(prompt).not.toContain('TEST CORE MESSAGE')
+    expect(prompt).not.toContain('An earlier interpretation pass')
+  })
+
+  it('never folds the brief in without sceneNotes present (no creative-idea-led preamble to attach it to)', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, { ...baseOpts, creativeBrief: TEST_CREATIVE_BRIEF })
+    expect(prompt).not.toContain('TEST CORE MESSAGE')
   })
 
   it('tells the model narration_intent must stay semantic, never literal wording in one language', () => {

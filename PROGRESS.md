@@ -1389,3 +1389,43 @@
 **⭐ Pick Up Next Session**
 - Phase 3 (Layer 2 — planning contracts, `PROMPT_REFACTOR_BRIEF.md` §4.3): extend `generateScript.ts`'s scene plan with `castBible`/`look`/per-scene `beat`/`unitPresence`/`continuityFromPrevious`; add an image-post plan and a blog plan; wire Phase 2's `CreativeBrief` into all three as their actual input.
 - Still open, same as noted after Phase 1: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.
+
+---
+
+### Session 14 — 2026-09-22 — Prompt architecture refactor, Phase 3: planning contracts (Layer 2)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §4.3/§5.2/§9.2 — wire Phase 2's `CreativeBrief` into real generation for the first time, and extend each content type's planning step to carry the richer structure §4.3 defines. None of the new plan structure is read by `compose.ts`'s image/video prompt builders yet — that's Phase 4's composer rewrite.*
+
+- **Video** (extends the existing Layer 2 step rather than adding a new one) — `composeVideoScriptSystemPrompt` takes the `CreativeBrief` as real input; `generateScript.ts`'s output schema extends with top-level `story`/`look`/`cast_bible`/`locations` and per-scene `beat`/`cast_present`/`props_present`/`unit_presence`/`setting`/`contains_food`/`is_final_scene`, all optional/lenient via extended `normalizeScriptOutput`. Shared fields (`story`/`look`/`cast_bible`/`locations`) persist in `content_drafts.draft_data` (video's one shared, pipeline-level JSON blob); per-scene fields ride inside `video_scenes.narration_intent` alongside the existing `visual_state`. No migration.
+- **Conservative call on `STORY_PLANNING_CLAUSE`** — its internal "classify Fresh-CAN's role" step (point 4) is tuned against real Session 8–9 incidents. The brief's `unitRelevance` is passed in as a starting point the model confirms/refines with full scene context, not a value that overrides the model's own in-context classification — avoids risking a regression by trusting a less-contextual upstream judgment over an already-tuned call.
+- **Image post** — genuinely new: `steps/image/planImage.ts` + `composeImagePlanSystemPrompt`, producing `ImagePostPlan` for **both** `photo` and `infographic` styles (previously only infographic got any planning pass, via `generate_ad_copy`). `textPlan` is `null`/required per style, enforced by the system prompt itself. First real use anywhere of Phase 1's `businessModelNegatives`/`forbiddenInScene` brand-data arrays. Same lightweight idempotency pattern as `interpretIntent` (no claim/backoff loop), stored via `pipeline_steps.output_snapshot`.
+- **Blog** — `composeOutlineSystemPrompt` takes the brief as a 4th optional param. Image-brief-from-finished-copy ordering deliberately left untouched — that's Phase 6, and doing it piecemeal here would be thrown-away work.
+- `image.ts`'s `interpret-intent` step now feeds `plan-image` directly (both run in the same `created`/`drafting`-gated block, before the existing ad-copy/photo generation flow, which still owns its own status-transition claims unchanged).
+
+**🧪 Testing**
+- `tsc --noEmit` clean.
+- New: `generateScript.test.ts` gained a `describe('Layer 2 planning fields')` block (6 tests); `planImage.test.ts` (9 tests, new file); `composeText.test.ts` gained `composeImagePlanSystemPrompt` (7 tests) plus creativeBrief-wiring tests for video script (3) and outline (2).
+- Full non-e2e suite: 355/355 passing (328 + 27 new). `eslint`: 0 errors, same pre-existing `_`-prefixed-unused warning class only.
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/types.ts` — `VideoScriptStory`, `VideoScriptLook`, `CastBibleEntry`, `VideoLocation`, `ImagePostPlan`
+- `src/server/pipeline/prompts/index.ts` — export all of the above + `composeImagePlanSystemPrompt`
+- `src/server/pipeline/prompts/core/composeText.ts` — `creativeBriefContext()` helper; `composeVideoScriptSystemPrompt`/`composeOutlineSystemPrompt` gain `creativeBrief`; new `composeImagePlanSystemPrompt`; `STORY_PLANNING_CLAUSE` point 4 amended
+- `src/server/pipeline/steps/video/generateScript.ts` — schema + normalization extended; `creativeBrief` threaded through; draft_data/narration_intent writes extended
+- `src/server/pipeline/steps/image/planImage.ts`, `planImage.test.ts` — new
+- `src/server/pipeline/steps/blog/generateOutline.ts` — `creativeBrief` param threaded through
+- `src/inngest/functions/blog.ts`, `video.ts`, `image.ts` — capture and pass `interpretIntent`'s result; `image.ts` wires `plan-image`
+- `src/server/pipeline/prompts/core/composeText.test.ts`, `src/server/pipeline/steps/video/generateScript.test.ts` — new coverage
+
+**💡 Decisions Made**
+- `planImage` follows `interpretIntent`'s lightweight idempotency pattern (not `generate_ad_copy`'s claim/backoff loop) — it doesn't need to gate `content_pipelines.status` itself; the existing ad-copy/photo flow still owns that.
+- Kept all new video-schema fields optional/lenient rather than a strict contract — Phase 5 (Guard) is where real validation lands, not Phase 3.
+
+**⭐ Pick Up Next Session**
+- Phase 4 (Layer 3 — render prompt composition, `PROMPT_REFACTOR_BRIEF.md` §4.4): the `PromptBlock` conditional-inclusion rewrite of `compose.ts`/`composeText.ts`'s image/video builders — this is where Phase 3's plan output (`unit_presence`, `setting`, `contains_food`, `cast_bible`, `look`, `ImagePostPlan`) actually starts changing rendered prompts, and where `isContainerRelevant`/`isVideoSceneAboutUnit` finally get retired.
+- Still open: owner review of §16.3/§16.6/§16.7, the `category`/`content_angle` dropdowns' fate, and per-endpoint character-limit verification (needed before Phase 5, good to start now).

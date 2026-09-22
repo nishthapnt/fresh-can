@@ -2,7 +2,31 @@
 // prompts: fixed brand facts (mission, voice, real stats, category briefs)
 // live in the brand file and get spliced into every prompt, rather than
 // each step file writing brand-blind, topic-only prompts from scratch.
-import type { BrandProfile } from '../types'
+import type { BrandProfile, CreativeBrief, ImageStyle } from '../types'
+
+/**
+ * Renders a CreativeBrief (Layer 1, PROMPT_REFACTOR_BRIEF.md §4.2) as
+ * grounding context for a Layer 2 planning prompt. Framed explicitly as
+ * something to BUILD FROM, never a second, competing instruction set — same
+ * "constraint/grounding, never the point" pattern every scene-idea clause in
+ * this file already uses (see composeOutlineSystemPrompt's/
+ * composeVideoScriptSystemPrompt's own sceneNotes handling).
+ */
+function creativeBriefContext(brief: CreativeBrief): string {
+  const constraints = brief.constraintsFromAdmin
+    ? ` The admin also specified this non-negotiable constraint, which must be preserved exactly: ${brief.constraintsFromAdmin}`
+    : ''
+  const improvements = brief.improvements ? ` ${brief.improvements}` : ''
+  return (
+    `An earlier interpretation pass already read the admin's idea and produced this brief — treat it as your ` +
+    `own prior thinking, not a second opinion to reconcile: intent is "${brief.intent}"; the core message is ` +
+    `"${brief.coreMessage}"; audience "${brief.audience}"; tone "${brief.emotionalTone}"; the viewer should ` +
+    `"${brief.desiredResponse}".${improvements}${constraints} That same pass also estimated the brand's ` +
+    `physical unit is "${brief.unitRelevance.value}" to this idea (${brief.unitRelevance.rationale}) — treat ` +
+    'this as a starting point to confirm or refine with the full context below, never as a directive that ' +
+    'overrides your own judgment once you have it.'
+  )
+}
 
 function bannedWordsLine(brand: BrandProfile): string {
   return brand.bannedWords.length > 0 ? ` Avoid these overused phrases: ${brand.bannedWords.join(', ')}.` : ''
@@ -83,7 +107,75 @@ export function composeIntentSystemPrompt(brand: BrandProfile, contentType: stri
   )
 }
 
-export function composeOutlineSystemPrompt(brand: BrandProfile, category: string, sceneNotes?: string | null): string {
+export interface ImagePlanSystemPromptOptions {
+  imageStyle: ImageStyle
+  /** The dashboard's "Your Scene Idea" plus any clarifying-question answers
+   *  — the same assembled scene text composePhotoPrompt is built around
+   *  (see image.ts's photoScene()). This is the creative brief the plan is
+   *  built around, never a light influence. */
+  scene: string
+}
+
+/**
+ * Layer 2 (PROMPT_REFACTOR_BRIEF.md §4.3) — image_post's plan. image_post
+ * had no planning step of its own before Phase 3 (only 'infographic'-style
+ * jobs got any planning pass at all, via generate_ad_copy's headline/
+ * subtitle). Runs for both 'photo' and 'infographic' styles. Grounded in
+ * the brand's business-model negatives (Phase 1) so the plan itself never
+ * proposes a composition that Layer 3 would have to reject — e.g. this is
+ * where "not a cashier or checkout counter" gets applied to what the model
+ * PLANS, not just what it later avoids drawing.
+ */
+export function composeImagePlanSystemPrompt(
+  brand: BrandProfile,
+  opts: ImagePlanSystemPromptOptions,
+  creativeBrief?: CreativeBrief,
+): string {
+  const negativesLine =
+    brand.businessModelNegatives.length > 0 || brand.forbiddenInScene.length > 0
+      ? ` ${[...brand.businessModelNegatives, ...brand.forbiddenInScene].join(' ')}`
+      : ''
+  const textPlanInstruction =
+    opts.imageStyle === 'infographic'
+      ? '"textPlan" is required for this job (image_style: "infographic") — a short headline (max 6 words) ' +
+        'and subtitle (2-5 words) that will be rendered directly onto the image, grounded in the scene above.'
+      : '"textPlan" MUST be null for this job (image_style: "photo") — this style never renders on-image text.'
+
+  return (
+    `${brand.missionStatement}${negativesLine}\n\n` +
+    'You are planning a single social media image post before it gets rendered. This is the creative brief ' +
+    `the plan is built around: "${opts.scene}". Brand facts above are fixed constraints on correctness if ` +
+    'they appear — never the reason this image exists, and never a directive on style, mood, or composition, ' +
+    "which stay entirely up to the scene above." +
+    (creativeBrief ? `\n\n${creativeBriefContext(creativeBrief)}` : '') +
+    '\n\nDecide honestly whether the brand\'s physical unit (the mobile grocery store) belongs in this frame: ' +
+    '"featured" only if the scene above is genuinely about the unit itself (visiting, entering, shopping in, ' +
+    'or the unit\'s own arrival/existence); "background" if it could plausibly and unobtrusively belong in the ' +
+    'setting without being the subject — never forced in; "none" for anything else, including any interior ' +
+    'domestic setting (a kitchen, dining room, living room) or a pure produce/food close-up.\n\n' +
+    'Respond with strictly valid JSON matching this exact shape:\n' +
+    '{\n' +
+    '  "designIntent": string (what this image needs to accomplish, in one sentence),\n' +
+    '  "subject": string (what/who is actually in frame),\n' +
+    '  "composition": string (framing, focal hierarchy, negative space — a real compositional plan, not a ' +
+    'restatement of the subject),\n' +
+    '  "unitPresence": "none" | "background" | "featured",\n' +
+    '  "setting": "exterior" | "interior" | "unrelated",\n' +
+    '  "containsFood": boolean,\n' +
+    '  "castDescription": string ("" if no people are in the scene),\n' +
+    `  "textPlan": { "headline": string, "subtitle": string } or null (${textPlanInstruction}),\n` +
+    '  "safeZone": "top-right" (fixed — the logo watermark is composited there after generation; keep that ' +
+    'corner visually clean in the composition above — no text, no face, no high-detail clutter there)\n' +
+    '}'
+  )
+}
+
+export function composeOutlineSystemPrompt(
+  brand: BrandProfile,
+  category: string,
+  sceneNotes?: string | null,
+  creativeBrief?: CreativeBrief,
+): string {
   return (
     brandContext(brand, category) +
     'You are a content strategist. Produce a JSON outline for a blog post with a title, ' +
@@ -104,7 +196,8 @@ export function composeOutlineSystemPrompt(brand: BrandProfile, category: string
     (sceneNotes
       ? `\n\nBuild this outline around the user's own creative idea for the post: "${sceneNotes}". Treat the ` +
         'brand mission, voice, and category guidance above as fixed constraints on tone and accuracy — ' +
-        'never as the angle itself. The scene idea decides what this post is actually about.'
+        'never as the angle itself. The scene idea decides what this post is actually about.' +
+        (creativeBrief ? `\n\n${creativeBriefContext(creativeBrief)}` : '')
       : '')
   )
 }
@@ -236,6 +329,12 @@ export interface VideoScriptSystemPromptOptions {
    *  IF they appear — never as the angle itself. Optional/nullable for a
    *  pre-existing job created before the field became required. */
   sceneNotes?: string | null
+  /** Layer 1's interpreted brief (PROMPT_REFACTOR_BRIEF.md §4.2), produced
+   *  by steps/shared/interpretIntent.ts. Optional so a caller that hasn't
+   *  run that step yet (or a legacy job predating it) still works exactly
+   *  as before. Only folded in alongside sceneNotes — see
+   *  composeVideoScriptSystemPrompt's own body for why. */
+  creativeBrief?: CreativeBrief
 }
 
 /**
@@ -409,7 +508,10 @@ const STORY_PLANNING_CLAUSE =
   'subject, or hero, based on how directly the idea above already concerns Fresh-CAN or its mission (an idea ' +
   'with no real connection to groceries or the brand is background; an idea directly about Fresh-CAN\'s own ' +
   'mission or service is hero) — this is an honest read of the idea itself, never a default, since the ' +
-  'branding guidance below scales against it. (5) Visual motif — one recurring visual element (a color, an ' +
+  'branding guidance below scales against it. If an earlier pass already estimated how relevant the physical ' +
+  'unit is to this idea, treat that as a starting point to confirm or refine here, with the full idea and ' +
+  'scenes you are now planning — your own classification, made with that fuller context, is what the ' +
+  'branding guidance below actually scales against. (5) Visual motif — one recurring visual element (a color, an ' +
   'object, a gesture, a shot type) that can carry across multiple scenes for cohesion. (6) Scene purpose — plan ' +
   'what specific job each scene does in the story before writing it; every scene must advance the story, never ' +
   'exist as one more pretty but disconnected shot.'
@@ -456,7 +558,8 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
       `That is background context for tone and brand accuracy only: a fixed constraint on how the brand's ` +
       `vehicle, app, or other branding must look or sound IF the idea above genuinely calls for them, never a ` +
       `second angle, and never a reason to insert brand or mission messaging into a scene the idea doesn't ` +
-      `call for. ${STORY_PLANNING_CLAUSE} ${CAMPAIGN_FIT} ${FRESHCAN_ROLE_ADAPTIVITY} ${BRAND_ASSET_FIDELITY} ` +
+      `call for.${opts.creativeBrief ? ` ${creativeBriefContext(opts.creativeBrief)}` : ''} ` +
+      `${STORY_PLANNING_CLAUSE} ${CAMPAIGN_FIT} ${FRESHCAN_ROLE_ADAPTIVITY} ${BRAND_ASSET_FIDELITY} ` +
       `Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
     : brandContext(brand, opts.category) + statsLine(brand) + '\n\n'
 
@@ -464,14 +567,32 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     preamble +
     `You are a video scriptwriter and shot planner. Produce a short-form marketing video script AND its ` +
     `scene-by-scene shot plan in ONE response. Script type: ${opts.scriptType}.\n\n` +
-    'Respond with strictly valid JSON matching this exact shape (all fields required):\n' +
+    'Respond with strictly valid JSON matching this exact shape (the core fields — script, visual_description, ' +
+    'duration_seconds, scenes, and each scene\'s scene_number/visual_description/shot_notes/narration_intent/' +
+    'target_duration_seconds — are required; the additional planning fields below are optional but strongly ' +
+    'encouraged whenever you have a real, specific answer for them — never pad one with a generic placeholder ' +
+    'just to fill it in):\n' +
     '{\n' +
     '  "script": string (the full narration/voiceover text, human-readable, in English, for internal review only),\n' +
     '  "visual_description": string (one-paragraph overview of the video\'s overall visual concept),\n' +
     '  "duration_seconds": number (total estimated runtime, summing the scenes below),\n' +
+    '  "story": { "hook": string, "arc": string, "resolution": string, "cta": string or null } (a compact ' +
+    'summary of your planning above — the same hook/arc/payoff structure, not new content),\n' +
+    '  "look": { "time_of_day": string, "lighting": string, "palette": string, "style_direction": string, ' +
+    '"camera_language": string } (the visual mood/style for the WHOLE video, deferential to whatever the scene ' +
+    'idea itself already implies — this replaces guessing a default mood per image later),\n' +
+    '  "cast_bible": [ { "id": string (short, stable, e.g. "mother"), "role": string, "age_range": string, ' +
+    '"appearance": string, "wardrobe": string, "distinguishing_details": string } ] (one entry per named or ' +
+    'recurring person in the story — locked physical descriptions to reuse VERBATIM in every scene that person ' +
+    'appears in, the backbone of keeping them looking the same scene to scene; omit entirely for a video with ' +
+    'no recurring named people),\n' +
+    '  "locations": [ { "id": string, "description": string, "continuity_details": string } ] (one entry per ' +
+    'distinct place the story visits, if it revisits any; omit for a single-location or single-shot video),\n' +
     '  "scenes": [\n' +
     '    {\n' +
     '      "scene_number": number (1-indexed, sequential, no gaps),\n' +
+    '      "beat": string (this scene\'s narrative job — e.g. "hook", "build", "turn", "payoff", "close", or ' +
+    'another word that fits better),\n' +
     '      "visual_description": string (what the camera shows — the subject\'s own action plus any natural ' +
     'ambient motion already implied by the setting, e.g. steam rising, wind moving leaves or fabric, light ' +
     'shifting — specific enough to generate an image from. Ground it in this scene\'s own story beat and ' +
@@ -486,6 +607,15 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
     'independently localized into actual EN or FR wording by a later step),\n' +
     '      "target_duration_seconds": number (this scene\'s planned runtime budget),\n' +
+    '      "cast_present": string[] (the cast_bible ids of who appears in this scene, if any — [] or omit if ' +
+    'the video has no cast_bible),\n' +
+    '      "props_present": string[] (visually significant objects this scene establishes or carries forward),\n' +
+    '      "unit_presence": "none" | "background" | "featured" (is Fresh-CAN\'s physical unit the subject of ' +
+    'this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +
+    '      "setting": "exterior" | "interior" | "unrelated" (unrelated for a setting that has nothing to do ' +
+    'with the unit at all, e.g. a home kitchen),\n' +
+    '      "contains_food": boolean (does this scene show food, produce, or packaged groceries),\n' +
+    '      "is_final_scene": boolean (true only for the actual last scene),\n' +
     '      "visual_state": { "people": number, "hands": string (who this scene\'s visible hands belong to, ' +
     'e.g. "the woman only" or "none visible" — never a hand with no owner), "objects": string[] (visually ' +
     'significant physical objects in frame, a few words each), "new_entities": string[] (the subset of ' +

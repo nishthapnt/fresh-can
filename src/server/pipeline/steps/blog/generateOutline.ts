@@ -9,7 +9,7 @@ import {
   type PipelineRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
-import { BRAND_PROFILE, composeOutlineSystemPrompt } from '../../prompts/index'
+import { BRAND_PROFILE, composeOutlineSystemPrompt, type CreativeBrief } from '../../prompts/index'
 
 export interface OutlineJobInput {
   topic: string
@@ -19,6 +19,10 @@ export interface OutlineJobInput {
    *  scene_notes) — previously only threaded into image_post's photo
    *  prompt; see composeOutlineSystemPrompt for how it's used here. */
   sceneNotes?: string | null
+  /** Layer 1's interpreted brief (PROMPT_REFACTOR_BRIEF.md §4.2), produced
+   *  by steps/shared/interpretIntent.ts. Optional so a caller that hasn't
+   *  run that step yet still works exactly as before. */
+  creativeBrief?: CreativeBrief
 }
 
 /**
@@ -77,7 +81,7 @@ export async function runGenerateOutline(
     const attemptNumber = working.retry_count + 1
     try {
       const result = await scriptGenerator.generate({
-        systemPrompt: composeOutlineSystemPrompt(BRAND_PROFILE, input.category, input.sceneNotes),
+        systemPrompt: composeOutlineSystemPrompt(BRAND_PROFILE, input.category, input.sceneNotes, input.creativeBrief),
         userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}\nAudience: ${input.targetAudience}`,
       })
       await recordStepAttempt(client, {
