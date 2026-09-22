@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  composeIntentSystemPrompt,
   composeOutlineSystemPrompt,
   composeCopySystemPrompt,
   composeCaptionSystemPrompt,
@@ -15,9 +16,9 @@ const testBrand: BrandProfile = {
   voiceGuidelines: 'TEST VOICE GUIDELINES',
   bannedWords: ['synergy', 'disrupt'],
   statistics: ['1 in 5 test subjects prefer this fixture'],
-  journey: [],
+  journey: ['TEST JOURNEY STEP ONE'],
   positiveVisualTruths: [],
-  businessModelNegatives: [],
+  businessModelNegatives: ['TEST BUSINESS MODEL NEGATIVE'],
   unit: { identity: 'IDENTITY', full: 'CONTAINER', interior: 'INTERIOR' },
   forbiddenOnUnit: [],
   forbiddenInScene: [],
@@ -28,6 +29,54 @@ const testBrand: BrandProfile = {
   ctaBarColorDescriptor: 'CTA BAR COLOR DESCRIPTOR',
   referenceImages: { exterior: [], interior: [] },
 }
+
+describe('composeIntentSystemPrompt', () => {
+  it('includes brand mission, journey, and business-model negatives as grounding context', () => {
+    const prompt = composeIntentSystemPrompt(testBrand, 'blog')
+    expect(prompt).toContain('TEST MISSION STATEMENT')
+    expect(prompt).toContain('TEST JOURNEY STEP ONE')
+    expect(prompt).toContain('TEST BUSINESS MODEL NEGATIVE')
+  })
+
+  it('names the correct content-type label for each of the three content types', () => {
+    expect(composeIntentSystemPrompt(testBrand, 'video')).toContain('a short-form vertical video')
+    expect(composeIntentSystemPrompt(testBrand, 'image_post')).toContain('a single social media image post')
+    expect(composeIntentSystemPrompt(testBrand, 'blog')).toContain('a blog article')
+  })
+
+  it('falls back to a generic label for an unrecognized content type rather than throwing', () => {
+    expect(() => composeIntentSystemPrompt(testBrand, 'something_new')).not.toThrow()
+    expect(composeIntentSystemPrompt(testBrand, 'something_new')).toContain('a piece of content')
+  })
+
+  it('requires the full CreativeBrief JSON shape, including the unitRelevance rubric', () => {
+    const prompt = composeIntentSystemPrompt(testBrand, 'blog')
+    for (const field of [
+      '"intent"',
+      '"coreMessage"',
+      '"audience"',
+      '"emotionalTone"',
+      '"desiredResponse"',
+      '"unitRelevance"',
+      '"improvements"',
+      '"constraintsFromAdmin"',
+    ]) {
+      expect(prompt).toContain(field)
+    }
+    expect(prompt).toContain('"central" | "incidental" | "none"')
+  })
+
+  it('instructs the model to elevate a thin idea, never override an explicit one', () => {
+    const prompt = composeIntentSystemPrompt(testBrand, 'blog')
+    expect(prompt).toMatch(/elevate it, never replace it/)
+    expect(prompt).toContain('is binding and must survive into your output unchanged')
+  })
+
+  it('refuses invented facts beyond the brand file or the admin\'s own input', () => {
+    const prompt = composeIntentSystemPrompt(testBrand, 'blog')
+    expect(prompt).toContain('Never invent a fact, statistic, price, launch date, store count, or place name')
+  })
+})
 
 describe('composeOutlineSystemPrompt', () => {
   it('keeps the literal phrase "content strategist" (blogPipeline e2e test routes mocks on it)', () => {

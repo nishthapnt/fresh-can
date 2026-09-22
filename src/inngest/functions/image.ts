@@ -18,6 +18,7 @@ import {
   type PipelineRow,
   type TrackRow,
 } from '../../server/pipeline/db'
+import { interpretIntent } from '../../server/pipeline/steps/shared/interpretIntent'
 import { runGenerateAdCopy, type AdCopyJobInput } from '../../server/pipeline/steps/image/generateAdCopy'
 import { runGeneratePhoto } from '../../server/pipeline/steps/image/generatePhoto'
 import { runGenerateCaption, type CaptionJobInput } from '../../server/pipeline/steps/image/generateCaption'
@@ -75,6 +76,7 @@ async function fetchTracksForPipeline(pipelineId: string): Promise<TrackRow[]> {
 interface ImageJobFields {
   topic: string
   category: string
+  target_audience: string
   scene_notes: string | null
   image_answers: ImageAnswer[] | null
   image_style: string | null
@@ -84,7 +86,7 @@ interface ImageJobFields {
 async function fetchImageJobFields(jobId: string): Promise<ImageJobFields> {
   const { data, error } = await client
     .from('content_jobs')
-    .select('topic, category, scene_notes, image_answers, image_style, content_angle')
+    .select('topic, category, target_audience, scene_notes, image_answers, image_style, content_angle')
     .eq('id', jobId)
     .single()
   if (error || !data) {
@@ -194,6 +196,28 @@ export const imageGenerate = inngest.createFunction(
     let pipeline = await step.run('fetch-pipeline', () => fetchPipeline(pipelineId))
     const job = await step.run('fetch-job', () => fetchImageJobFields(jobId))
     const imageStyle = resolveImageStyle(job.image_style)
+
+    if (pipeline.status === 'created' || pipeline.status === 'drafting') {
+      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — generated and logged now;
+      // not yet consumed by generate_ad_copy/composePhotoPrompt (Phase 3
+      // wires this in).
+      await step.run('interpret-intent', () =>
+        interpretIntent(
+          client,
+          { contentPipelineId: pipelineId },
+          pipeline.current_generation,
+          scriptGenerator,
+          BRAND_PROFILE,
+          {
+            contentType: 'image_post',
+            topic: job.topic,
+            category: job.category,
+            targetAudience: job.target_audience,
+            sceneNotes: job.scene_notes,
+          },
+        ),
+      )
+    }
 
     if (imageStyle === 'infographic' && (pipeline.status === 'created' || pipeline.status === 'drafting')) {
       const adCopyInput: AdCopyJobInput = {

@@ -49,6 +49,7 @@ import {
   type PipelineRow,
   type TrackRow,
 } from '../../server/pipeline/db'
+import { interpretIntent } from '../../server/pipeline/steps/shared/interpretIntent'
 import { runGenerateScript, type VideoScriptJobInput } from '../../server/pipeline/steps/video/generateScript'
 import { runGenerateCharacterRef } from '../../server/pipeline/steps/video/generateCharacterRef'
 import { runGenerateSceneVisual } from '../../server/pipeline/steps/video/generateSceneVisual'
@@ -190,6 +191,26 @@ export const videoGenerate = inngest.createFunction(
     }
 
     let pipeline = await fetchPipeline(pipelineId)
+    if (pipeline.status === 'created' || pipeline.status === 'drafting') {
+      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — generated and logged now;
+      // not yet consumed by generate_script (Phase 3 wires this in).
+      await step.run('interpret-intent', () =>
+        interpretIntent(
+          client,
+          { contentPipelineId: pipelineId },
+          pipeline.current_generation,
+          scriptGenerator,
+          BRAND_PROFILE,
+          {
+            contentType: 'video',
+            topic: job.topic,
+            category: job.category,
+            targetAudience: job.target_audience,
+            sceneNotes: job.scene_notes,
+          },
+        ),
+      )
+    }
     for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
       pipeline = await step.run(`generate-script-${attempt}`, async () => {
         const current = await fetchPipeline(pipelineId)

@@ -49,6 +49,42 @@ export interface SceneVisualState {
 }
 
 /**
+ * Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — the admin's raw idea, interpreted
+ * into a structured brief. Produced once per pipeline generation by
+ * `steps/shared/interpretIntent.ts`, shared by all three content types.
+ *
+ * `unitRelevance` here is a BRIEF-level (whole-content) judgment, distinct
+ * from the per-scene/per-image `unitPresence` rubric a Layer 2 plan will
+ * carry (PROMPT_REFACTOR_BRIEF.md §8, 'featured'/'background'/'none') — a
+ * `central` brief can still have individual scenes where the unit doesn't
+ * belong (an establishing shot of produce, say), and vice versa.
+ */
+export interface CreativeBrief {
+  /** What the admin is actually trying to do — inferred, never picked from
+   *  a fixed list (e.g. marketing, awareness, food/nutrition education,
+   *  community story, product/how-it-works explainer). */
+  intent: string
+  /** The single idea the viewer must leave with. */
+  coreMessage: string
+  audience: string
+  emotionalTone: string
+  /** What the viewer should think, feel, or do after seeing this. */
+  desiredResponse: string
+  unitRelevance: {
+    value: 'central' | 'incidental' | 'none'
+    /** One sentence, honest and specific to this idea — never boilerplate. */
+    rationale: string
+  }
+  /** Where the admin's idea was thin, what was added to make it stronger —
+   *  must elevate, never override, anything the admin stated explicitly.
+   *  Empty string if the idea was already specific and complete. */
+  improvements: string
+  /** Anything the admin stated that is non-negotiable and must be preserved
+   *  exactly. Empty string if none. */
+  constraintsFromAdmin: string
+}
+
+/**
  * A real photo of the brand's physical subject. `whatItShows` is a pure,
  * factual description of what the camera captured — never a correction or
  * an instruction. Anything real-but-not-brand-canonical the photo happens

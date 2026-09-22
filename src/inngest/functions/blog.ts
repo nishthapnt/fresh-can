@@ -20,6 +20,7 @@ import {
   type PipelineRow,
   type TrackRow,
 } from '../../server/pipeline/db'
+import { interpretIntent } from '../../server/pipeline/steps/shared/interpretIntent'
 import { runGenerateOutline, type OutlineJobInput } from '../../server/pipeline/steps/blog/generateOutline'
 import { runGenerateVisualImage } from '../../server/pipeline/steps/blog/generateVisualImage'
 import { runGenerateCopy, type CopyJobInput } from '../../server/pipeline/steps/blog/generateCopy'
@@ -177,6 +178,24 @@ export const blogGenerate = inngest.createFunction(
 
     if (pipeline.status === 'created' || pipeline.status === 'drafting') {
       const job = await step.run('fetch-job-for-outline', () => fetchBlogJobFields(jobId))
+      // Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2) — generated and logged now;
+      // not yet consumed by generate_outline (Phase 3 wires this in).
+      await step.run('interpret-intent', () =>
+        interpretIntent(
+          client,
+          { contentPipelineId: pipelineId },
+          pipeline.current_generation,
+          scriptGenerator,
+          BRAND_PROFILE,
+          {
+            contentType: 'blog',
+            topic: job.topic,
+            category: job.category,
+            targetAudience: job.target_audience,
+            sceneNotes: job.scene_notes,
+          },
+        ),
+      )
       const outlineInput: OutlineJobInput = {
         topic: job.topic,
         category: job.category,

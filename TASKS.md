@@ -4,7 +4,7 @@
 
 ## 🎯 CURRENT SPRINT
 
-- [ ] Prompt architecture refactor (`PROMPT_REFACTOR_BRIEF.md`, `docs/PROMPT_ARCHITECTURE.md`) — layered brand truth → intent → plan → render → guard, in 9 phases. Phase 1 (brand truth as structured data, keywords removal) done Session 12, 2026-09-22. Next: Phase 2 (intent interpretation step), pending owner review of Phase 1's open items (§16.3/§16.6/§16.7).
+- [ ] Prompt architecture refactor (`PROMPT_REFACTOR_BRIEF.md`, `docs/PROMPT_ARCHITECTURE.md`) — layered brand truth → intent → plan → render → guard, in 9 phases. Phase 1 (brand truth as structured data, keywords removal) done Session 12; Phase 2 (intent interpretation step, `interpretIntent`/`composeIntentSystemPrompt`, generated+logged but not yet consumed by generation) done Session 13, 2026-09-22. Next: Phase 3 (planning contracts — wires the brief into actual generation). Still pending owner review of Phase 1's open items (§16.3/§16.6/§16.7).
 - [ ] Investigate KIE.ai negative-prompt support to more reliably stop text baking into generated photos
 - [ ] Stabilize `src/server/pipeline/steps/blog/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness; path corrected — file moved off `worker/` during the Inngest migration)
 - [ ] Backport permanent Supabase Storage upload (`fc-image-posts` pattern) to blog's hero/inline images

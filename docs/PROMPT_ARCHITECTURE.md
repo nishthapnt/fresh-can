@@ -144,10 +144,57 @@ against their stated 3500 limit (brief §16.1 — unresolved, do not guess).
   with `BRAND_PROFILE.missionStatement`, per brief G4 (no brand-specific
   strings outside the brand profile file).
 
+## Phase 2 — Intent interpretation (Layer 1)
+
+`steps/shared/interpretIntent.ts` (new — the first step shared identically
+across blog/image/video, rather than living under one content type's
+folder) turns the admin's raw idea into a structured `CreativeBrief`
+(`prompts/types.ts`) before any script/outline/photo prompt gets written:
+`intent`, `coreMessage`, `audience`, `emotionalTone`, `desiredResponse`, a
+brief-level `unitRelevance` (`central`/`incidental`/`none` + a one-sentence
+rationale), `improvements` (must elevate the admin's idea, never override an
+explicit one), and `constraintsFromAdmin`.
+
+### `unitRelevance` is brief-level, not scene-level
+
+Don't confuse `CreativeBrief.unitRelevance` with the per-scene/per-image
+`unitPresence` rubric a Layer 2 plan will carry later (brief §8's
+`featured`/`background`/`none` naming). A `central` brief can still have
+individual scenes where the unit doesn't belong (a close-up on produce,
+say), and an `incidental`/`none` brief could still have one scene that
+genuinely calls for it. The brief-level judgment grounds the *overall*
+creative direction; the scene-level one (Phase 3/4) decides frame by frame.
+
+### Not yet consumed by generation
+
+This phase generates and logs the brief (`pipeline_steps.output_snapshot`,
+step name `interpret_intent`) but deliberately does **not** wire it into
+`composeOutlineSystemPrompt`/`composeVideoScriptSystemPrompt`/
+`composePhotoPrompt` yet — the brief is Layer 2's *input*, and Layer 2
+(`story`/`look`/`castBible`/scene plan for video; an image-post plan; a blog
+plan) doesn't exist yet. Wiring it in is Phase 3's job. Current generation
+output is unaffected by Phase 2.
+
+### Idempotency: lighter than `generate_outline`/`generate_script`
+
+`interpretIntent` uses the same `hasSucceededStep`/`recordStepAttempt`
+ledger every step writes to, but skips `claimPipeline`'s CAS-claim and
+backoff-sleep retry loop — that machinery exists specifically to gate
+`content_pipelines.status` across multiple retry attempts (image/video
+generation polls an external provider and can legitimately need several
+passes). Intent interpretation is a single, non-polling OpenAI call already
+wrapped in Inngest's own `step.run()` durability, so the heavier pattern
+would be unused ceremony. A malformed/failed response falls back to a
+neutral `CreativeBrief` (`unitRelevance: 'none'`) rather than failing the
+pipeline — this step exists to *improve* generation, not become a new
+single point of failure for one that worked without it before.
+
 ## Not yet done (later phases)
 
 - `isContainerRelevant`/`isVideoSceneAboutUnit` keyword-regex unit gating
   (`prompts/core/scene.ts`) — still in use; replaced by an LLM-authored
   `unitPresence` field once Layer 2 plans exist (Phase 3/4, brief §6.4/§8).
+- The `CreativeBrief` from Phase 2 is not yet read by any composer — Phase 3
+  wires it into the planning steps.
 - The full `PromptBlock` conditional-inclusion composer rewrite (Phase 4).
 - Per-endpoint budget config and contradiction validation (Phase 5).

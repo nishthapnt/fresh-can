@@ -24,6 +24,65 @@ function brandContext(brand: BrandProfile, _category: string): string {
   return `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
 }
 
+const CONTENT_TYPE_LABEL: Record<string, string> = {
+  video: 'a short-form vertical video',
+  image_post: 'a single social media image post',
+  blog: 'a blog article',
+}
+
+/**
+ * Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2/§5.1) — turns the admin's raw idea
+ * into a structured creative brief, the single input every subsequent
+ * planning step (blog outline, video script, image plan) will read from.
+ * Grounded in the brand's real business-model facts (journey/negatives) so
+ * `unitRelevance` and `improvements` are decided against what Fresh-CAN
+ * actually is, not a guess — but never lets those facts become a second,
+ * competing topic (same "constraint, never the point" framing every other
+ * prompt in this file already uses for scene ideas).
+ */
+export function composeIntentSystemPrompt(brand: BrandProfile, contentType: string): string {
+  const contentTypeLabel = CONTENT_TYPE_LABEL[contentType] ?? 'a piece of content'
+  const journeyLine = brand.journey.length > 0 ? ` The real customer journey: ${brand.journey.join(' ')}` : ''
+  const negativesLine =
+    brand.businessModelNegatives.length > 0 ? ` ${brand.businessModelNegatives.join(' ')}` : ''
+
+  return (
+    `${brand.missionStatement}${journeyLine}${negativesLine}\n\n` +
+    'You are interpreting an admin\'s raw idea for ' +
+    `${contentTypeLabel} before any script, outline, or image plan gets written. Read the idea charitably ` +
+    'and specifically — assume it is a genuine, considered starting point, not a vague prompt to pad out. ' +
+    'Identify what the admin is actually trying to accomplish. If the idea is thin, strengthen it with ' +
+    'concrete, specific detail that serves the SAME idea — elevate it, never replace it or substitute a ' +
+    "different angle; anything the admin stated explicitly is binding and must survive into your output " +
+    'unchanged. Decide how relevant the brand\'s physical unit (the mobile grocery store) is to this specific ' +
+    'idea: "central" if the idea is fundamentally about visiting, entering, shopping in, finding, or the ' +
+    'existence/arrival of a unit, or is a direct how-it-works/customer-journey explainer; "incidental" if the ' +
+    'unit could plausibly belong in the setting and reinforce context without being the subject (e.g. a ' +
+    'community moment on a street where a unit happens to be parked) — never forced in; "none" for pure food/ ' +
+    'nutrition education, recipes, produce/farm stories, awareness or community/emotional pieces with no ' +
+    'natural place for the unit, and any interior domestic setting (a kitchen, dining room, living room). ' +
+    'Never invent a fact, statistic, price, launch date, store count, or place name beyond "Canada" that is ' +
+    'not already in the brand facts above or the admin\'s own input.\n\n' +
+    'Respond with strictly valid JSON matching this exact shape (all fields required, use "" for a genuinely ' +
+    'empty string field):\n' +
+    '{\n' +
+    '  "intent": string (what the admin is actually trying to do — marketing, promotion, awareness, food/' +
+    'nutrition education, a community story, a product/how-it-works explainer, or another goal that fits ' +
+    'better — inferred from the idea itself, never picked from a fixed list),\n' +
+    '  "coreMessage": string (the single idea the viewer must leave with),\n' +
+    '  "audience": string,\n' +
+    '  "emotionalTone": string,\n' +
+    '  "desiredResponse": string (what the viewer should think, feel, or do after seeing this),\n' +
+    '  "unitRelevance": { "value": "central" | "incidental" | "none", "rationale": string (one sentence, ' +
+    'honest and specific to this idea, never boilerplate) },\n' +
+    '  "improvements": string (where the idea was thin, what you added to strengthen it — "" if it was ' +
+    'already specific and complete),\n' +
+    '  "constraintsFromAdmin": string (anything the admin stated that is non-negotiable and must be ' +
+    'preserved exactly — "" if none)\n' +
+    '}'
+  )
+}
+
 export function composeOutlineSystemPrompt(brand: BrandProfile, category: string, sceneNotes?: string | null): string {
   return (
     brandContext(brand, category) +

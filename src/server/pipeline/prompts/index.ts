@@ -1,7 +1,7 @@
 // The single switch point for re-branding this worker — see
 // brand/fresh-can.ts's header comment.
 export { BRAND_PROFILE } from './brand/fresh-can'
-export type { BrandProfile, BrandReferenceImage, UnitDescriptor, ImageStyle, SceneVisualState } from './types'
+export type { BrandProfile, BrandReferenceImage, UnitDescriptor, ImageStyle, SceneVisualState, CreativeBrief } from './types'
 export {
   composeHeroPrompt,
   composeInlinePrompt,
@@ -12,6 +12,7 @@ export {
   type ImageComposition,
 } from './core/compose'
 export {
+  composeIntentSystemPrompt,
   composeOutlineSystemPrompt,
   composeCopySystemPrompt,
   composeCaptionSystemPrompt,

@@ -1351,3 +1351,41 @@
 
 **⭐ Pick Up Next Session**
 - Phase 2 (Layer 1 — intent interpretation step) per `PROMPT_REFACTOR_BRIEF.md` §4.2, or owner review of Phase 1 first: reference-photo pre-correction recommendation (§16.3), interior counter/sink wording (§16.6, default applied), 2018 statistic (§16.7, no change made — original figure kept, still needs owner call), and confirming the `category`/`content_angle` dashboard dropdowns' fate now that they're inert for prompt purposes.
+
+---
+
+### Session 13 — 2026-09-22 — Prompt architecture refactor, Phase 2: intent interpretation (Layer 1)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §4.2/§5.1 — a new step, shared by all three content types, that turns the admin's raw idea into a structured `CreativeBrief` before any script/outline/photo prompt gets written. Scoped deliberately narrow: this phase adds and runs the step so its output is real, logged, and testable; it does NOT yet rewire `composeOutlineSystemPrompt`/`composeVideoScriptSystemPrompt`/`composePhotoPrompt` to consume it — the brief is Layer 2's input, and Layer 2 doesn't get rebuilt until Phase 3. Current generation output is unaffected by this phase.*
+
+- **`CreativeBrief` type** (`prompts/types.ts`) — `intent`, `coreMessage`, `audience`, `emotionalTone`, `desiredResponse`, `unitRelevance: {value: 'central'|'incidental'|'none', rationale}`, `improvements`, `constraintsFromAdmin`. `unitRelevance` here is a documented BRIEF-level (whole-content) judgment, distinct from the per-scene/per-image `unitPresence` rubric a Layer 2 plan will carry later (brief §8's `featured`/`background`/`none` naming) — noted directly in the type's own comment so Phase 3 doesn't conflate the two.
+- **`composeIntentSystemPrompt(brand, contentType)`** (`prompts/core/composeText.ts`) — the first real consumer of Phase 1's new structured brand fields (`journey`, `businessModelNegatives`): grounds the interpretation in the real customer journey and business-model negatives, asks the model to interpret charitably/specifically, elevate a thin idea without ever overriding an explicit one, decide `unitRelevance` against a brief-level adaptation of §8's rubric, and refuse invented facts/stats/prices/dates/place-names beyond the brand file or the admin's own input. Strict JSON out.
+- **`steps/shared/interpretIntent.ts`** (new directory — first step shared identically across blog/image/video rather than living under one content type's folder) — calls the composer, validates the JSON response (`normalizeCreativeBrief`, exported for testing, same lenient-validate-or-null pattern `generateScript.ts`'s `normalizeScriptOutput` already uses), and falls back to a neutral `CreativeBrief` (`unitRelevance: 'none'`) on a malformed/failed response rather than throwing — this step is meant to improve generation, not become a new single point of failure. Idempotent per (pipeline, generation) via the same `hasSucceededStep`/`recordStepAttempt` ledger every other step uses, but deliberately WITHOUT `generate_outline`/`generate_script`'s claim/backoff-loop machinery (that exists to gate `content_pipelines.status` across retries — a single non-polling OpenAI call doesn't need it).
+- **Wired into all three Inngest functions** — one `step.run('interpret-intent', ...)` added to `blogGenerate`/`imageGenerate`/`videoGenerate`'s shared (`created`/`drafting`) section, before their existing outline/ad-copy/script generation. `image.ts`'s `fetchImageJobFields` gained `target_audience` to its select (previously never fetched for image_post at all — an oversight predating this refactor; image.ts's `interpretIntent` call is the first thing in this codebase to actually need it).
+
+**🧪 Testing**
+- `tsc --noEmit` clean.
+- New `interpretIntent.test.ts` (7 tests) — `normalizeCreativeBrief`'s validation: accepts well-formed input, accepts each valid `unitRelevance.value`, rejects an unrecognized value/a missing required field/a missing `unitRelevance`/non-object input, accepts genuinely-empty optional fields.
+- New `composeIntentSystemPrompt` describe block in `composeText.test.ts` (6 tests) — brand grounding (mission/journey/negatives) present, correct content-type label per type plus a safe fallback for an unrecognized one, full JSON schema present including the unitRelevance rubric, elevate-never-override framing present, invented-facts refusal present.
+- Full non-e2e suite: 328/328 passing (315 + 13 new). `eslint`: 0 errors; 2 new warnings are the same `_`-prefixed-destructure pattern already tolerated elsewhere in this codebase (`newContentStore.ts`).
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/types.ts` — new `CreativeBrief` type
+- `src/server/pipeline/prompts/core/composeText.ts` — new `composeIntentSystemPrompt`
+- `src/server/pipeline/prompts/index.ts` — export both
+- `src/server/pipeline/steps/shared/interpretIntent.ts`, `interpretIntent.test.ts` — new
+- `src/inngest/functions/blog.ts`, `image.ts`, `video.ts` — `interpret-intent` step.run wiring; `image.ts`'s `ImageJobFields`/`fetchImageJobFields` gained `target_audience`
+- `src/server/pipeline/prompts/core/composeText.test.ts` — new describe block + `testBrand` fixture gained non-empty `journey`/`businessModelNegatives` to exercise them
+
+**💡 Decisions Made**
+- `interpretIntent` uses plain `hasSucceededStep`/`recordStepAttempt` (no CAS claim, no backoff-sleep loop) rather than copying `generate_outline`'s heavier pattern — that machinery is specifically for steps that gate the pipeline's status state machine across multiple retry attempts; this is a single OpenAI call already wrapped in Inngest's own `step.run()` durability.
+- The brief is generated and logged this phase but not yet threaded into any composer — avoids doing Phase 3's planning-contract work piecemeal inside Phase 2.
+
+**⭐ Pick Up Next Session**
+- Phase 3 (Layer 2 — planning contracts, `PROMPT_REFACTOR_BRIEF.md` §4.3): extend `generateScript.ts`'s scene plan with `castBible`/`look`/per-scene `beat`/`unitPresence`/`continuityFromPrevious`; add an image-post plan and a blog plan; wire Phase 2's `CreativeBrief` into all three as their actual input.
+- Still open, same as noted after Phase 1: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.
