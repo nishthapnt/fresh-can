@@ -15,16 +15,17 @@ const testBrand: BrandProfile = {
   voiceGuidelines: 'TEST VOICE GUIDELINES',
   bannedWords: ['synergy', 'disrupt'],
   statistics: ['1 in 5 test subjects prefer this fixture'],
-  categoryBriefs: { 'Test Category': 'TEST CATEGORY BRIEF' },
-  containerDescriptor: 'CONTAINER',
-  interiorDescriptor: 'INTERIOR',
+  journey: [],
+  positiveVisualTruths: [],
+  businessModelNegatives: [],
+  unit: { identity: 'IDENTITY', full: 'CONTAINER', interior: 'INTERIOR' },
+  forbiddenOnUnit: [],
+  forbiddenInScene: [],
   noTextInstruction: 'NO TEXT',
   noNewTextInstruction: 'NO NEW TEXT',
   ctaBarText: 'Visit test.example.com',
   typographyDescriptor: 'TYPOGRAPHY DESCRIPTOR',
   ctaBarColorDescriptor: 'CTA BAR COLOR DESCRIPTOR',
-  adAngleBriefs: { test_angle: 'TEST ANGLE BRIEF' },
-  moods: [{ key: 'a', detail: 'MOOD A' }],
   referenceImages: { exterior: [], interior: [] },
 }
 
@@ -33,18 +34,18 @@ describe('composeOutlineSystemPrompt', () => {
     expect(composeOutlineSystemPrompt(testBrand, 'Test Category')).toContain('content strategist')
   })
 
-  it('includes brand mission, voice, banned words, and the category brief', () => {
+  it('includes brand mission, voice, and banned words', () => {
     const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category')
     expect(prompt).toContain('TEST MISSION STATEMENT')
     expect(prompt).toContain('TEST VOICE GUIDELINES')
     expect(prompt).toContain('synergy')
-    expect(prompt).toContain('TEST CATEGORY BRIEF')
   })
 
-  it('omits the category-brief line for a category with no brief configured', () => {
-    const prompt = composeOutlineSystemPrompt(testBrand, 'Unknown Category')
-    expect(prompt).not.toContain('TEST CATEGORY BRIEF')
-    expect(prompt).toContain('TEST MISSION STATEMENT')
+  it('never includes per-category canned creative direction (categoryBriefs removed — PROMPT_REFACTOR_BRIEF.md §6.2)', () => {
+    const withCategory = composeOutlineSystemPrompt(testBrand, 'Test Category')
+    const withoutCategory = composeOutlineSystemPrompt(testBrand, 'Unknown Category')
+    expect(withCategory).toContain('TEST MISSION STATEMENT')
+    expect(withoutCategory).toContain('TEST MISSION STATEMENT')
   })
 
   it('bounds section count and requires concrete, non-generic headings/summaries', () => {
@@ -192,10 +193,9 @@ describe('composeAdCopySystemPrompt', () => {
     }
   })
 
-  it('includes brand context and the category brief', () => {
+  it('includes brand context', () => {
     const prompt = composeAdCopySystemPrompt(testBrand, { category: 'Test Category' })
     expect(prompt).toContain('TEST MISSION STATEMENT')
-    expect(prompt).toContain('TEST CATEGORY BRIEF')
   })
 
   it('splices in the angle brief when given', () => {
@@ -221,10 +221,9 @@ describe('composeAdCopySystemPrompt', () => {
 describe('composeVideoScriptSystemPrompt', () => {
   const baseOpts = { category: 'Test Category', scriptType: 'SOLUTION', targetDurationSeconds: 36 }
 
-  it('includes brand context, the category brief, and the target duration', () => {
+  it('includes brand context and the target duration', () => {
     const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
     expect(prompt).toContain('TEST MISSION STATEMENT')
-    expect(prompt).toContain('TEST CATEGORY BRIEF')
     expect(prompt).toContain('approximately 36')
   })
 

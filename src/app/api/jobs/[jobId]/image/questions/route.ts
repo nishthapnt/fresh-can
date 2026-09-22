@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { BRAND_PROFILE } from '@/server/pipeline/prompts/index'
 
 // Replaces the old n8n 'image_questions' webhook (src/app/api/n8n/trigger's
 // now-removed image_questions branch) — the clarifying-Q&A step shown before
@@ -22,25 +23,14 @@ interface QuestionItem {
   placeholder?: string
 }
 
-// Mirrors the essential brand context worker/src/prompts/brand/fresh-can.ts
-// carries for the worker's own prompts — duplicated in this small, fixed
-// amount rather than imported, since src/ and worker/ are separate
-// deployable packages with no shared module path between them.
-const BRAND_CONTEXT =
-  'Fresh-CAN is a Canadian company that deploys AI-assisted mobile grocery stores — built inside converted ' +
-  'shipping containers — directly into food desert communities across Canada, partnering with local farmers ' +
-  'to stock affordable, fresh produce.'
-
 function buildUserPrompt(job: {
   topic: string
-  keywords: string | null
   category: string
   target_audience: string
   scene_notes: string | null
 }): string {
   const lines = [
     `Topic: ${job.topic}`,
-    `Keywords: ${job.keywords ?? '(none given)'}`,
     `Category: ${job.category}`,
     `Target audience: ${job.target_audience}`,
   ]
@@ -49,7 +39,7 @@ function buildUserPrompt(job: {
 }
 
 const SYSTEM_PROMPT =
-  `${BRAND_CONTEXT}\n\n` +
+  `${BRAND_PROFILE.missionStatement}\n\n` +
   'You are helping fill in a few gaps before generating a single social-media image post for Fresh-CAN. ' +
   'Given the job details below, write 2-3 short clarifying questions that would make the resulting image ' +
   'more specific and vivid (e.g. what the scene shows, who is in it, the setting, the mood/time of day) — ' +
@@ -102,7 +92,7 @@ export async function POST(
 
   const { data: job, error: jobErr } = await supabase
     .from('content_jobs')
-    .select('topic, keywords, category, target_audience, scene_notes')
+    .select('topic, category, target_audience, scene_notes')
     .eq('id', jobId)
     .single()
 

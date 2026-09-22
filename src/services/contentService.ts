@@ -26,7 +26,6 @@ export async function createContentJob(
     .from('content_jobs')
     .insert({
       topic: form.topic,
-      keywords: form.keywords || null,
       category: form.category,
       target_audience: form.target_audience,
       language: form.language,

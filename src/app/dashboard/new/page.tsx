@@ -34,7 +34,6 @@ import { VIDEO_VOICES } from '@/lib/videoVoices'
 
 interface FormData {
   topic:           string
-  keywords:        string
   category:        string
   target_audience: string
   script_type:     ScriptType
@@ -232,7 +231,7 @@ export default function NewContentPage() {
   const [error, setError] = useState<string | null>(null)
 
   const {
-    topic, keywords, category, target_audience, script_type, video_duration,
+    topic, category, target_audience, script_type, video_duration,
     language, content_types, scene_notes, image_style, content_angle, aspect_ratio,
     voice_id_en, voice_id_fr, status, pendingJobId,
     restoreSession, setField, toggleType, startGeneration, clearOnCancel,
@@ -328,7 +327,6 @@ export default function NewContentPage() {
     setError(null)
 
     if (!topic.trim())              return setError('Topic is required')
-    if (!keywords.trim())           return setError('Keywords are required')
     if (!scene_notes.trim())        return setError('Your Scene Idea is required')
     if (content_types.length === 0) return setError('Select at least one content type')
 
@@ -337,7 +335,6 @@ export default function NewContentPage() {
       .from('content_jobs')
       .insert({
         topic:           topic.trim(),
-        keywords:        keywords.trim(),
         category,
         target_audience,
         brand:           'Fresh-CAN',
@@ -385,7 +382,7 @@ export default function NewContentPage() {
     }
 
     const formSnapshot: FormData = {
-      topic, keywords, category, target_audience,
+      topic, category, target_audience,
       script_type, video_duration, language, content_types,
       scene_notes, image_style, content_angle, aspect_ratio,
       voice_id_en, voice_id_fr,
@@ -660,18 +657,6 @@ export default function NewContentPage() {
                 placeholder="e.g. Food Deserts in Calgary"
                 disabled={isSubmitting}
               />
-            </div>
-
-            <div className="space-y-1.5">
-              <FL htmlFor="keywords">Keywords <span className="text-red-500">*</span></FL>
-              <Input
-                id="keywords"
-                value={keywords}
-                onChange={(e) => setField('keywords', e.target.value)}
-                placeholder="food desert, mobile grocery, fresh food, Canada"
-                disabled={isSubmitting}
-              />
-              <p className="text-xs text-gray-400">Separate with commas</p>
             </div>
 
             <div className="space-y-1.5">

@@ -25,7 +25,6 @@ const SESSION_KEY = 'fc_new_content'
 
 interface FormFields {
   topic:           string
-  keywords:        string
   category:        string
   target_audience: string
   script_type:     ScriptType
@@ -61,7 +60,6 @@ interface NewContentStore extends FormFields, GenState {
 
 const FORM_DEFAULTS: FormFields = {
   topic:           '',
-  keywords:        '',
   category:        'Food Desert Education',
   target_audience: 'General public',
   script_type:     'SOLUTION',
@@ -84,7 +82,7 @@ const GEN_DEFAULTS: GenState = {
 
 function pickPersisted(s: NewContentStore): FormFields & GenState {
   return {
-    topic: s.topic, keywords: s.keywords, category: s.category,
+    topic: s.topic, category: s.category,
     target_audience: s.target_audience, script_type: s.script_type,
     video_duration: s.video_duration, language: s.language,
     content_types: s.content_types,

@@ -75,7 +75,6 @@ async function fetchTracksForPipeline(pipelineId: string): Promise<TrackRow[]> {
 interface ImageJobFields {
   topic: string
   category: string
-  keywords: string | null
   scene_notes: string | null
   image_answers: ImageAnswer[] | null
   image_style: string | null
@@ -85,7 +84,7 @@ interface ImageJobFields {
 async function fetchImageJobFields(jobId: string): Promise<ImageJobFields> {
   const { data, error } = await client
     .from('content_jobs')
-    .select('topic, category, keywords, scene_notes, image_answers, image_style, content_angle')
+    .select('topic, category, scene_notes, image_answers, image_style, content_angle')
     .eq('id', jobId)
     .single()
   if (error || !data) {
@@ -111,10 +110,13 @@ function photoScene(job: ImageJobFields): string {
   return descriptors.length > 0 ? descriptors.join(', ') : `${job.topic}, in the context of ${job.category}`
 }
 
-/** Same as worker/src/index.ts's own angleBriefFor(). */
-function angleBriefFor(job: ImageJobFields): string | undefined {
-  if (!job.content_angle) return undefined
-  return BRAND_PROFILE.adAngleBriefs?.[job.content_angle]
+// adAngleBriefs (per-angle canned creative direction) was removed
+// (PROMPT_REFACTOR_BRIEF.md §6.2) — content_angle remains light job
+// metadata (still read/stored) but no longer resolves to prompt text here.
+// A structured Layer 1/2 interpretation of the angle belongs in a future
+// phase, not a static per-angle brief map.
+function angleBriefFor(_job: ImageJobFields): string | undefined {
+  return undefined
 }
 
 /** Same retry-loop pattern as blog.ts's runOutlineUntilSettled — repeatedly
@@ -221,7 +223,6 @@ export const imageGenerate = inngest.createFunction(
         topic: job.topic,
         category: job.category,
         scene: photoScene(job),
-        keywords: job.keywords,
         regenInstructions: pipeline.regen_instructions,
         imageStyle,
         ...styleInputs,

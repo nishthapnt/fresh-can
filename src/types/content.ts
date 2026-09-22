@@ -130,7 +130,6 @@ export interface SocialPlatformLog {
 
 export interface NewContentFormData {
   topic: string
-  keywords: string
   category: Category
   target_audience: TargetAudience
   language: Language

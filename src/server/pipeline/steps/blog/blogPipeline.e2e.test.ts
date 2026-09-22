@@ -142,7 +142,7 @@ describe.skipIf(!hasCreds)('Blog pipeline end-to-end (real DB, mocked providers)
     await runGenerateOutline(
       client,
       pipeline,
-      { topic: 't', keywords: 'k', category: 'c', targetAudience: 'a' },
+      { topic: 't', category: 'c', targetAudience: 'a' },
       script,
     )
     await runGenerateVisualImage(client, pipeline, 'hero_image', 'a hero image', image)
@@ -218,7 +218,7 @@ describe.skipIf(!hasCreds)('Blog pipeline end-to-end (real DB, mocked providers)
   it('visual image retry: hero failing once and retrying does not inflate inline\'s attempt count', async () => {
     const { pipeline } = await makeJobAndPipeline(['EN'])
     const script = makeMockScriptGenerator()
-    await runGenerateOutline(client, pipeline, { topic: 't', keywords: 'k', category: 'c', targetAudience: 'a' }, script)
+    await runGenerateOutline(client, pipeline, { topic: 't', category: 'c', targetAudience: 'a' }, script)
     const { data: pAfterOutline } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
 
     const flakyImage = makeFlakyImageGenerator(1) // fails once, succeeds on 2nd submit
@@ -340,11 +340,11 @@ describe.skipIf(!hasCreds)('Blog pipeline end-to-end (real DB, mocked providers)
     const { pipeline } = await makeJobAndPipeline(['EN'])
     const script = makeMockScriptGenerator()
 
-    await runGenerateOutline(client, pipeline, { topic: 't', keywords: 'k', category: 'c', targetAudience: 'a' }, script)
+    await runGenerateOutline(client, pipeline, { topic: 't', category: 'c', targetAudience: 'a' }, script)
     expect(script.generate).toHaveBeenCalledTimes(1)
 
     // simulate a duplicate/retried call — claim will fail (already past 'created'), so this is a no-op
-    const result = await runGenerateOutline(client, pipeline, { topic: 't', keywords: 'k', category: 'c', targetAudience: 'a' }, script)
+    const result = await runGenerateOutline(client, pipeline, { topic: 't', category: 'c', targetAudience: 'a' }, script)
     expect(result.ran).toBe(false)
     expect(script.generate).toHaveBeenCalledTimes(1) // still just once
   })

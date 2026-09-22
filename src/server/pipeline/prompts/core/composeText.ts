@@ -15,16 +15,13 @@ function statsLine(brand: BrandProfile): string {
     : ''
 }
 
-function categoryBriefLine(brand: BrandProfile, category: string): string {
-  const brief = brand.categoryBriefs[category]
-  return brief ? `This post's category ("${category}") should focus on: ${brief} ` : ''
-}
-
-function brandContext(brand: BrandProfile, category: string): string {
-  return (
-    `${brand.missionStatement} ${categoryBriefLine(brand, category)}` +
-    `Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
-  )
+// category is accepted for call-site compatibility (every brandContext
+// caller already has it in scope) but deliberately does not shape the
+// prompt — per-category canned creative direction was removed
+// (PROMPT_REFACTOR_BRIEF.md §6.2); category may remain light job metadata
+// but must never dictate subject, setting, composition, or style.
+function brandContext(brand: BrandProfile, _category: string): string {
+  return `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
 }
 
 export function composeOutlineSystemPrompt(brand: BrandProfile, category: string, sceneNotes?: string | null): string {

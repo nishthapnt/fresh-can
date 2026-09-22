@@ -7,10 +7,10 @@
 | Field | Value |
 |-------|-------|
 | **Project** | Fresh-CAN Content Automation Dashboard |
-| **Last Updated** | 2026-09-19 |
-| **Phase** | ✅ Blog + Image + Video Pipeline Migration Complete — only social posting (+ image clarifying questions) remain on n8n |
+| **Last Updated** | 2026-09-22 |
+| **Phase** | ✅ Blog + Image + Video Pipeline Migration Complete (all four content types on Inngest, `worker/` fully retired) — 🔄 Prompt architecture refactor in progress (Phase 1/9 done, see Session 12 and `PROMPT_REFACTOR_BRIEF.md`) |
 | **Progress** | ██████████ 95% |
-| **Blockers** | None. Note: `worker/` must be started manually (`npm run dev` inside `worker/`) — nothing runs it automatically. |
+| **Blockers** | None. `npm run dev` at the repo root is the only thing to start — no separate worker process. |
 
 ---
 
@@ -1310,3 +1310,44 @@
 **⭐ Pick Up Next Session**
 - Run a real end-to-end video job and inspect: (1) whether `visual_state` actually comes back populated and sensible from real GPT output, (2) whether `OpenAIImageValidator` catches real hand/duplicate-person defects without excessive false positives on genuinely fine images, (3) whether the continuity clause's presence/absence (it's in the droppable cascade tier) correlates with visibly worse consistency on longer scenes.
 - If false positives from the vision validator turn out to be a real problem in production, consider tightening `IMAGE_VALIDATION_SYSTEM_PROMPT` further rather than removing the gate — it's already scoped to the 7 named high-value defects only.
+
+---
+
+### Session 12 — 2026-09-22 — Prompt architecture refactor, Phase 1: brand truth as structured data
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` — a full, phased rewrite of the prompt layer (brand truth → intent → plan → render → guard). This session is Phase 1 only (Layer 0), agreed with the owner after a file-map survey and three clarifying decisions: remove `content_jobs.keywords` entirely (form/store/service/every prompt read — confirmed via `git log -S"keywords"` it was never used for anything beyond being piped into a prompt, even pre-Inngest), add a shared blog "reference copy" pass before images (Phase 6, not yet built), default image aspect ratio stays 4:5 (matches current behavior).*
+
+- **`prompts/types.ts`/`prompts/brand/fresh-can.ts` rewritten to structured data** — `BrandProfile` dropped `categoryVisualHints`, `categoryBriefs`, `adAngleBriefs`, `moods` (brief §6.2/§6.3 — no more per-category/per-angle canned creative direction or hardcoded mood rotation). Added tiered `unit: { identity, full, interior }`, atomic `forbiddenOnUnit`/`forbiddenInScene`/`businessModelNegatives` arrays, structured `referenceImages` (`{ url, whatItShows, disregard[] }` — the "this photo also shows X, ignore it" corrections no longer live inside the factual description string). `missionStatement`/`neutralIdentityLine`/`journey`/`positiveVisualTruths` rewritten to unambiguously describe the real cashierless mechanism (brief §2 — the app QR identifies who's entering, never a payment QR or per-item scan; payment links once, in advance; charged automatically on exit) — the old wording was vague enough to let models invent service windows/cashiers/market stalls.
+- **`compose.ts`/`composeText.ts` updated to compile and apply the brief's own stated interim fallback** — since Layer 2 (`look`/plan-driven mood, unit-presence) doesn't exist yet (Phase 3), every job is effectively "legacy": mood is now one fixed neutral default, not a rotation; non-container scenes get one brand-agnostic hint (built from `unit.identity`) instead of a per-category map; `content_angle`/`category` no longer resolve to a canned brief anywhere. `containerDescriptor`/`interiorDescriptor` renamed to `unit.full`/`unit.interior` throughout. Fixed a real G4 violation while in this code: a second, hand-duplicated brand blurb in `image/questions/route.ts` (never imported from the brand file) now uses `BRAND_PROFILE.missionStatement`.
+- **`keywords` removed everywhere** — dashboard form field + required validation, `newContentStore.ts`, `contentService.ts`, every prompt read (`generateOutline.ts`, `generateScript.ts`, `compose.ts`'s deleted `keywordsClause`, `image/questions/route.ts`). `content_jobs.keywords` DB column and its row-type mirrors (`database.ts`, `content.ts`'s `ContentJob`) left untouched, unread — dropping the column is a migration, out of scope without separate sign-off.
+- **`docs/PROMPT_ARCHITECTURE.md` created** — the layer model, Phase 1's design rationale, and the incident history condensed out of `fresh-can.ts`'s old inline comments (brief §6.6), so the code carries short current comments while the "why" survives.
+- Confirmed the brief's own claimed duplicate composer under `worker/` no longer exists — deleted in the `b649145` Inngest-migration commit; only a couple of stale comments still referenced it (fixed).
+
+**🧪 Testing**
+- `tsc --noEmit` clean.
+- `compose.test.ts` + `composeText.test.ts`: 123/123 passing — fixtures updated to the new `BrandProfile` shape (same placeholder values, new field locations, so most assertions needed no behavioral change); a handful of tests that asserted on now-removed features (keywords, categoryVisualHints) were deleted outright rather than patched, and one length-cascade test was rewritten because Phase 1's shortened `unit.full` (788 chars vs. the old ~1180) genuinely freed up headroom, changing which scenes need the realism-guardrail dropped. Full phrase-assertion → structural-assertion rewrite is still Phase 8 (brief §13), not done here.
+- `eslint` on every touched file: 0 errors, pre-existing-pattern warnings only (unused `_`-prefixed params, matching the codebase's existing convention).
+- e2e suites (`blogPipeline.e2e.test.ts`, `videoPipeline.e2e.test.ts`) updated for compile-compatibility (removed `keywords` from test inputs) but not run this session — they need a live Supabase connection (`SUPABASE_SERVICE_ROLE_KEY`), same pre-existing constraint noted in Session 11 and TASKS.md.
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/types.ts`, `src/server/pipeline/prompts/brand/fresh-can.ts` — full rewrite
+- `src/server/pipeline/prompts/index.ts` — export shape (`ImageMood` → `UnitDescriptor`)
+- `src/server/pipeline/prompts/core/compose.ts`, `src/server/pipeline/prompts/core/composeText.ts` — field renames, fallback simplification, `keywordsClause`/`categoryBriefLine` removed
+- `src/server/pipeline/prompts/core/compose.test.ts`, `src/server/pipeline/prompts/core/composeText.test.ts` — fixtures + a handful of assertions
+- `src/inngest/functions/{blog,image,video}.ts`, `src/server/pipeline/steps/blog/generateOutline.ts`, `src/server/pipeline/steps/video/generateScript.ts`, `src/app/api/jobs/[jobId]/image/questions/route.ts` — keywords removed from selects/prompts; `image.ts`'s `angleBriefFor` now a no-op stub
+- `src/app/dashboard/new/page.tsx`, `src/stores/newContentStore.ts`, `src/services/contentService.ts`, `src/types/content.ts` — keywords field removed from the form/store/service/form-data type
+- `src/server/pipeline/steps/blog/blogPipeline.e2e.test.ts`, `src/server/pipeline/steps/video/videoPipeline.e2e.test.ts` — keywords removed from test fixtures (compile-only fix)
+- `docs/PROMPT_ARCHITECTURE.md` — new
+
+**💡 Decisions Made**
+- Kept `content_jobs.keywords`'s DB column and its row-type mirrors rather than proposing a migration — CLAUDE.md and the brief both gate schema changes behind explicit owner sign-off.
+- Did the minimum necessary compose.ts/composeText.ts edits to keep the build green (field renames + the brief's own stated fallback behavior), not the full `PromptBlock` rewrite — that's Phase 4, and doing it piecemeal now would be thrown-away work.
+- Test fixtures kept their existing placeholder VALUES (e.g. `'THE FIXED CONTAINER DESCRIPTION'`) under the new field locations (`unit.full`) wherever possible, to minimize churn in assertions that don't actually depend on the restructuring.
+
+**⭐ Pick Up Next Session**
+- Phase 2 (Layer 1 — intent interpretation step) per `PROMPT_REFACTOR_BRIEF.md` §4.2, or owner review of Phase 1 first: reference-photo pre-correction recommendation (§16.3), interior counter/sink wording (§16.6, default applied), 2018 statistic (§16.7, no change made — original figure kept, still needs owner call), and confirming the `category`/`content_angle` dashboard dropdowns' fate now that they're inert for prompt purposes.

@@ -280,7 +280,6 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
 
   const scriptInput: VideoScriptJobInput = {
     topic: 'Fresh groceries in your neighbourhood',
-    keywords: 'fresh, local, affordable',
     category: 'Community Impact',
     targetAudience: 'General public',
     scriptType: 'SOLUTION',

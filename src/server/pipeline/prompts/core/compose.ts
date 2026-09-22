@@ -39,8 +39,6 @@ interface BlogImageJob extends StyleInputs {
    *  present, it's the creative brief the scene is built around — see
    *  SCENE_IS_CREATIVE_BRIEF — not a light, non-binding influence. */
   sceneNotes?: string | null
-  /** content_jobs.keywords — see keywordsClause. */
-  keywords?: string | null
 }
 
 interface PhotoJob extends StyleInputs {
@@ -55,34 +53,23 @@ interface PhotoJob extends StyleInputs {
    *  of several interchangeable descriptors. */
   scene: string
   regenInstructions?: string | null
-  /** content_jobs.keywords — see keywordsClause. */
-  keywords?: string | null
 }
 
-/** Same seed for hero+inline of one pipeline => same mood for both. */
-function moodDetailFor(brand: BrandProfile, pipelineId: string): string {
-  return pickDeterministic(pipelineId, brand.moods).detail
-}
+// A single neutral default — not a rotating list of canned moods. Until
+// Layer 2's plan-level `look` object exists (PROMPT_REFACTOR_BRIEF.md §4.3),
+// every job is effectively "legacy", so this is the brief's own stated
+// fallback (§6.3), not a temporary stand-in for something richer here.
+const NEUTRAL_MOOD_DEFAULT = 'Natural daylight, true-to-life color, calm and unstaged.'
 
 /**
  * A default lighting/atmosphere suggestion — a FALLBACK ONLY, for when the
  * scene description elsewhere in the prompt doesn't already establish its
- * own lighting, time of day, or mood. Worded as explicitly conditional
- * (2026-09-19, was an unconditional directive) after a real generation
- * ignored the user's own "warm natural lighting" scene text and Afternoon
- * answer because this was independently asserting "Soft overcast daylight
- * ... calm documentary mood" with no awareness of what the scene already
- * said — a hardcoded rule silently overriding an explicit user choice
- * rather than just filling a gap. Never removes the mood system entirely:
- * a thin/legacy scene with no real description still gets a plausible
- * default instead of no atmosphere direction at all.
+ * own lighting, time of day, or mood. Explicitly conditional so it never
+ * overrides a scene's own stated lighting/mood, only fills the gap when one
+ * isn't given.
  */
-function moodClause(brand: BrandProfile, pipelineId: string): string {
-  // Tightened back down 2026-09-19 (wrapper only, same conditional-fallback
-  // meaning) to make room for CINEMATIC_QUALITY's addition to
-  // composeSceneImagePrompt without eating too far into the margin under
-  // KieImageGenerator's real, confirmed 3000-char cap.
-  return `If unspecified, default mood: ${moodDetailFor(brand, pipelineId)}`
+function moodClause(): string {
+  return `If unspecified, default mood: ${NEUTRAL_MOOD_DEFAULT}`
 }
 
 /** Picks one photo from a specific pool (exterior or interior). Independent
@@ -111,9 +98,9 @@ function pickSceneType(brand: BrandProfile, seed: string): SceneType {
  * position that noText/noNewTextInstruction occupy for 'photo' style).
  * Confirmed live (2026-09-10) with nano-banana-2 that this exact structure
  * (headline zone, subtitle below it, bottom CTA band) renders correctly
- * spelled text reliably — this is NOT safe to send to Flux Kontext (see
- * noTextInstruction's incident notes); callers must route 'infographic'-
- * style jobs to a text-capable model (see worker/src/adapters/nanoBanana.ts).
+ * spelled text reliably — this is NOT safe to send to Flux Kontext; callers
+ * must route 'infographic'-style jobs to a text-capable model (see
+ * adapters/nanoBanana.ts).
  * Typography and the CTA bar's color come from the brand file
  * (typographyDescriptor/ctaBarColorDescriptor) rather than being hardcoded
  * here, so this stays generic across brands — see fresh-can.ts for why
@@ -163,40 +150,39 @@ function textLayerFor(
   return referenceImageUrl ? brand.noNewTextInstruction : noTextVariant
 }
 
-// Generic fallback for a non-container blog scene whose category has no
-// categoryVisualHints entry (or the brand file doesn't define any) — keeps
-// the non-container branch safe for a brand-new brand/category, not just
-// Fresh-CAN's own five.
-const DEFAULT_NON_CONTAINER_HINT =
-  'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
-  '— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting. If the ' +
-  'Fresh-CAN truck plausibly fits the scene, it must be built to its real, correct structure — a white box ' +
-  'truck with a dark maroon-red steel cargo container and a white "Fresh [maple leaf icon] CAN" wordmark on ' +
-  "the container's side panels only — never any other vehicle shape, color, or logo, never forced in, and " +
-  'never the main subject. Every other vehicle in the scene must stay completely unbranded — never place the ' +
-  'Fresh-CAN wordmark or logo on it.'
-
-function nonContainerSceneHint(brand: BrandProfile, category: string): string {
-  return brand.categoryVisualHints?.[category] ?? DEFAULT_NON_CONTAINER_HINT
+// Brand-agnostic fallback for a non-container blog scene — brief-mandated
+// deletion of the per-category creative-direction map (categoryVisualHints,
+// PROMPT_REFACTOR_BRIEF.md §6.2); every non-container scene now gets this
+// same neutral hint regardless of category, with only the identity tier of
+// the unit description (brief §4.1) pulled in for the optional background
+// mention.
+function nonContainerSceneHint(brand: BrandProfile): string {
+  return (
+    'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
+    `— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting. If the ` +
+    `${brand.name} vehicle plausibly fits the scene, it must be built to its real, correct structure — ` +
+    `${brand.unit.identity} — never any other vehicle shape, color, or logo, never forced in, and never the ` +
+    `main subject. Every other vehicle in the scene must stay completely unbranded — never place the ` +
+    `${brand.name} wordmark or logo on it.`
+  )
 }
 
 // The trailing text-instruction used by composeBlogImage's non-container
 // branch instead of the blanket brand.noTextInstruction. That blanket
 // instruction ("no logos, no watermarks... anywhere") directly contradicts
-// nonContainerSceneHint/categoryVisualHints, which explicitly permits the
-// brand's real vehicle to appear in the background — sending both in one
-// prompt is exactly the kind of contradiction that leaves the model free to
-// invent an off-model result (e.g. the wordmark on the wrong vehicle
-// shape). This keeps the same "don't invent text" framing but carves out
-// one exact exception, built from containerDescriptor so it can't drift
-// into a shorthand, and restates the no-other-vehicle rule as the very last
-// thing the model reads.
+// nonContainerSceneHint, which explicitly permits the brand's real vehicle
+// to appear in the background — sending both in one prompt is exactly the
+// kind of contradiction that leaves the model free to invent an off-model
+// result. This keeps the same "don't invent text" framing but carves out
+// one exact exception, built from unit.identity so it can't drift into a
+// shorthand, and restates the no-other-vehicle rule as the very last thing
+// the model reads.
 function backgroundBrandingInstruction(brand: BrandProfile): string {
   return (
     'Photorealistic, natural lighting, documentary style. Absolutely no invented text, words, letters, ' +
     'captions, titles, or typography anywhere in the image. The only exception is branding: if the ' +
     `${brand.name} vehicle naturally fits the scene, it must be built to this exact structure — ` +
-    `${brand.containerDescriptor} — showing only its own real wordmark exactly as just described. Every ` +
+    `${brand.unit.identity} — showing only its own real wordmark exactly as just described. Every ` +
     'other vehicle in the image must stay completely unbranded — never place this wordmark or logo on it.'
   )
 }
@@ -245,11 +231,25 @@ const REFERENCE_IS_GUIDE_NOT_COPY =
  * the vehicle"), so it still uses the bare framing string as a literal
  * instruction there.
  */
-function describeReferencePhoto(framing: string): string {
+// Real elements a specific reference photo shows that aren't part of the
+// brand's canonical design (see BrandReferenceImage.disregard) — named
+// explicitly as their own sentence so nothing is left for the model to
+// notice and try to faithfully reproduce on its own.
+function disregardClause(disregard: readonly string[]): string {
+  if (disregard.length === 0) return ''
   return (
-    `The attached reference photo shows: ${framing} That is a description of the INPUT photo only, so its ` +
-    "shape, structure, and color can be reproduced accurately — it does not dictate this image's own camera " +
-    'angle, composition, or story, which come entirely from the scene description above.'
+    `This particular photo also shows ${disregard.join(', ')} — none of that is part of the vehicle's real, ` +
+    `correct design; disregard ${disregard.length > 1 ? 'all of it' : 'it'}.`
+  )
+}
+
+function describeReferencePhoto(reference: BrandReferenceImage): string {
+  const disregard = disregardClause(reference.disregard)
+  return (
+    `The attached reference photo shows: ${reference.whatItShows}${disregard ? ` ${disregard}` : ''} That is ` +
+    "a description of the INPUT photo only, so its shape, structure, and color can be reproduced accurately " +
+    "— it does not dictate this image's own camera angle, composition, or story, which come entirely from " +
+    'the scene description above.'
   )
 }
 
@@ -258,13 +258,13 @@ function describeReferencePhoto(framing: string): string {
 // hero/inline images — it decides the actual subject, setting, AND style
 // (candid vs. editorial, posed vs. documentary, single shot vs. a
 // structured/split composition — whatever the user actually describes).
-// Everything else in these prompts (containerDescriptor, interiorDescriptor,
-// categoryVisualHints, moods, etc.) is brand IDENTITY — fixed constraints on
-// what a Fresh-CAN element must look like IF it appears — never a competing
-// creative direction. Without this instruction the model defaults to
-// treating the branded subject as the reason the image exists, which is
-// exactly what makes generated content read as a generic Fresh-CAN
-// advertisement instead of whatever the user actually asked for.
+// Everything else in these prompts (the unit descriptor, forbiddenOnUnit,
+// etc.) is brand IDENTITY — fixed constraints on what a brand element must
+// look like IF it appears — never a competing creative direction. Without
+// this instruction the model defaults to treating the branded subject as
+// the reason the image exists, which is exactly what makes generated
+// content read as a generic advertisement instead of whatever the user
+// actually asked for.
 //
 // Reworded 2026-09-19: this used to also mandate "must read as a genuine,
 // candid moment... never a posed, polished advertisement" — a hardcoded
@@ -419,21 +419,6 @@ const ONE_WORDMARK_ONLY =
   'Exactly one "Fresh CAN" wordmark total, on the side panels only, as described above — no second or ' +
   'duplicate wordmark, decal, or graphic anywhere else on the vehicle.'
 
-// content_jobs.keywords — thematic keywords entered on the dashboard.
-// Already shapes blog's outline/copy text (generateOutline.ts/
-// generateCopy.ts's userPrompt) and video's script, but was never fed into
-// any IMAGE prompt until 2026-09-19 — added here so the actual visual
-// content can reflect them too, not just the written copy. Non-binding,
-// same treatment as the scene idea itself: themes to weave in where they
-// genuinely fit, never a checklist of objects that must all appear or that
-// override the scene.
-function keywordsClause(keywords: string | null | undefined): string {
-  return keywords
-    ? `Relevant themes for this post: ${keywords}. Weave in any that naturally fit the scene above — never ` +
-      'force one in, and never let it contradict or override the scene.'
-    : ''
-}
-
 // Added 2026-09-18: the showSubject branch below used to push ONLY the
 // truck/interior's fixed description plus the reference photo's own camera
 // framing — nothing telling the model to actually build a new scene around
@@ -475,8 +460,8 @@ function composeBlogImage(
   const label = kind === 'hero' ? 'A hero image for a blog post' : 'A supporting inline photo for a blog post'
   // job.headline is the shared, once-per-pipeline outline's punchy title
   // (composeOutlineSystemPrompt) — read for both image styles (see
-  // worker/src/index.ts), not just 'infographic'. Folding it in here gives
-  // the scene the post's actual specific angle instead of just raw
+  // inngest/functions/blog.ts), not just 'infographic'. Folding it in here
+  // gives the scene the post's actual specific angle instead of just raw
   // topic/category; it's descriptive context only, never rendered as
   // on-image text for 'photo' style (that's textLayerFor's job).
   const topicLine = job.headline
@@ -495,7 +480,7 @@ function composeBlogImage(
   // nonContainerSceneHint), with no reference photo to vary freely.
   const showSubject = isContainerRelevant(`${job.topic} ${job.category}`, false)
 
-  const parts = [topicLine, moodClause(brand, job.pipelineId), FOOD_MUST_LOOK_CLEAN]
+  const parts = [topicLine, moodClause(), FOOD_MUST_LOOK_CLEAN]
   // The dashboard's "Your Scene Idea" field — the creative brief this scene
   // is built around (see SCENE_IS_CREATIVE_BRIEF above the type declaring
   // this field). Absent only for a job created before the field became
@@ -506,23 +491,21 @@ function composeBlogImage(
         `"${job.sceneNotes}". ${SCENE_IS_CREATIVE_BRIEF}`,
     )
   }
-  const blogKeywords = keywordsClause(job.keywords)
-  if (blogKeywords) parts.push(blogKeywords)
   let referenceImageUrl: string | undefined
 
   if (showSubject) {
     const sceneType = pickSceneType(brand, `${job.pipelineId}:${kind}:scene`)
-    const descriptor = sceneType === 'interior' ? brand.interiorDescriptor : brand.containerDescriptor
+    const descriptor = sceneType === 'interior' ? brand.unit.interior : brand.unit.full
     const pool = sceneType === 'interior' ? brand.referenceImages.interior : brand.referenceImages.exterior
     parts.push(descriptor)
     parts.push(containerSceneContext(job))
     const reference = pickReferenceFrom(pool, `${job.pipelineId}:${kind}`)
     if (reference) {
-      parts.push(describeReferencePhoto(reference.framing))
+      parts.push(describeReferencePhoto(reference))
       referenceImageUrl = reference.url
     }
   } else {
-    parts.push(nonContainerSceneHint(brand, job.category))
+    parts.push(nonContainerSceneHint(brand))
   }
 
   const noTextVariant = showSubject ? undefined : backgroundBrandingInstruction(brand)
@@ -564,7 +547,7 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   // containerDescriptor's own tightening, see that constant's comment.
   const parts = [
     `A clean, well-lit reference photo of the ${brand.name} branded vehicle.`,
-    brand.containerDescriptor,
+    brand.unit.full,
     ONE_WORDMARK_ONLY,
   ]
 
@@ -583,12 +566,14 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   // with the full dead-on SIDE profile first for exactly this reason (see
   // its own comment) — one clean wordmark instance, nothing else
   // real-but-undocumented sharing the frame with it — and every entry's
-  // framing string explicitly names and disregards whatever extra real
-  // elements that specific photo shows, so this stays correct even if a
-  // future asset swap changes what index 0 actually is.
+  // whatItShows/disregard explicitly names and disregards whatever extra
+  // real elements that specific photo shows, so this stays correct even if
+  // a future asset swap changes what index 0 actually is.
   const reference = brand.referenceImages.exterior[0]
   if (reference) {
-    parts.push(reference.framing)
+    parts.push(reference.whatItShows)
+    const disregard = disregardClause(reference.disregard)
+    if (disregard) parts.push(disregard)
     referenceImageUrl = reference.url
   }
   parts.push(referenceImageUrl ? brand.noNewTextInstruction : brand.noTextInstruction)
@@ -705,14 +690,14 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   // never be the thing that gets cut when a prompt runs long. REALISTIC_PEOPLE
   // is deliberately NOT in this list — see the cascade below for why.
   const fixedParts = [
-    moodClause(brand, job.pipelineId),
+    moodClause(),
     FOOD_MUST_LOOK_CLEAN,
     PHYSICALLY_PLAUSIBLE_SCENE,
     CINEMATIC_QUALITY,
     NO_UNSCRIPTED_PEOPLE,
     NO_UNEXPLAINED_PROPS,
     SCENE_IS_CREATIVE_BRIEF,
-    showSubject ? brand.containerDescriptor : NO_SUBJECT_IN_SCENE,
+    showSubject ? brand.unit.full : NO_SUBJECT_IN_SCENE,
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
     showSubject ? brand.noNewTextInstruction : brand.noTextInstruction,
   ].filter(Boolean)
@@ -786,7 +771,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // composeBlogImage's hero/inline pairing. Deferential (moodClause, not
     // moodDetailFor directly) since job.visualDescription/shotNotes may
     // already specify their own lighting — see moodClause's own comment.
-    moodClause(brand, job.pipelineId),
+    moodClause(),
     FOOD_MUST_LOOK_CLEAN,
     PHYSICALLY_PLAUSIBLE_SCENE,
     CINEMATIC_QUALITY,
@@ -813,7 +798,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // the same single constant (fresh-can.ts's CONTAINER_DESCRIPTOR) so it
     // can never drift into a narrower paraphrase the way
     // BACKGROUND_TRUCK_CLAUSE's own history warns against.
-    parts.push(brand.containerDescriptor)
+    parts.push(brand.unit.full)
     // REFERENCE_IS_GUIDE_NOT_COPY explicitly tells the model to build a
     // genuinely new scene around the vehicle rather than copy the
     // character-ref photo — without it, a relevant scene risks coming out
@@ -845,7 +830,7 @@ interface SceneVideoJob {
   isFinalScene?: boolean
 }
 
-/** Prompt for Seedance 1.5 Pro image-to-video (worker/src/adapters/kie.ts's
+/** Prompt for Seedance 1.5 Pro image-to-video (adapters/kie.ts's
  *  KieVideoGenerator) — motion/camera direction only. The subject's
  *  appearance is NOT re-described here; it's already locked in the
  *  scene_image frame this call animates from (input_urls[0]), so repeating
@@ -955,19 +940,16 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
 
   const parts = [
     `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
-    moodClause(brand, job.pipelineId),
+    moodClause(),
     SCENE_IS_CREATIVE_BRIEF,
     FOOD_MUST_LOOK_CLEAN,
   ]
-  const photoKeywords = keywordsClause(job.keywords)
-  if (photoKeywords) parts.push(photoKeywords)
-
   let referenceImageUrl: string | undefined
   if (showSubject) {
-    parts.push(brand.containerDescriptor)
+    parts.push(brand.unit.full)
     // job.scene is usually real, specific content from the dashboard's
-    // clarifying-question answers, but photoScene() (worker/src/index.ts)
-    // falls back to a bare "topic, in the context of category" when the
+    // clarifying-question answers, but image.ts's photoScene() falls back
+    // to a bare "topic, in the context of category" when the
     // user skipped every question — exactly as thin as blog's old topic
     // line was before composeBlogImage's containerSceneContext fix, with
     // the same risk: edit-mode reproducing the reference photo near-
@@ -988,7 +970,7 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
     )
     const reference = pickReferenceFrom(brand.referenceImages.exterior, `${job.pipelineId}:photo`)
     if (reference) {
-      parts.push(describeReferencePhoto(reference.framing))
+      parts.push(describeReferencePhoto(reference))
       referenceImageUrl = reference.url
     }
   }

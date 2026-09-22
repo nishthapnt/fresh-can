@@ -140,7 +140,6 @@ async function fetchTrack(trackId: string): Promise<TrackRow> {
 
 interface VideoJobFields {
   topic: string
-  keywords: string | null
   category: string
   target_audience: string
   script_type: string | null
@@ -159,7 +158,7 @@ async function fetchVideoJobFields(jobId: string): Promise<VideoJobFields> {
   const { data, error } = await client
     .from('content_jobs')
     .select(
-      'topic, keywords, category, target_audience, script_type, language, aspect_ratio, video_duration_seconds, voice_id_en, voice_id_fr, scene_notes',
+      'topic, category, target_audience, script_type, language, aspect_ratio, video_duration_seconds, voice_id_en, voice_id_fr, scene_notes',
     )
     .eq('id', jobId)
     .single()
@@ -182,7 +181,6 @@ export const videoGenerate = inngest.createFunction(
     const job = await step.run('fetch-job', () => fetchVideoJobFields(jobId))
     const scriptInput: VideoScriptJobInput = {
       topic: job.topic,
-      keywords: job.keywords ?? '',
       category: job.category,
       targetAudience: job.target_audience,
       scriptType: job.script_type ?? 'SOLUTION',

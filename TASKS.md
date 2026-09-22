@@ -4,8 +4,9 @@
 
 ## 🎯 CURRENT SPRINT
 
+- [ ] Prompt architecture refactor (`PROMPT_REFACTOR_BRIEF.md`, `docs/PROMPT_ARCHITECTURE.md`) — layered brand truth → intent → plan → render → guard, in 9 phases. Phase 1 (brand truth as structured data, keywords removal) done Session 12, 2026-09-22. Next: Phase 2 (intent interpretation step), pending owner review of Phase 1's open items (§16.3/§16.6/§16.7).
 - [ ] Investigate KIE.ai negative-prompt support to more reliably stop text baking into generated photos
-- [ ] Stabilize `worker/src/steps/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness)
+- [ ] Stabilize `src/server/pipeline/steps/blog/blogPipeline.e2e.test.ts` (pre-existing real-DB timing flakiness; path corrected — file moved off `worker/` during the Inngest migration)
 - [ ] Backport permanent Supabase Storage upload (`fc-image-posts` pattern) to blog's hero/inline images
 - [ ] Surface "stale" track state in the job detail UI after a visual regenerate (currently silent — user must know to re-click Approve)
 - [x] Fix social posting getting permanently stuck at status='posting' with no error/timeout/retry surfaced — confirmed live via 2 real stuck rows since 2026-07-01 (Session 6, 2026-09-14). The stuck-forever/no-timeout part was already fixed earlier (`publishPost.ts`'s `STALE_POSTING_MS`/`isStale`); the "no retry" part closed Session 7 (2026-09-19) — `upsertSocialPost` now clears a failed post's old `social_platform_logs` rows on re-approval, since `getApprovedSocialPostsAwaitingSubmission` was silently excluding any post with existing log rows forever, retry or not.

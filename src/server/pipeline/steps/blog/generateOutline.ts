@@ -13,7 +13,6 @@ import { BRAND_PROFILE, composeOutlineSystemPrompt } from '../../prompts/index'
 
 export interface OutlineJobInput {
   topic: string
-  keywords: string
   category: string
   targetAudience: string
   /** The dashboard's optional "Your Scene Idea" field (content_jobs.
@@ -79,7 +78,7 @@ export async function runGenerateOutline(
     try {
       const result = await scriptGenerator.generate({
         systemPrompt: composeOutlineSystemPrompt(BRAND_PROFILE, input.category, input.sceneNotes),
-        userPrompt: `Topic: ${input.topic}\nKeywords: ${input.keywords}\nCategory: ${input.category}\nAudience: ${input.targetAudience}`,
+        userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}\nAudience: ${input.targetAudience}`,
       })
       await recordStepAttempt(client, {
         contentPipelineId: pipeline.id,

@@ -16,7 +16,6 @@ import { BRAND_PROFILE, composeVideoScriptSystemPrompt, type SceneVisualState } 
 
 export interface VideoScriptJobInput {
   topic: string
-  keywords: string
   category: string
   targetAudience: string
   scriptType: string
@@ -218,7 +217,7 @@ export async function runGenerateScript(
           sceneNotes: input.sceneNotes,
         }),
         userPrompt:
-          `Topic: ${input.topic}\nKeywords: ${input.keywords}\nCategory: ${input.category}\n` +
+          `Topic: ${input.topic}\nCategory: ${input.category}\n` +
           `Audience: ${input.targetAudience}\nScript type: ${input.scriptType}` +
           // Set by POST /video/regenerate { scope: "script" } — the only
           // regeneration scope that reruns this step, so this is always a

@@ -72,7 +72,6 @@ async function fetchTracksForPipeline(pipelineId: string): Promise<TrackRow[]> {
 
 interface BlogJobFields {
   topic: string
-  keywords: string | null
   category: string
   target_audience: string
   scene_notes: string | null
@@ -82,7 +81,7 @@ interface BlogJobFields {
 async function fetchBlogJobFields(jobId: string): Promise<BlogJobFields> {
   const { data, error } = await client
     .from('content_jobs')
-    .select('topic, keywords, category, target_audience, scene_notes, image_style')
+    .select('topic, category, target_audience, scene_notes, image_style')
     .eq('id', jobId)
     .single()
   if (error || !data) {
@@ -180,7 +179,6 @@ export const blogGenerate = inngest.createFunction(
       const job = await step.run('fetch-job-for-outline', () => fetchBlogJobFields(jobId))
       const outlineInput: OutlineJobInput = {
         topic: job.topic,
-        keywords: job.keywords ?? '',
         category: job.category,
         targetAudience: job.target_audience,
         sceneNotes: job.scene_notes,
@@ -206,7 +204,6 @@ export const blogGenerate = inngest.createFunction(
         headline,
         subtitle,
         sceneNotes: job.scene_notes,
-        keywords: job.keywords,
       }
       const hero = composeHeroPrompt(BRAND_PROFILE, blogImageJob)
       const inline = composeInlinePrompt(BRAND_PROFILE, blogImageJob)
