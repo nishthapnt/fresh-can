@@ -1549,3 +1549,72 @@
 **⭐ Pick Up Next Session**
 - Phase 7 (video continuity research — chained reference frames, recommend-only) or Phase 8 (structural test rewrite + e2e substring-dispatch decoupling, §13).
 - Still open: owner review of §16.3/§16.6/§16.7, the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation flagged above.
+
+---
+
+### Session 18 — 2026-09-22 — Prompt architecture refactor, Phase 7: video continuity research (§9.2, recommend-only)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §9.2 — evaluate whether chaining a previous scene's output frame as the next scene's reference image is feasible, for continuity of recurring PEOPLE (the way the character-ref image already locks the unit's appearance). Investigate and recommend, don't implement unilaterally — no code changed this phase, the finding is the deliverable.*
+
+**Recommendation: don't implement it.** Three findings, verified against real docs and real code, not assumption:
+1. **The adapter genuinely supports only one reference image** — confirmed against KIE's own Flux Kontext docs (`input_image` is a single URL, not an array; `ImageGenerationInput.referenceImageUrl` already reflects this). Chaining a previous frame in would mean *replacing* the character-ref (unit) image for that scene, not adding to it — a real per-scene tradeoff between unit-continuity and people-continuity, not an addition to both.
+2. **Scene image generation is currently parallel, not sequential** — `video.ts`'s `runSceneVisualsUntilSettled` submits every scene's image concurrently in one wave (`Promise.allSettled`, confirmed in code). Chaining would force strict sequential dependency, roughly a 7x wall-clock increase for a typical 7-scene video.
+3. **It would undermine the existing failure-isolation design** — Session 11's vision-QA gate exists specifically so a defect triggers a *targeted* regeneration of one scene. Chaining means a defect in scene N propagates into every scene chained after it.
+
+**Recommended alternative, already mostly built**: `cast_bible` (locked physical descriptions per named person, produced in Phase 3) exists as data but nothing reads it into the scene-image composer yet. Text, not a second image — works within the single-reference-image constraint, no sequential generation, none of the error-propagation risk above. This is the actual highest-value next step for recurring-character continuity.
+
+**📁 Files Changed**
+- `docs/PROMPT_ARCHITECTURE.md` — Phase 7 findings/recommendation recorded; `cast_bible` injection cross-referenced as the recommended path forward.
+
+**⭐ Pick Up Next Session**
+- Phase 8 (structural test rewrite for `compose.test.ts`/`composeText.test.ts`'s remaining phrase-pinning assertions + e2e substring-dispatch decoupling, §13) — the last phase in the refactor.
+- Or, independently of the phase sequence: `cast_bible` verbatim injection into scene-image prompts (Phase 7's recommended follow-up).
+- Still open: owner review of §16.3/§16.6/§16.7, the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation flagged in Session 17.
+
+### Session 19 — 2026-09-22 — Prompt architecture refactor, Phase 8: Tests (§13) — final phase
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §13 — decouple the e2e dispatch fakes from prompt prose, and close any remaining gaps against the brief's own §15 acceptance checklist. Last phase of the 8-phase plan.*
+
+1. **e2e structural dispatch fix** — the three `*Pipeline.e2e.test.ts` files routed their fake `ScriptGenerator` by sniffing substrings out of the composed system prompt, which breaks silently whenever a prompt gets reworded (every prior phase did this at least once). Added `stepName?: string` to `ScriptGenerationInput`, threaded a real step identifier through all 9 real call sites, and switched all three e2e fakes to dispatch on `req.stepName` instead of prose.
+2. **G4 audit found and fixed two real "hardcoded Fresh-CAN outside the brand file" bugs**, both predating this phase:
+   - `ONE_WORDMARK_ONLY` (`compose.ts`) hardcoded `"Fresh CAN"` — added `UnitDescriptor.wordmarkText` and converted it to `oneWordmarkOnly(brand.unit.wordmarkText)`.
+   - `composeVideoScriptSystemPrompt`'s five clause constants (`CAMPAIGN_FIT`, `STORY_PLANNING_CLAUSE`, `FRESHCAN_ROLE_ADAPTIVITY`, `BRAND_ASSET_FIDELITY`, `FINAL_SELF_CHECK_CLAUSE`) wrote "Fresh-CAN" into their prose over a dozen times — the largest G4 violation in the whole refactor. Converted each into a function taking `brand: BrandProfile`, interpolating `brand.name`. Also fixed two smaller instances of the same bug in `composeLocalizeScriptSystemPrompt` and `composeCopySystemPrompt`. Added a new brand-agnosticism test suite (G4) to `compose.test.ts` using an "Acme Fresh Mart" fixture to catch this class of bug on the image-composer side going forward; `composeText.ts`'s text composers had no equivalent brand-swap coverage before this, which is why these bugs survived every earlier phase undetected.
+3. **Closed the "unit presence... with rationale" gap (§15 acceptance criterion)** — `CreativeBrief.unitRelevance` already had `{value, rationale}` (Phase 2); `ImagePostPlan.unitPresence` and video's per-scene `unit_presence` didn't. Added `unitPresenceRationale` (required) to `ImagePostPlan`/`planImage.ts`, and `unit_presence_rationale` (optional, matching every other lenient Layer 2 per-scene field) to video's `ScriptSceneOutput`/`SceneLayer2Fields`/schema/DB write.
+
+**🧪 Testing**
+- Full non-e2e suite: 396/396 passing.
+- `npx tsc --noEmit`: clean. `npx eslint` on every touched file: no new warnings.
+- `npm run build`: clean production build.
+- E2e suite: 36/38 passing — the 2 failures (`videoPipeline.e2e.test.ts` M4/M5) are a pre-existing real-Supabase-network timeout, confirmed unrelated by reproducing the identical failure against unmodified `main`.
+
+**📁 Files Changed**
+- `src/server/pipeline/adapters/types.ts` — `ScriptGenerationInput.stepName`.
+- `src/server/pipeline/steps/{blog,image,video,shared}/*.ts` (9 call sites) — pass `stepName`.
+- `src/server/pipeline/steps/{blog,image,video}/*Pipeline.e2e.test.ts` — dispatch on `stepName`.
+- `src/server/pipeline/prompts/core/compose.ts` — `oneWordmarkOnly(wordmarkText)`; new G4 brand-agnosticism test suite in `compose.test.ts`.
+- `src/server/pipeline/prompts/core/composeText.ts` — 5 video-script clause constants converted to functions of `brand`; 2 smaller hardcoded-brand-name fixes; new `unit_presence_rationale` schema field.
+- `src/server/pipeline/prompts/types.ts` — `UnitDescriptor.wordmarkText`, `ImagePostPlan.unitPresenceRationale`.
+- `src/server/pipeline/prompts/brand/fresh-can.ts` — `wordmarkText: 'Fresh CAN'`.
+- `src/server/pipeline/steps/image/planImage.ts` — requires `unitPresenceRationale`.
+- `src/server/pipeline/steps/video/generateScript.ts` — `unit_presence_rationale` parsed/stored.
+- `src/server/pipeline/prompts/core/{compose,composeText}.test.ts`, `planImage.test.ts`, `generateScript.test.ts`, `contradictions.test.ts` — new/updated assertions.
+- `docs/PROMPT_ARCHITECTURE.md` — Phase 8 section added.
+
+**Decisions Made**
+- `unitPresenceRationale` is required for image_post (planning is the whole point of that step) but optional for video's per-scene field (matches Phase 3's existing lenient-per-scene-field design) — deliberate asymmetry, not an oversight.
+- Fixed the video-clause G4 violations found during this audit rather than filing them for a future phase, since they're the same class of bug this phase's own test-suite work exists to catch, and the fix was mechanical (parameterize on `brand.name`) with no design decision involved.
+
+**⭐ Pick Up Next Session**
+- The 8-phase `PROMPT_REFACTOR_BRIEF.md` plan is now complete. Phase 9 (docs — brief §14: finish `docs/PROMPT_ARCHITECTURE.md`, update `CLAUDE.md`/`ARCHITECTURE.MD`, changelog) has not been explicitly requested yet.
+- Independently of the phase sequence: `cast_bible` verbatim injection into scene-image prompts (Phase 7's recommended follow-up).
+- Still open, unactioned: owner review of §16.3 (reference-photo pre-correction), §16.6 (interior counter/sink wording), §16.7 (2018 statistic), the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation (Session 17).

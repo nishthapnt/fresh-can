@@ -105,6 +105,11 @@ export interface ImagePostPlan {
   subject: string
   composition: string
   unitPresence: 'none' | 'background' | 'featured'
+  /** One sentence, honest and specific to this image — brief §15's own
+   *  acceptance criterion: unit presence must be LLM-decided "with
+   *  rationale," not a bare enum (added Phase 8, closing a gap found
+   *  auditing against that checklist). */
+  unitPresenceRationale: string
   setting: 'exterior' | 'interior' | 'unrelated'
   containsFood: boolean
   castDescription?: string
@@ -190,6 +195,12 @@ export interface UnitDescriptor {
   full: string
   /** Interior layout and fixtures. Used only for interior scenes. */
   interior: string
+  /** The wordmark's own literal text, standalone — e.g. "Fresh CAN" — for
+   *  the rare prompt fragment that needs to quote it by itself rather than
+   *  embed it in a fuller descriptive sentence (identity/full/interior
+   *  already spell it out in prose; this exists so a composer never has to
+   *  hardcode it directly — brief G4). */
+  wordmarkText: string
 }
 
 export interface BrandProfile {

@@ -499,9 +499,20 @@ const REALISTIC_PEOPLE =
 // image this matters most on. "on the side panels only" (not "rear header
 // bar" — corrected same day, see CONTAINER_DESCRIPTOR's own comment for
 // why the logo's canonical location was simplified to the side only).
-const ONE_WORDMARK_ONLY =
-  'Exactly one "Fresh CAN" wordmark total, on the side panels only, as described above — no second or ' +
-  'duplicate wordmark, decal, or graphic anywhere else on the vehicle.'
+// Phase 8 fix (brief G4): this used to hardcode the literal wordmark text
+// ("Fresh CAN") instead of reading it from the brand file — the one
+// remaining brand-specific string left in this file, caught by adding a
+// real brand-swap test (compose.test.ts's "brand-agnosticism" block).
+// There's no existing brand-profile field for the wordmark's own literal
+// text (unit.full/identity describe it in prose, never quote it standalone),
+// so this takes it as a parameter from the caller instead of inventing a
+// new field for a single use site.
+function oneWordmarkOnly(wordmarkText: string): string {
+  return (
+    `Exactly one "${wordmarkText}" wordmark total, on the side panels only, as described above — no second ` +
+    'or duplicate wordmark, decal, or graphic anywhere else on the vehicle.'
+  )
+}
 
 // Added 2026-09-18: the showSubject branch below used to push ONLY the
 // truck/interior's fixed description plus the reference photo's own camera
@@ -657,7 +668,7 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   const parts = [
     `A clean, well-lit reference photo of the ${brand.name} branded vehicle.`,
     unitBrandingBlock(brand, 'featured'),
-    ONE_WORDMARK_ONLY,
+    oneWordmarkOnly(brand.unit.wordmarkText),
   ]
 
   let referenceImageUrl: string | undefined

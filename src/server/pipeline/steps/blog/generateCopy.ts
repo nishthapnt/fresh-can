@@ -150,6 +150,7 @@ export async function runGenerateCopy(
         regenInstructions: track.regen_instructions,
       }),
       userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}\nOutline: ${JSON.stringify(outline)}`,
+      stepName: 'generate_copy',
     })
     const outputSnapshot = result.parsed ? ensureExactlyOneInlineImageSection(result.parsed) : { raw: result.raw }
     await recordStepAttempt(client, {

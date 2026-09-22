@@ -90,6 +90,7 @@ describe('normalizeScriptOutput', () => {
         cast_present: ['mother'],
         props_present: ['reusable bag'],
         unit_presence: 'background',
+        unit_presence_rationale: 'The unit is parked down the street but the scene is really about the walk.',
         setting: 'exterior',
         contains_food: false,
         is_final_scene: i === 1,
@@ -106,6 +107,7 @@ describe('normalizeScriptOutput', () => {
       expect(result!.scenes[0].beat).toBe('hook')
       expect(result!.scenes[0].cast_present).toEqual(['mother'])
       expect(result!.scenes[0].unit_presence).toBe('background')
+      expect(result!.scenes[0].unit_presence_rationale).toBe(WITH_PLAN.scenes[0].unit_presence_rationale)
       expect(result!.scenes[0].setting).toBe('exterior')
       expect(result!.scenes[0].contains_food).toBe(false)
       expect(result!.scenes[1].is_final_scene).toBe(true)
@@ -120,6 +122,7 @@ describe('normalizeScriptOutput', () => {
       expect(result!.locations).toBeUndefined()
       expect(result!.scenes[0].beat).toBeUndefined()
       expect(result!.scenes[0].unit_presence).toBeUndefined()
+      expect(result!.scenes[0].unit_presence_rationale).toBeUndefined()
     })
 
     it('drops a cast_bible/locations entry with no id, rather than keeping one with a made-up id', () => {

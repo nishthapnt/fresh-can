@@ -23,6 +23,7 @@ function neutralFallbackPlan(imageStyle: ImageStyle, headline?: string, subtitle
     subject: '',
     composition: '',
     unitPresence: 'none',
+    unitPresenceRationale: 'Fallback: image planning failed or returned malformed JSON.',
     setting: 'unrelated',
     containsFood: false,
     textPlan: imageStyle === 'infographic' && headline && subtitle ? { headline, subtitle } : null,
@@ -44,6 +45,8 @@ export function normalizeImagePostPlan(parsed: unknown): ImagePostPlan | null {
     typeof p.composition !== 'string' ||
     typeof p.unitPresence !== 'string' ||
     !UNIT_PRESENCE_VALUES.has(p.unitPresence) ||
+    typeof p.unitPresenceRationale !== 'string' ||
+    p.unitPresenceRationale.trim() === '' ||
     typeof p.setting !== 'string' ||
     !SETTING_VALUES.has(p.setting) ||
     typeof p.containsFood !== 'boolean'
@@ -64,6 +67,7 @@ export function normalizeImagePostPlan(parsed: unknown): ImagePostPlan | null {
     subject: p.subject,
     composition: p.composition,
     unitPresence: p.unitPresence as ImagePostPlan['unitPresence'],
+    unitPresenceRationale: p.unitPresenceRationale,
     setting: p.setting as ImagePostPlan['setting'],
     containsFood: p.containsFood,
     castDescription: typeof p.castDescription === 'string' && p.castDescription !== '' ? p.castDescription : undefined,
@@ -106,6 +110,7 @@ export async function planImage(
     const result = await scriptGenerator.generate({
       systemPrompt: composeImagePlanSystemPrompt(brand, { imageStyle: input.imageStyle, scene: input.scene }, input.creativeBrief),
       userPrompt: `Scene: ${input.scene}\nImage style: ${input.imageStyle}`,
+      stepName: 'plan_image',
     })
     const plan = normalizeImagePostPlan(result.parsed)
     if (!plan) {

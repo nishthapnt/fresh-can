@@ -75,6 +75,12 @@ export interface ScriptSceneOutput {
   cast_present?: string[]
   props_present?: string[]
   unit_presence?: 'none' | 'background' | 'featured'
+  /** One sentence, honest and specific to this scene — brief §15's own
+   *  acceptance criterion: unit presence must be LLM-decided "with
+   *  rationale," not a bare enum (added Phase 8, closing a gap found
+   *  auditing against that checklist). Optional/lenient like every other
+   *  Layer 2 field here — a missing rationale never fails the scene. */
+  unit_presence_rationale?: string
   setting?: 'exterior' | 'interior' | 'unrelated'
   contains_food?: boolean
   is_final_scene?: boolean
@@ -254,6 +260,7 @@ export function normalizeScriptOutput(parsed: unknown): VideoScriptOutput | null
       cast_present: toStringArray(scene.cast_present),
       props_present: toStringArray(scene.props_present),
       unit_presence: normalizeEnum(scene.unit_presence, UNIT_PRESENCE_VALUES),
+      unit_presence_rationale: typeof scene.unit_presence_rationale === 'string' ? scene.unit_presence_rationale : undefined,
       setting: normalizeEnum(scene.setting, SETTING_VALUES),
       contains_food: coerceBoolean(scene.contains_food),
       is_final_scene: coerceBoolean(scene.is_final_scene),
@@ -294,6 +301,7 @@ export function extractVisualState(narrationIntent: unknown): SceneVisualState |
  *  function's own header for why those two default in opposite directions. */
 export interface SceneLayer2Fields {
   unit_presence?: 'none' | 'background' | 'featured'
+  unit_presence_rationale?: string
   setting?: 'exterior' | 'interior' | 'unrelated'
   contains_food?: boolean
   cast_present?: string[]
@@ -305,6 +313,7 @@ export function extractSceneLayer2Fields(narrationIntent: unknown): SceneLayer2F
   const v = narrationIntent as Record<string, unknown>
   return {
     unit_presence: normalizeEnum(v.unit_presence, UNIT_PRESENCE_VALUES),
+    unit_presence_rationale: typeof v.unit_presence_rationale === 'string' ? v.unit_presence_rationale : undefined,
     setting: normalizeEnum(v.setting, SETTING_VALUES),
     contains_food: coerceBoolean(v.contains_food),
     cast_present: toStringArray(v.cast_present),
@@ -381,6 +390,7 @@ export async function runGenerateScript(
           // genuine user request to redo the script/scene plan differently,
           // never stale guidance from an unrelated earlier regen.
           (working.regen_instructions ? `\nThe user asked for this rewrite: ${working.regen_instructions}` : ''),
+        stepName: 'generate_script',
       })
 
       const output = normalizeScriptOutput(result.parsed)
@@ -438,6 +448,7 @@ export async function runGenerateScript(
             cast_present: s.cast_present,
             props_present: s.props_present,
             unit_presence: s.unit_presence,
+            unit_presence_rationale: s.unit_presence_rationale,
             setting: s.setting,
             contains_food: s.contains_food,
             is_final_scene: s.is_final_scene,

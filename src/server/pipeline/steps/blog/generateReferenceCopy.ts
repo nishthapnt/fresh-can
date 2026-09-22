@@ -93,6 +93,7 @@ export async function generateReferenceCopy(
     const result = await scriptGenerator.generate({
       systemPrompt: composeReferenceCopySystemPrompt(brand, { title: input.title, sections: input.sections }),
       userPrompt: `Title: ${input.title}\nSections: ${input.sections.map((s) => s.heading).join(', ')}`,
+      stepName: 'generate_reference_copy',
     })
     const output = normalizeReferenceCopyOutput(result.parsed, input)
     if (!output) {

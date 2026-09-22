@@ -464,16 +464,145 @@ section) — never the same content twice. Both are additive: absent
 entirely for a caller predating Phase 6, falling back to the bare
 topic/headline framing exactly as before.
 
+## Phase 7 — Video continuity research (§9.2, recommend-only)
+
+Brief §9.2 asks whether chaining a previous scene's output frame as the
+next scene's reference image is feasible, for continuity of *recurring
+people* (the way the character-ref image already locks the *unit's*
+appearance) — investigate and recommend, don't implement unilaterally. No
+code changed this phase; the finding itself is the deliverable.
+
+**Recommendation: don't implement it.** Three verified findings, against
+real docs and real code, not assumption:
+
+1. **The adapter genuinely supports only one reference image.** Confirmed
+   against KIE's own docs (docs.kie.ai/flux-kontext-api): Flux Kontext's
+   `input_image` parameter is a single URL, not an array —
+   `ImageGenerationInput.referenceImageUrl` already reflects this
+   (singular). Chaining a previous scene's frame in would mean
+   **replacing** the character-ref (unit) image for that scene, not adding
+   to it — a real tradeoff between unit-continuity and people-continuity
+   per scene, not an addition to both.
+2. **Scene image generation is currently parallel, not sequential.**
+   `video.ts`'s `runSceneVisualsUntilSettled` submits every scene's image
+   concurrently in one "wave" (`Promise.allSettled`). Chaining would force
+   strict sequential dependency — scene 2 can't submit until scene 1
+   finishes *and* passes the vision-QA gate. For a typical 7-scene video,
+   that's roughly a 7x increase in wall-clock generation time.
+3. **It would undermine the existing failure-isolation design.** The
+   Session 11 vision-QA gate exists specifically so a defect in one scene
+   triggers a *targeted* regeneration of that scene alone. Chaining means a
+   defect in scene N propagates into every scene chained after it —
+   compounding rather than isolating failures.
+
+**The actual highest-value next step for recurring-people continuity is
+already mostly built**: `cast_bible` (locked physical descriptions per
+named person, Phase 3) exists as data but nothing reads it into the
+scene-image composer yet. It's text, not a second image — works within the
+single-reference-image constraint, needs no sequential generation, carries
+none of the error-propagation risk above. Recommended over frame-chaining
+whenever this is picked back up.
+
+## Phase 8 — Tests (§13)
+
+Final audit-and-close phase: decouple the e2e dispatch fakes from prompt
+prose, and close a gap found auditing against brief §15's own acceptance
+checklist ("unit presence is LLM-decided per scene/image, with rationale,
+and no keyword heuristics remain").
+
+### e2e structural dispatch fix
+
+The three `*Pipeline.e2e.test.ts` files routed their fake `ScriptGenerator`
+by sniffing substrings out of the composed system prompt (e.g. "if the
+system prompt contains X, return fake response Y"). Brief §13's own stated
+concern: prompts get reworded for quality reasons constantly (every prior
+phase did this), and a prose-substring match breaks silently — the fake
+returns the wrong canned response, and the test either false-passes on
+stale coverage or fails for a reason unrelated to what it's meant to check.
+
+Fixed by adding `stepName?: string` to `ScriptGenerationInput`
+(`adapters/types.ts`) and threading a real, stable identifier
+(`'generate_outline'`, `'plan_image'`, `'generate_script'`, etc.) through
+every real call site (9 total) into `scriptGenerator.generate({ ...,
+stepName })`. The three e2e fakes now dispatch on `req.stepName` — an
+explicit, typed, renaming-proof interface field instead of prose matching.
+
+### G4 audit: hardcoded "Fresh-CAN" outside the brand profile
+
+Two real violations of ground rule G4 ("no brand-specific strings outside
+the brand profile file") found this phase, both predating Phase 8:
+
+1. **`ONE_WORDMARK_ONLY`** (`compose.ts`) — hardcoded the literal string
+   `"Fresh CAN"` instead of reading it from the brand file. Fixed by adding
+   `UnitDescriptor.wordmarkText` (brand data) and converting the constant
+   into a function, `oneWordmarkOnly(wordmarkText)`, called as
+   `oneWordmarkOnly(brand.unit.wordmarkText)`.
+2. **`composeVideoScriptSystemPrompt`'s clause constants** (`composeText.ts`)
+   — `CAMPAIGN_FIT`, `STORY_PLANNING_CLAUSE`, `FRESHCAN_ROLE_ADAPTIVITY`,
+   `BRAND_ASSET_FIDELITY`, and `FINAL_SELF_CHECK_CLAUSE` were all
+   module-level string constants with "Fresh-CAN" written directly into the
+   prose over a dozen times — the single largest G4 violation found in the
+   whole refactor, and the one most likely to have been invisible without a
+   dedicated brand-swap test (a substring match against the real brand's own
+   name can't distinguish "correctly reads brand data" from "hardcoded the
+   same string the fixture happens to also use"). Fixed by converting each
+   constant into a function taking `brand: BrandProfile` and interpolating
+   `brand.name` everywhere the literal appeared, then updating both call
+   sites inside `composeVideoScriptSystemPrompt` to call them with `brand`.
+   Two smaller instances of the same bug were also found and fixed while
+   auditing this function's neighbors: `composeLocalizeScriptSystemPrompt`'s
+   narration-mention exception clause, and `composeCopySystemPrompt`'s
+   "don't open every paragraph the same way" example.
+
+None of this was caught by Phase 4's `compose.ts`-focused brand-agnosticism
+test suite, since that suite only covers the *image* composers
+(`composeCharacterRefPrompt`, `composeHeroPrompt`, `composeInlinePrompt`,
+`composePhotoPrompt`, `composeSceneImagePrompt`) — `composeText.ts`'s text
+composers had no equivalent brand-swap coverage. The existing
+`composeText.test.ts` suite already used a `testBrand` fixture named `'Test
+Brand'` (not `'Fresh-CAN'`) for its assertions, so once the hardcoded
+literals were replaced with `brand.name`, four pre-existing test assertions
+that had been silently matching the *coincidentally identical* hardcoded
+string needed updating to interpolate `testBrand.name` instead of asserting
+on the literal `'Fresh-CAN'` — the fix and the test update are two sides of
+the same bug.
+
+### Unit presence "with rationale" (§15 acceptance criterion)
+
+`CreativeBrief.unitRelevance` (Phase 2) already carried `{ value, rationale
+}`. Two other unit-presence decisions didn't:
+
+- **`ImagePostPlan.unitPresence`** (image_post) — added
+  `unitPresenceRationale: string`, **required**: `normalizeImagePostPlan`
+  now rejects a plan missing it (or blank), same treatment as every other
+  required plan field, since `planImage`'s whole reason for existing is
+  a deliberate LLM decision, not a best-effort annotation.
+- **Video's per-scene `unit_presence`** — added
+  `unit_presence_rationale?: string`, **optional**, for internal
+  consistency with every other Layer 2 per-scene field (`beat`,
+  `cast_present`, `setting`, etc.), all of which are lenient by Phase 3's
+  own design — nothing about a single scene's plan hard-fails script
+  generation. Threaded through `ScriptSceneOutput`, `normalizeScriptOutput`,
+  `SceneLayer2Fields`/`extractSceneLayer2Fields`, the JSON schema in
+  `composeVideoScriptSystemPrompt`, and the `narration_intent` write in
+  `upsertVideoScenes`.
+
+### Verification
+
+Full non-e2e suite: 396/396 passing. `npx tsc --noEmit`: clean.
+`npx eslint` on every touched file: no new warnings/errors. Production
+build (`npm run build`): clean. E2e suite: 36/38 passing — the 2 failures
+(`videoPipeline.e2e.test.ts` M4/M5) are a pre-existing real-Supabase-network
+timeout, confirmed unrelated to this phase by reproducing the same failure
+against unmodified `main` via `git stash`.
+
 ## Not yet done (later phases)
 
 - `cast_bible` verbatim injection into per-scene image prompts (brief §9.2)
   — the plan data exists (Phase 3) but nothing reads it yet; deferred as
-  its own piece of work rather than squeezed into Phase 4.
-- Structural test rewrite for `compose.test.ts`/`composeText.test.ts`'s
-  remaining phrase-pinning assertions, and the e2e substring-dispatch
-  coupling in the three `*Pipeline.e2e.test.ts` files — Phase 8 (§13).
+  its own piece of work rather than squeezed into Phase 4. **Phase 7's
+  recommended path forward for recurring-character continuity** — see
+  above.
 - Reconciling per-track `has_inline_image` against the shared
   `inlineHighlight` decision (see Phase 6's second finding above) — a
   pre-existing gap, not newly introduced, left for a future pass.
-- Video continuity research (chained reference frames) — Phase 7,
-  recommend-only per the brief.

@@ -112,6 +112,7 @@ export async function interpretIntent(
       userPrompt:
         `Topic: ${input.topic}\nCategory: ${input.category}\nAudience: ${input.targetAudience}` +
         (input.sceneNotes ? `\nAdmin's own idea: ${input.sceneNotes}` : ''),
+      stepName: 'interpret_intent',
     })
     const brief = normalizeCreativeBrief(result.parsed)
     if (!brief) {

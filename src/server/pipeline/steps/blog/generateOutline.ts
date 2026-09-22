@@ -83,6 +83,7 @@ export async function runGenerateOutline(
       const result = await scriptGenerator.generate({
         systemPrompt: composeOutlineSystemPrompt(BRAND_PROFILE, input.category, input.sceneNotes, input.creativeBrief),
         userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}\nAudience: ${input.targetAudience}`,
+        stepName: 'generate_outline',
       })
       await recordStepAttempt(client, {
         contentPipelineId: pipeline.id,

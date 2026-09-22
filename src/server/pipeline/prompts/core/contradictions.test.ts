@@ -15,6 +15,7 @@ const testBrand: BrandProfile = {
     identity: 'THE FIXED IDENTITY DESCRIPTION',
     full: 'THE FIXED CONTAINER DESCRIPTION',
     interior: 'THE FIXED INTERIOR DESCRIPTION',
+    wordmarkText: 'THE FIXED WORDMARK',
   },
   forbiddenOnUnit: [],
   forbiddenInScene: [],

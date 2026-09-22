@@ -17,7 +17,7 @@ import { runGeneratePhoto } from './generatePhoto'
 import { runGenerateCaption } from './generateCaption'
 import { runGenerateAdCopy } from './generateAdCopy'
 import { runFinalizeImageContent } from './finalizeImageContent'
-import type { ScriptGenerator, ImageGenerator, ImagePollResult } from '../../adapters/types'
+import type { ScriptGenerator, ScriptGenerationInput, ImageGenerator, ImagePollResult } from '../../adapters/types'
 import type { PhotoStorageUploader } from '../../adapters/storage'
 
 const hasCreds = !!process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -181,11 +181,12 @@ describe.skipIf(!hasCreds)('Image pipeline end-to-end (real DB, mocked providers
   }
 
   // Distinguishes generate_ad_copy's call from generate_caption's call by
-  // system prompt content — same trick composeText.test.ts uses to route
-  // its own mocks — rather than relying on call order.
+  // the caller's own step_name (PROMPT_REFACTOR_BRIEF.md §13) — every real
+  // .generate() call site now passes this, so dispatch no longer depends on
+  // system-prompt wording that could get reworded and silently break routing.
   function makeAdCopyAwareScriptGenerator() {
-    const generate = vi.fn(async (req: { systemPrompt: string }) => {
-      if (req.systemPrompt.includes('ad copywriter')) {
+    const generate = vi.fn(async (req: ScriptGenerationInput) => {
+      if (req.stepName === 'generate_ad_copy') {
         return {
           raw: '{}',
           parsed: {
@@ -412,7 +413,7 @@ describe.skipIf(!hasCreds)('Image pipeline end-to-end (real DB, mocked providers
       expect(result.ran).toBe(true)
 
       const captionCall = (script.generate as ReturnType<typeof vi.fn>).mock.calls.find(
-        (c) => !c[0].systemPrompt.includes('ad copywriter'),
+        (c) => c[0].stepName === 'generate_caption',
       )!
       expect(captionCall[0].systemPrompt).toContain('Fresh Food, Closer Than Ever')
       expect(captionCall[0].systemPrompt).toContain('Every neighbourhood deserves it')

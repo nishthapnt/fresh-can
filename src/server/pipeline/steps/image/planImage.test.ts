@@ -6,6 +6,7 @@ const VALID_PHOTO = {
   subject: 'A mother and daughter picking fruit.',
   composition: 'Medium shot, warm natural light, negative space upper-right.',
   unitPresence: 'background',
+  unitPresenceRationale: 'The unit is parked nearby but the scene is really about the produce.',
   setting: 'exterior',
   containsFood: true,
   textPlan: null,
@@ -22,6 +23,14 @@ describe('normalizeImagePostPlan', () => {
     expect(result).not.toBeNull()
     expect(result!.textPlan).toBeNull()
     expect(result!.safeZone).toBe('top-right')
+    expect(result!.unitPresenceRationale).toBe(VALID_PHOTO.unitPresenceRationale)
+  })
+
+  it('requires a real unitPresenceRationale — brief §15\'s own acceptance criterion (unit presence decided "with rationale", never a bare enum)', () => {
+    const { unitPresenceRationale: _unitPresenceRationale, ...missingRationale } = VALID_PHOTO
+    expect(normalizeImagePostPlan(missingRationale)).toBeNull()
+    expect(normalizeImagePostPlan({ ...VALID_PHOTO, unitPresenceRationale: '' })).toBeNull()
+    expect(normalizeImagePostPlan({ ...VALID_PHOTO, unitPresenceRationale: 42 })).toBeNull()
   })
 
   it('accepts a well-formed infographic-style plan (textPlan populated)', () => {

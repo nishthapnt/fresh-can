@@ -21,6 +21,7 @@ import { runRenderLanguageTrack } from './renderLanguageTrack'
 import { BRAND_PROFILE } from '../../prompts/index'
 import type {
   ScriptGenerator,
+  ScriptGenerationInput,
   ImageGenerator,
   ImagePollResult,
   VideoGenerator,
@@ -112,15 +113,19 @@ function makeFakeVideoUploader() {
   return { uploadFromUrl, uploadBuffer } satisfies VideoStorageUploader
 }
 
-// Routes on systemPrompt content the same way makeAdCopyAwareScriptGenerator
-// does in imagePipeline.e2e.test.ts — generate_script's prompt vs.
-// localize_script's — rather than relying on call order. Localized text is
-// deliberately DIFFERENT per language (not just an EN/FR label swap) so a
-// test asserting "FR's narration_text is genuinely French" can't pass by
-// accident.
+// Routes generate_script vs. localize_script by the caller's own step_name
+// (PROMPT_REFACTOR_BRIEF.md §13), not by sniffing system-prompt wording —
+// rather than relying on call order. The isFrench check below is NOT the
+// same class of problem: composeLocalizeScriptSystemPrompt's language
+// parameter is deliberately rendered as the literal word "French"/"English"
+// in the prompt (part of its real functional contract, not incidental
+// wording), so keying on it here tests genuine, stable behavior. Localized
+// text is deliberately DIFFERENT per language (not just an EN/FR label
+// swap) so a test asserting "FR's narration_text is genuinely French"
+// can't pass by accident.
 function makeLocalizeAwareScriptGenerator() {
-  const generate = vi.fn(async (req: { systemPrompt: string; userPrompt: string }) => {
-    if (req.systemPrompt.includes('scriptwriter and shot planner')) {
+  const generate = vi.fn(async (req: ScriptGenerationInput) => {
+    if (req.stepName === 'generate_script') {
       return { raw: '{}', parsed: SCRIPT_OUTPUT }
     }
     const scenes = JSON.parse(req.userPrompt) as Array<{ scene_number: number }>

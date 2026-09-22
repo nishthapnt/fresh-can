@@ -160,6 +160,7 @@ export function composeImagePlanSystemPrompt(
     '  "composition": string (framing, focal hierarchy, negative space — a real compositional plan, not a ' +
     'restatement of the subject),\n' +
     '  "unitPresence": "none" | "background" | "featured",\n' +
+    '  "unitPresenceRationale": string (one sentence, honest and specific to this image, never boilerplate),\n' +
     '  "setting": "exterior" | "interior" | "unrelated",\n' +
     '  "containsFood": boolean,\n' +
     '  "castDescription": string ("" if no people are in the scene),\n' +
@@ -295,7 +296,7 @@ export function composeCopySystemPrompt(brand: BrandProfile, opts: CopySystemPro
     'setting or example (e.g. never write "Toronto", "Edmonton", "Ontario", or any other Canadian city/' +
     'region/neighbourhood) — "Canada" is the only place name allowed anywhere in the post. Do not open ' +
     'consecutive paragraphs the same way (e.g. do not start ' +
-    'every paragraph with "Fresh-CAN" or the same transition word) — vary sentence openers throughout. ' +
+    `every paragraph with "${brand.name}" or the same transition word) — vary sentence openers throughout. ` +
     'For "seo": meta_description must be 140-160 characters; focus_keyword must appear in post_title, in ' +
     'the introduction, and in exactly one section heading or h3 — never repeated beyond that.' +
     (opts.sceneNotes
@@ -509,28 +510,31 @@ export interface VideoScriptSystemPromptOptions {
  * existed, per the request's own "preserve JSON structure/DB expectations,
  * modify the smallest number of files necessary."
  */
-const CAMPAIGN_FIT =
-  'That does not mean the story can ignore Fresh-CAN, though — every video is made for Fresh-CAN\'s own brand ' +
-  'campaign, so it must still genuinely connect to Fresh-CAN\'s real mission and goals, no matter how creative ' +
-  'the idea gets. This is required, not optional, and has two parts, both required together: (1) find the ' +
-  'honest, natural bridge between the idea above and what Fresh-CAN actually does — bringing fresh, ' +
-  'affordable, local groceries directly into communities — and let it show through the story\'s own real ' +
-  'details: food that reads as genuinely fresh and local, a real neighbourhood or community feeling, people ' +
-  'getting good food easily; and (2) the Fresh-CAN name itself must be said explicitly, out loud, somewhere in ' +
-  'the narration across the video — this is REQUIRED, not merely ideal, and is never satisfied by "fresh" or ' +
-  '"local" language alone, no matter how strong the thematic connection is otherwise. This MUST be written ' +
-  'directly into the relevant scene\'s own "narration_intent" field below, in plain semantic terms (e.g. ' +
-  '"mentions this was made possible by Fresh-CAN") — the top-level "script" field is for internal review only ' +
-  'and is never what actually reaches the audience, so writing the mention there alone does NOT satisfy this ' +
-  'requirement. Find the single most natural moment already in the story for it — wherever food, its origin, a ' +
-  'delivery, or a visit is already part of the scene — and have that scene\'s narration_intent call for naming ' +
-  'Fresh-CAN there directly, the way a real person would actually say it out loud in that moment. The ' +
-  'difference from reciting the mission statement or forcing the vehicle in: this is ONE specific, natural ' +
-  'mention of the name, grounded in the story\'s own real details, never a slogan, statistic, or pitch stated ' +
-  'on top of the scene. Never write a scene whose subject is the brand\'s logo, wordmark, or any graphic/text ' +
-  'reveal — no visual_description should ask for the logo to be drawn, shown, or transitioned to; an AI image ' +
-  'or video model cannot reproduce the real logo accurately, so the Fresh-CAN connection belongs entirely in ' +
-  'the spoken narration above, never as a visual logo or brand-graphic shot.'
+function campaignFit(brand: BrandProfile): string {
+  return (
+    `That does not mean the story can ignore ${brand.name}, though — every video is made for ${brand.name}'s own brand ` +
+    `campaign, so it must still genuinely connect to ${brand.name}'s real mission and goals, no matter how creative ` +
+    'the idea gets. This is required, not optional, and has two parts, both required together: (1) find the ' +
+    `honest, natural bridge between the idea above and what ${brand.name} actually does — bringing fresh, ` +
+    'affordable, local groceries directly into communities — and let it show through the story\'s own real ' +
+    'details: food that reads as genuinely fresh and local, a real neighbourhood or community feeling, people ' +
+    `getting good food easily; and (2) the ${brand.name} name itself must be said explicitly, out loud, somewhere in ` +
+    'the narration across the video — this is REQUIRED, not merely ideal, and is never satisfied by "fresh" or ' +
+    '"local" language alone, no matter how strong the thematic connection is otherwise. This MUST be written ' +
+    'directly into the relevant scene\'s own "narration_intent" field below, in plain semantic terms (e.g. ' +
+    `"mentions this was made possible by ${brand.name}") — the top-level "script" field is for internal review only ` +
+    'and is never what actually reaches the audience, so writing the mention there alone does NOT satisfy this ' +
+    'requirement. Find the single most natural moment already in the story for it — wherever food, its origin, a ' +
+    'delivery, or a visit is already part of the scene — and have that scene\'s narration_intent call for naming ' +
+    `${brand.name} there directly, the way a real person would actually say it out loud in that moment. The ` +
+    'difference from reciting the mission statement or forcing the vehicle in: this is ONE specific, natural ' +
+    'mention of the name, grounded in the story\'s own real details, never a slogan, statistic, or pitch stated ' +
+    'on top of the scene. Never write a scene whose subject is the brand\'s logo, wordmark, or any graphic/text ' +
+    'reveal — no visual_description should ask for the logo to be drawn, shown, or transitioned to; an AI image ' +
+    `or video model cannot reproduce the real logo accurately, so the ${brand.name} connection belongs entirely in ` +
+    'the spoken narration above, never as a visual logo or brand-graphic shot.'
+  )
+}
 
 // Silent internal planning pass, run before the model writes any scene —
 // see CAMPAIGN_FIT's own header, "2026-09-22: fifth revision," for why this
@@ -538,58 +542,70 @@ const CAMPAIGN_FIT =
 // (generateScript.ts's normalizeScriptOutput has no field for any of this;
 // it's reasoning that should shape the existing visual_description/
 // shot_notes/narration_intent output, not a new output of its own).
-const STORY_PLANNING_CLAUSE =
-  'Before writing the scenes below, silently work through the following — this is internal reasoning, never ' +
-  'part of your JSON output, which must contain only the fields the schema below asks for: (1) Core creative ' +
-  'idea — what genuinely makes the idea above interesting or worth watching? (2) Story arc — a hook, a ' +
-  'development, and a payoff, or another structure that fits this specific idea better. (3) Creative device — ' +
-  'choose ONE device that serves this idea, such as a visual reveal, an object\'s own journey, a POV shot, a ' +
-  'match cut, a cause-and-effect chain, a transformation, a human moment, or another device that fits better ' +
-  'than any of these. (4) Fresh-CAN\'s role in this story — classify it as background, supporting, enabler, ' +
-  'subject, or hero, based on how directly the idea above already concerns Fresh-CAN or its mission (an idea ' +
-  'with no real connection to groceries or the brand is background; an idea directly about Fresh-CAN\'s own ' +
-  'mission or service is hero) — this is an honest read of the idea itself, never a default, since the ' +
-  'branding guidance below scales against it. If an earlier pass already estimated how relevant the physical ' +
-  'unit is to this idea, treat that as a starting point to confirm or refine here, with the full idea and ' +
-  'scenes you are now planning — your own classification, made with that fuller context, is what the ' +
-  'branding guidance below actually scales against. (5) Visual motif — one recurring visual element (a color, an ' +
-  'object, a gesture, a shot type) that can carry across multiple scenes for cohesion. (6) Scene purpose — plan ' +
-  'what specific job each scene does in the story before writing it; every scene must advance the story, never ' +
-  'exist as one more pretty but disconnected shot.'
+function storyPlanningClause(brand: BrandProfile): string {
+  return (
+    'Before writing the scenes below, silently work through the following — this is internal reasoning, never ' +
+    'part of your JSON output, which must contain only the fields the schema below asks for: (1) Core creative ' +
+    'idea — what genuinely makes the idea above interesting or worth watching? (2) Story arc — a hook, a ' +
+    'development, and a payoff, or another structure that fits this specific idea better. (3) Creative device — ' +
+    'choose ONE device that serves this idea, such as a visual reveal, an object\'s own journey, a POV shot, a ' +
+    'match cut, a cause-and-effect chain, a transformation, a human moment, or another device that fits better ' +
+    `than any of these. (4) ${brand.name}'s role in this story — classify it as background, supporting, enabler, ` +
+    `subject, or hero, based on how directly the idea above already concerns ${brand.name} or its mission (an idea ` +
+    `with no real connection to groceries or the brand is background; an idea directly about ${brand.name}'s own ` +
+    'mission or service is hero) — this is an honest read of the idea itself, never a default, since the ' +
+    'branding guidance below scales against it. If an earlier pass already estimated how relevant the physical ' +
+    'unit is to this idea, treat that as a starting point to confirm or refine here, with the full idea and ' +
+    'scenes you are now planning — your own classification, made with that fuller context, is what the ' +
+    'branding guidance below actually scales against. (5) Visual motif — one recurring visual element (a color, an ' +
+    'object, a gesture, a shot type) that can carry across multiple scenes for cohesion. (6) Scene purpose — plan ' +
+    'what specific job each scene does in the story before writing it; every scene must advance the story, never ' +
+    'exist as one more pretty but disconnected shot.'
+  )
+}
 
 // How much Fresh-CAN shows up BEYOND the one required narration mention
 // above scales with STORY_PLANNING_CLAUSE's role classification — see
 // CAMPAIGN_FIT's header for why the mention itself stays a flat,
 // non-negotiable floor at every role level regardless.
-const FRESHCAN_ROLE_ADAPTIVITY =
-  'How visually and narratively present Fresh-CAN is beyond that one required mention should scale with the ' +
-  'role you classified during planning, not be the same for every idea. For a background, supporting, or ' +
-  'enabler role — the idea has only a loose or everyday connection to groceries — keep Fresh-CAN\'s presence ' +
-  'subtle: the required spoken mention above is enough, connected through the story\'s own food, people, ' +
-  'community, or access details; do not force the vehicle, the logo, or the app into the visuals just because ' +
-  'the brand is being credited in narration. For a subject or hero role — the idea is directly about Fresh-CAN, ' +
-  'its mission, or its service — stronger, more direct branding is earned and appropriate: the vehicle can be a ' +
-  'real visual presence across multiple scenes, and narration can speak about Fresh-CAN more directly, still as ' +
-  'part of a genuine story, never as a recited pitch. Every added character, object, location, action, or brand ' +
-  'element must have a narrative reason for being there, at any role level — never a random Fresh-CAN truck, a ' +
-  'random food prop, a generic cinematic shot with nothing to do with the story, an unrelated character or ' +
-  'location, branding beyond what the role above earns, or a surreal element with no narrative justification. ' +
-  'The finished video should make it obvious both why it belongs on Fresh-CAN\'s own social media and why the ' +
-  'user\'s original creative idea is still fully recognizable in it — neither should come at the other\'s expense.'
+function freshcanRoleAdaptivity(brand: BrandProfile): string {
+  return (
+    `How visually and narratively present ${brand.name} is beyond that one required mention should scale with the ` +
+    'role you classified during planning, not be the same for every idea. For a background, supporting, or ' +
+    `enabler role — the idea has only a loose or everyday connection to groceries — keep ${brand.name}'s presence ` +
+    'subtle: the required spoken mention above is enough, connected through the story\'s own food, people, ' +
+    'community, or access details; do not force the vehicle, the logo, or the app into the visuals just because ' +
+    `the brand is being credited in narration. For a subject or hero role — the idea is directly about ${brand.name}, ` +
+    'its mission, or its service — stronger, more direct branding is earned and appropriate: the vehicle can be a ' +
+    `real visual presence across multiple scenes, and narration can speak about ${brand.name} more directly, still as ` +
+    'part of a genuine story, never as a recited pitch. Every added character, object, location, action, or brand ' +
+    `element must have a narrative reason for being there, at any role level — never a random ${brand.name} truck, a ` +
+    'random food prop, a generic cinematic shot with nothing to do with the story, an unrelated character or ' +
+    'location, branding beyond what the role above earns, or a surreal element with no narrative justification. ' +
+    `The finished video should make it obvious both why it belongs on ${brand.name}'s own social media and why the ` +
+    'user\'s original creative idea is still fully recognizable in it — neither should come at the other\'s expense.'
+  )
+}
 
-const BRAND_ASSET_FIDELITY =
-  'When Fresh-CAN\'s vehicle, app, or other real assets appear in a scene, describe them only as already true ' +
-  'per the brand facts above — never invent a new logo, redesign the vehicle\'s shape or colors, invent a ' +
-  'product or service Fresh-CAN doesn\'t actually offer, or add an app feature that isn\'t real. Use an ' +
-  'existing asset because this specific scene\'s idea genuinely calls for it, never merely because it exists.'
+function brandAssetFidelity(brand: BrandProfile): string {
+  return (
+    `When ${brand.name}'s vehicle, app, or other real assets appear in a scene, describe them only as already true ` +
+    'per the brand facts above — never invent a new logo, redesign the vehicle\'s shape or colors, invent a ' +
+    `product or service ${brand.name} doesn't actually offer, or add an app feature that isn't real. Use an ` +
+    'existing asset because this specific scene\'s idea genuinely calls for it, never merely because it exists.'
+  )
+}
 
-const FINAL_SELF_CHECK_CLAUSE =
-  '\n\nBefore returning your answer, silently verify: is the original creative idea still recognizable in what ' +
-  'you wrote? Is there a clear, coherent story rather than a string of unrelated shots? Does every scene serve ' +
-  'a purpose? Is Fresh-CAN\'s presence natural for the role you classified, not forced? Did you avoid drawing ' +
-  'the logo or inventing brand assets? Is the story visually and physically logical? Does it land on a ' +
-  'memorable, satisfying ending? If not, revise your answer before returning it — only the final JSON is ' +
-  'returned, never this checklist.'
+function finalSelfCheckClause(brand: BrandProfile): string {
+  return (
+    '\n\nBefore returning your answer, silently verify: is the original creative idea still recognizable in what ' +
+    'you wrote? Is there a clear, coherent story rather than a string of unrelated shots? Does every scene serve ' +
+    `a purpose? Is ${brand.name}'s presence natural for the role you classified, not forced? Did you avoid drawing ` +
+    'the logo or inventing brand assets? Is the story visually and physically logical? Does it land on a ' +
+    'memorable, satisfying ending? If not, revise your answer before returning it — only the final JSON is ' +
+    'returned, never this checklist.'
+  )
+}
 
 export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoScriptSystemPromptOptions): string {
   const preamble = opts.sceneNotes
@@ -600,7 +616,7 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
       `vehicle, app, or other branding must look or sound IF the idea above genuinely calls for them, never a ` +
       `second angle, and never a reason to insert brand or mission messaging into a scene the idea doesn't ` +
       `call for.${opts.creativeBrief ? ` ${creativeBriefContext(opts.creativeBrief)}` : ''} ` +
-      `${STORY_PLANNING_CLAUSE} ${CAMPAIGN_FIT} ${FRESHCAN_ROLE_ADAPTIVITY} ${BRAND_ASSET_FIDELITY} ` +
+      `${storyPlanningClause(brand)} ${campaignFit(brand)} ${freshcanRoleAdaptivity(brand)} ${brandAssetFidelity(brand)} ` +
       `Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
     : brandContext(brand, opts.category) + statsLine(brand) + '\n\n'
 
@@ -651,8 +667,10 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '      "cast_present": string[] (the cast_bible ids of who appears in this scene, if any — [] or omit if ' +
     'the video has no cast_bible),\n' +
     '      "props_present": string[] (visually significant objects this scene establishes or carries forward),\n' +
-    '      "unit_presence": "none" | "background" | "featured" (is Fresh-CAN\'s physical unit the subject of ' +
-    'this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +
+    `      "unit_presence": "none" | "background" | "featured" (is ${brand.name}'s physical unit the ` +
+    'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +
+    '      "unit_presence_rationale": string (one sentence, honest and specific to this scene, never ' +
+    'boilerplate — why you chose that unit_presence value; omit only if unit_presence is "none"),\n' +
     '      "setting": "exterior" | "interior" | "unrelated" (unrelated for a setting that has nothing to do ' +
     'with the unit at all, e.g. a home kitchen),\n' +
     '      "contains_food": boolean (does this scene show food, produce, or packaged groceries),\n' +
@@ -703,7 +721,7 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
         'and never force the vehicle into a scene it does not genuinely fit. The vehicle appearing in one ' +
         'scene is never a reason to carry it into a later scene — only include it again if that later scene\'s ' +
         'own idea genuinely calls for it too.' +
-        FINAL_SELF_CHECK_CLAUSE
+        finalSelfCheckClause(brand)
       : '')
   )
 }
@@ -744,7 +762,7 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     'each scene, fitting comfortably within its target duration (roughly 2.5 words per second is a reasonable ' +
     'speaking pace) — a soft constraint, not an exact word count. Write it as natural spoken narration for a ' +
     'real story, never as scripted ad copy or a voiceover that sounds like a commercial. The one exception: if ' +
-    'a narration_intent explicitly calls for naming Fresh-CAN (or otherwise references the brand by name), the ' +
+    `a narration_intent explicitly calls for naming ${brand.name} (or otherwise references the brand by name), the ` +
     `localized ${opts.language} wording MUST include that name literally, spoken naturally — never paraphrase, ` +
     'translate, soften, or drop it for sounding too promotional; that specific mention is a deliberate, ' +
     'required part of the story, not the generic ad-copy pattern this rule exists to avoid elsewhere. Respond ' +

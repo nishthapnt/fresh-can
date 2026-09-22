@@ -81,6 +81,7 @@ export async function runGenerateAdCopy(
           scene: input.scene,
         }),
         userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}`,
+        stepName: 'generate_ad_copy',
       })
       await recordStepAttempt(client, {
         contentPipelineId: pipeline.id,

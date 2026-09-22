@@ -14,21 +14,22 @@ import { runGenerateOutline } from './generateOutline'
 import { runGenerateVisualImage } from './generateVisualImage'
 import { runGenerateCopy } from './generateCopy'
 import { runFinalizeDraft } from './finalizeDraft'
-import type { ScriptGenerator, ImageGenerator, ImagePollResult } from '../../adapters/types'
+import type { ScriptGenerator, ScriptGenerationInput, ImageGenerator, ImagePollResult } from '../../adapters/types'
 
 const hasCreds = !!process.env.SUPABASE_SERVICE_ROLE_KEY
 
 function makeMockScriptGenerator(opts: { failFirstNCalls?: number } = {}) {
   let calls = 0
   const failFirstNCalls = opts.failFirstNCalls ?? 0
-  const generate = vi.fn(async (input: { systemPrompt: string; userPrompt: string }) => {
+  const generate = vi.fn(async (input: ScriptGenerationInput) => {
     calls++
     if (calls <= failFirstNCalls) throw new Error('simulated transient OpenAI failure')
-    // Discriminate on a phrase unique to generateOutline.ts's system prompt —
-    // NOT on the word "outline" alone, since generateCopy.ts's own system
-    // prompt also mentions "from the given outline" and would false-match.
-    if (input.systemPrompt.includes('content strategist')) {
-      return { raw: '{}', parsed: { title: 'Outline', sections: ['A', 'B'] } }
+    // Dispatch by the caller's own step_name (PROMPT_REFACTOR_BRIEF.md §13)
+    // — every real .generate() call site now passes this. Replaces sniffing
+    // a phrase from the system prompt's wording, which broke silently every
+    // time a phase in the prompt refactor reworded a prompt.
+    if (input.stepName === 'generate_outline') {
+      return { raw: '{}', parsed: { title: 'Outline', sections: [{ heading: 'A', summary: 'a' }, { heading: 'B', summary: 'b' }] } }
     }
     return {
       raw: '{}',

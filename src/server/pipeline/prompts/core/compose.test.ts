@@ -23,6 +23,7 @@ const testBrand: BrandProfile = {
     identity: 'THE FIXED IDENTITY DESCRIPTION',
     full: 'THE FIXED CONTAINER DESCRIPTION',
     interior: 'THE FIXED INTERIOR DESCRIPTION',
+    wordmarkText: 'THE FIXED WORDMARK',
   },
   forbiddenOnUnit: [],
   forbiddenInScene: [],
@@ -838,9 +839,9 @@ describe('composeCharacterRefPrompt', () => {
     expect(refB.referenceImageUrl).toBe('https://example.com/back.jpg')
   })
 
-  it('states there must be exactly one wordmark, no second or duplicate decal', () => {
+  it('states there must be exactly one wordmark (the brand\'s own wordmarkText, never hardcoded), no second or duplicate decal', () => {
     const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-2' })
-    expect(ref.prompt).toContain('Exactly one "Fresh CAN" wordmark total')
+    expect(ref.prompt).toContain(`Exactly one "${testBrand.unit.wordmarkText}" wordmark total`)
     expect(ref.prompt).toContain('no second or duplicate wordmark, decal, or graphic')
   })
 
@@ -911,5 +912,103 @@ describe('Fresh-CAN brand unit descriptor', () => {
     const first = BRAND_PROFILE.referenceImages.exterior[0]
     expect(first.whatItShows).toContain('full profile view')
     expect(first.whatItShows).toContain('reproduce that exact wordmark faithfully, once')
+  })
+})
+
+// Phase 8 (PROMPT_REFACTOR_BRIEF.md §13/G4) — proves composer/step files are
+// brand-agnostic: swapping the brand profile changes the output with no
+// code edits, and — the actual regression this describe block exists to
+// catch — no Fresh-CAN-specific literal string survives the swap. This is
+// the test that would have caught composeCharacterRefPrompt's
+// ONE_WORDMARK_ONLY constant hardcoding "Fresh CAN" instead of reading
+// brand.unit.wordmarkText (found and fixed this same phase).
+describe('brand-agnosticism (G4 — swapping the brand profile changes the output with no code edits)', () => {
+  const acmeBrand: BrandProfile = {
+    name: 'Acme Fresh Mart',
+    missionStatement: 'ACME MISSION STATEMENT',
+    voiceGuidelines: 'ACME VOICE GUIDELINES',
+    bannedWords: [],
+    statistics: [],
+    journey: [],
+    positiveVisualTruths: [],
+    businessModelNegatives: [],
+    unit: {
+      identity: 'ACME IDENTITY DESCRIPTION',
+      full: 'ACME FULL STRUCTURAL DESCRIPTION',
+      interior: 'ACME INTERIOR DESCRIPTION',
+      wordmarkText: 'Acme Mart',
+    },
+    forbiddenOnUnit: [],
+    forbiddenInScene: [],
+    noTextInstruction: 'ACME NO TEXT INSTRUCTION',
+    noNewTextInstruction: 'ACME NO NEW TEXT INSTRUCTION',
+    ctaBarText: 'Visit acmefreshmart.example',
+    typographyDescriptor: 'ACME TYPOGRAPHY DESCRIPTOR',
+    ctaBarColorDescriptor: 'ACME CTA BAR COLOR DESCRIPTOR',
+    referenceImages: {
+      exterior: [{ url: 'https://example.com/acme-exterior.jpg', whatItShows: 'ACME FRAMING', disregard: [] }],
+      interior: [],
+    },
+  }
+
+  // Any of these appearing in Acme's output would mean a composer baked in
+  // a Fresh-CAN-specific literal instead of reading it from the brand
+  // profile — the actual class of bug this test suite exists to catch.
+  const FRESH_CAN_LEAKS = ['Fresh-CAN', 'Fresh CAN', 'Fresh [maple leaf icon]']
+
+  function assertNoFreshCanLeak(prompt: string) {
+    for (const leak of FRESH_CAN_LEAKS) {
+      expect(prompt).not.toContain(leak)
+    }
+  }
+
+  it('composeCharacterRefPrompt: no Fresh-CAN leak, and Acme\'s own wordmark/structure appear', () => {
+    const ref = composeCharacterRefPrompt(acmeBrand, { pipelineId: 'pipeline-acme-1' })
+    assertNoFreshCanLeak(ref.prompt)
+    expect(ref.prompt).toContain('Acme Mart')
+    expect(ref.prompt).toContain('ACME FULL STRUCTURAL DESCRIPTION')
+  })
+
+  it('composeHeroPrompt/composeInlinePrompt: no Fresh-CAN leak across every unitPresence tier', () => {
+    for (const unitPresence of ['none', 'background', 'featured'] as const) {
+      const job = { pipelineId: `pipeline-acme-blog-${unitPresence}`, topic: 'Weekly savings', category: 'Deals', unitPresence }
+      const hero = composeHeroPrompt(acmeBrand, job)
+      const inline = composeInlinePrompt(acmeBrand, job)
+      assertNoFreshCanLeak(hero.prompt)
+      assertNoFreshCanLeak(inline.prompt)
+    }
+  })
+
+  it('composePhotoPrompt: no Fresh-CAN leak, Acme\'s own structure appears when featured', () => {
+    const photo = composePhotoPrompt(acmeBrand, {
+      pipelineId: 'pipeline-acme-photo',
+      topic: 'Weekly savings',
+      category: 'Deals',
+      scene: 'Shoppers browsing the aisle',
+      unitPresence: 'featured',
+    })
+    assertNoFreshCanLeak(photo.prompt)
+    expect(photo.prompt).toContain('ACME FULL STRUCTURAL DESCRIPTION')
+  })
+
+  it('composeSceneImagePrompt: no Fresh-CAN leak across every unitPresence tier', () => {
+    for (const unitPresence of ['none', 'background', 'featured'] as const) {
+      const scene = composeSceneImagePrompt(acmeBrand, {
+        pipelineId: 'pipeline-acme-scene',
+        sceneNumber: 1,
+        visualDescription: 'A shopper picks up a basket.',
+        shotNotes: null,
+        characterRefUrl: 'https://example.com/acme-character-ref.jpg',
+        unitPresence,
+      })
+      assertNoFreshCanLeak(scene.prompt)
+    }
+  })
+
+  it('the SAME job composed against two different brands produces genuinely different prompts', () => {
+    const job = { pipelineId: 'pipeline-diff-brand', topic: 'Weekly savings', category: 'Deals', unitPresence: 'featured' as const }
+    const freshCan = composeHeroPrompt(testBrand, job)
+    const acme = composeHeroPrompt(acmeBrand, job)
+    expect(freshCan.prompt).not.toBe(acme.prompt)
   })
 })

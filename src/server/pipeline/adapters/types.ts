@@ -35,6 +35,15 @@ export interface ScriptGenerationInput {
   systemPrompt: string
   userPrompt: string
   model?: string
+  /** The calling step's own step_name (the same string it passes to
+   *  recordStepAttempt) — e.g. 'generate_outline', 'generate_script'.
+   *  OpenAIScriptGenerator (the real adapter) ignores this entirely; it
+   *  exists purely so tests can route a fake generator's response by real
+   *  step identity instead of sniffing the system prompt's wording, which
+   *  breaks silently every time a prompt gets reworded (PROMPT_REFACTOR_BRIEF.md
+   *  §13 — see the three *Pipeline.e2e.test.ts files). Optional so a caller
+   *  that omits it still works identically against the real adapter. */
+  stepName?: string
 }
 
 export interface ScriptGenerationResult {

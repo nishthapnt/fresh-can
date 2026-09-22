@@ -107,6 +107,7 @@ export async function runLocalizeScript(
           target_duration_seconds: Math.round(s.target_duration_ms / 1000),
         })),
       ),
+      stepName: 'localize_script',
     })
 
     if (!isValidLocalizeOutput(result.parsed, scenes.length)) {

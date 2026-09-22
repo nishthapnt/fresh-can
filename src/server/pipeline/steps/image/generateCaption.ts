@@ -129,6 +129,7 @@ export async function runGenerateCaption(
         imageCoreMessage: adCopy?.coreMessage,
       }),
       userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}`,
+      stepName: 'generate_caption',
     })
     await recordStepAttempt(client, {
       contentLanguageTrackId: track.id,

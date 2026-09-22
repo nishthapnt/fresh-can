@@ -130,6 +130,8 @@ export const BRAND_PROFILE: BrandProfile = {
       'containers (some individually labeled with a small "Fresh CAN" sticker). A stainless steel prep ' +
       'counter and sink — a fixed utility fitting, never a checkout or point-of-sale — near a plain white ' +
       'door at the far end of the aisle.',
+
+    wordmarkText: 'Fresh CAN',
   },
 
   forbiddenOnUnit: [
