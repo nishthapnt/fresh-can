@@ -8,12 +8,22 @@
 // of something every call site has to remember to wire up.
 import type { BrandProfile, BrandReferenceImage, ImageStyle, SceneVisualState } from '../types'
 import { pickDeterministic } from './rotation'
-import { isContainerRelevant, isVideoSceneAboutUnit } from './scene'
+import { SAFE_ZONE_RADIUS_FRACTION } from '../../lib/watermarkGeometry'
 
 export interface ImageComposition {
   prompt: string
   referenceImageUrl?: string
 }
+
+/** Layer 2's unit-presence rubric (PROMPT_REFACTOR_BRIEF.md §8), now the
+ *  real, LLM-authored replacement for the old isContainerRelevant/
+ *  isVideoSceneAboutUnit keyword-regex gates (prompts/core/scene.ts,
+ *  deleted — see docs/PROMPT_ARCHITECTURE.md's Phase 4 section for how
+ *  each content type resolves this: video from its per-scene plan field,
+ *  image_post from planImage.ts's ImagePostPlan, blog from the
+ *  CreativeBrief's brief-level unitRelevance, mapped by the caller since
+ *  blog has no real per-image plan yet). */
+export type UnitPresence = 'none' | 'background' | 'featured'
 
 interface StyleInputs {
   /** 'photo' (default): strictly no on-image text, same as this pipeline
@@ -39,6 +49,13 @@ interface BlogImageJob extends StyleInputs {
    *  present, it's the creative brief the scene is built around — see
    *  SCENE_IS_CREATIVE_BRIEF — not a light, non-binding influence. */
   sceneNotes?: string | null
+  /** Blog has no real per-image plan yet (that's Phase 6 — image briefs
+   *  derived from the finished copy). Until then, the caller maps the
+   *  CreativeBrief's brief-level unitRelevance ('central'/'incidental'/
+   *  'none') onto this field ('featured'/'background'/'none') — see
+   *  inngest/functions/blog.ts. Defaults to 'none' if omitted (a legacy
+   *  caller predating Phase 4 — never force the unit in without a signal). */
+  unitPresence?: UnitPresence
 }
 
 interface PhotoJob extends StyleInputs {
@@ -53,6 +70,23 @@ interface PhotoJob extends StyleInputs {
    *  of several interchangeable descriptors. */
   scene: string
   regenInstructions?: string | null
+  /** From planImage.ts's ImagePostPlan (PROMPT_REFACTOR_BRIEF.md §4.3).
+   *  Defaults to 'none' if omitted (a legacy caller predating Phase 4). */
+  unitPresence?: UnitPresence
+  /** ImagePostPlan.setting — 'interior' picks the interior reference pool/
+   *  descriptor instead of exterior when the unit is present. */
+  setting?: 'exterior' | 'interior' | 'unrelated'
+  /** ImagePostPlan.containsFood — when explicitly false, the food-quality
+   *  block is omitted (brief §4.4's own example). Defaults to including it
+   *  when omitted (no plan yet, or the plan didn't say) — the guard is
+   *  harmless when food isn't actually in frame, but omitting it when food
+   *  IS in frame is a real quality regression, so this defaults to the
+   *  safe/inclusive side. */
+  containsFood?: boolean
+  /** ImagePostPlan.castDescription — folded in as descriptive context when
+   *  present, the same "constraint/grounding, never the point" treatment
+   *  every other plan field gets. */
+  castDescription?: string
 }
 
 // A single neutral default — not a rotating list of canned moods. Until
@@ -150,40 +184,81 @@ function textLayerFor(
   return referenceImageUrl ? brand.noNewTextInstruction : noTextVariant
 }
 
-// Brand-agnostic fallback for a non-container blog scene — brief-mandated
-// deletion of the per-category creative-direction map (categoryVisualHints,
-// PROMPT_REFACTOR_BRIEF.md §6.2); every non-container scene now gets this
-// same neutral hint regardless of category, with only the identity tier of
-// the unit description (brief §4.1) pulled in for the optional background
-// mention.
-function nonContainerSceneHint(brand: BrandProfile): string {
+/**
+ * Consolidated unit-branding text for a given presence level — the single
+ * point every composer routes through, replacing the old
+ * BACKGROUND_TRUCK_CLAUSE/backgroundBrandingInstruction/ONE_WORDMARK_ONLY
+ * triplicate (PROMPT_REFACTOR_BRIEF.md §6.5). Presence is now an
+ * LLM-authored plan field for every content type (brief §8), not a
+ * keyword-regex guess — see UnitPresence's own header for where each
+ * content type's value comes from.
+ *
+ * - 'featured': the complete structural rule set (brand.unit.full) — no
+ *   compositional caveat, since being the subject is expected.
+ * - 'background': the minimal identity tier (brand.unit.identity) plus an
+ *   explicit "never the compositional focus" instruction — brief §8's own
+ *   wording for this tier.
+ * - 'none': an explicit no-unit instruction instead. Callers with 'none'
+ *   must also skip attaching any reference image (brief §8's hard rule) —
+ *   this function only produces the text half of that.
+ */
+function unitBrandingBlock(brand: BrandProfile, presence: UnitPresence): string {
+  if (presence === 'none') {
+    return (
+      `This scene does not involve the ${brand.name} unit — do not include it, its logo, or any ` +
+      `${brand.name} branding anywhere in this image.`
+    )
+  }
+  // Deliberately terse framing around the descriptor itself: this text is
+  // on composeSceneImagePrompt's FIXED (never-truncated) path, where the
+  // measured headroom under KIE's cap is single-digit characters for an
+  // ordinary scene (see SCENE_IMAGE_PROMPT_CHAR_LIMIT's own header). Every
+  // character of wrapper prose here is a character less available for real
+  // scene content, so the consolidation keeps the RULES and drops the
+  // connective framing.
+  const noOtherVehicle = `Never place the ${brand.name} wordmark or logo on any other vehicle or object.`
+  if (presence === 'featured') {
+    return `${brand.unit.full} ${noOtherVehicle}`
+  }
   return (
-    'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
-    `— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting. If the ` +
-    `${brand.name} vehicle plausibly fits the scene, it must be built to its real, correct structure — ` +
-    `${brand.unit.identity} — never any other vehicle shape, color, or logo, never forced in, and never the ` +
-    `main subject. Every other vehicle in the scene must stay completely unbranded — never place the ` +
-    `${brand.name} wordmark or logo on it.`
+    `The ${brand.name} unit may appear here, but never as the compositional focus and never forced in. ` +
+    `If it appears: ${brand.unit.identity} ${noOtherVehicle}`
   )
 }
 
-// The trailing text-instruction used by composeBlogImage's non-container
-// branch instead of the blanket brand.noTextInstruction. That blanket
-// instruction ("no logos, no watermarks... anywhere") directly contradicts
-// nonContainerSceneHint, which explicitly permits the brand's real vehicle
-// to appear in the background — sending both in one prompt is exactly the
-// kind of contradiction that leaves the model free to invent an off-model
-// result. This keeps the same "don't invent text" framing but carves out
-// one exact exception, built from unit.identity so it can't drift into a
-// shorthand, and restates the no-other-vehicle rule as the very last thing
-// the model reads.
-function backgroundBrandingInstruction(brand: BrandProfile): string {
+// The trailing text-instruction used whenever presence !== 'none' but no
+// real reference photo ended up attached (e.g. an empty reference-image
+// pool) — the blanket brand.noTextInstruction ("no logos, no watermarks...
+// anywhere") would directly contradict unitBrandingBlock's own "it must be
+// built to this structure" text for a featured/background scene. Carves out
+// one exact exception rather than leaving both instructions to compete.
+function noTextExceptUnitBranding(): string {
   return (
-    'Photorealistic, natural lighting, documentary style. Absolutely no invented text, words, letters, ' +
-    'captions, titles, or typography anywhere in the image. The only exception is branding: if the ' +
-    `${brand.name} vehicle naturally fits the scene, it must be built to this exact structure — ` +
-    `${brand.unit.identity} — showing only its own real wordmark exactly as just described. Every ` +
-    'other vehicle in the image must stay completely unbranded — never place this wordmark or logo on it.'
+    'No invented text, words, letters, captions, titles, or typography anywhere in the image. The only ' +
+    "exception is the unit's own real wordmark, exactly as described above — nothing else."
+  )
+}
+
+/** presence === 'none' can reuse the blanket brand.noTextInstruction as-is
+ *  (it never contradicts unitBrandingBlock('none'), which also forbids the
+ *  unit/branding entirely); featured/background need the carve-out above
+ *  whenever no real reference photo backs the structural claim. */
+function noTextVariantFor(brand: BrandProfile, presence: UnitPresence): string {
+  return presence === 'none' ? brand.noTextInstruction : noTextExceptUnitBranding()
+}
+
+/** Reserves the top-right corner for the logo watermark composited on after
+ *  generation (lib/watermark.ts) — PROMPT_REFACTOR_BRIEF.md §10. Geometry
+ *  shared with the real compositing math via watermarkGeometry.ts so this
+ *  description can never drift from where the logo actually lands. Video
+ *  has no watermark step — this block is image-only. */
+function watermarkSafeZoneBlock(): string {
+  const cornerPercent = Math.round(SAFE_ZONE_RADIUS_FRACTION * 100)
+  return (
+    `Keep the top-right corner of the frame clean and low-detail — roughly the top-right ${cornerPercent}% ` +
+    "of the image's width and height — no text, no headline, no face, and no high-contrast or high-detail " +
+    'clutter there. A logo is composited into that corner after generation; leave it visually simple so the ' +
+    'logo stays legible.'
   )
 }
 
@@ -306,6 +381,15 @@ const FOOD_MUST_LOOK_CLEAN =
   'bruising, wilting, mold, spills, or clutter. Never render food looking dirty, rotten, messy, or ' +
   'unappetizing, regardless of the scene.'
 
+// The positive framing a blog scene with unitPresence: 'none' still needs —
+// distinct from unitBrandingBlock('none'), which only covers the negative
+// "don't include the unit" instruction. Brand-agnostic, no per-category
+// direction (categoryVisualHints was deleted — PROMPT_REFACTOR_BRIEF.md
+// §6.2), since every non-unit scene now gets the same generic hint.
+const GENERIC_DOCUMENTARY_HINT =
+  'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
+  '— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting.'
+
 // Added 2026-09-19 after a real video generation depicted people gathered
 // and eating dinner in the middle of a road — composeVideoScriptSystemPrompt
 // now carries the primary fix (a plausibility constraint at scene-planning
@@ -396,17 +480,6 @@ const REALISTIC_PEOPLE =
   'look real, not synthetic. Only depict entities the scene establishes or clearly implies — never a ' +
   'duplicate of an established person or a floating, unexplained object.'
 
-// Added 2026-09-19 as the OTHER half of composeSceneImagePrompt's new
-// per-scene relevance gate (see showSubject there) — the explicit
-// instruction a non-relevant scene gets INSTEAD of containerDescriptor/the
-// character-ref photo. Fixes a real generation where the truck (and its
-// branding) was hallucinated inside a family's kitchen and dining room —
-// scenes composeSceneImagePrompt used to treat exactly like the ones that
-// actually are about the truck.
-const NO_SUBJECT_IN_SCENE =
-  'This scene does not involve the Fresh-CAN truck or mobile unit — do not include it, its logo, or any ' +
-  'Fresh-CAN branding anywhere in this image.'
-
 // Added 2026-09-19 after a real character-ref generation (the ONE shared
 // reference every scene in a pipeline then edits from) showed a duplicate,
 // garbled second wordmark-like decal over an unexplained red blob graphic.
@@ -471,14 +544,12 @@ function composeBlogImage(
   // Reversed 2026-09-11: blog hero/inline used to ALWAYS show the Fresh-CAN
   // unit regardless of topic — every image ended up looking like "the truck
   // from one of 5 fixed angles," since edit-mode anchors composition to
-  // whichever real photo was picked. Gated the same way composePhotoPrompt
-  // already was (isContainerRelevant, but defaultRelevant: false here —
-  // blog is general content marketing, not inherently a grocery-access
-  // post the way image_post's photo is), so the unit now only appears when
-  // the topic is genuinely about visiting/using it — everything else gets
-  // a real, topic-grounded scene instead (food/people/community — see
-  // nonContainerSceneHint), with no reference photo to vary freely.
-  const showSubject = isContainerRelevant(`${job.topic} ${job.category}`, false)
+  // whichever real photo was picked. Blog has no real per-image plan yet
+  // (Phase 6), so job.unitPresence is the caller's mapping of the
+  // CreativeBrief's brief-level unitRelevance onto this scale — see
+  // BlogImageJob's own header and inngest/functions/blog.ts.
+  const presence = job.unitPresence ?? 'none'
+  const showSubject = presence !== 'none'
 
   const parts = [topicLine, moodClause(), FOOD_MUST_LOOK_CLEAN]
   // The dashboard's "Your Scene Idea" field — the creative brief this scene
@@ -494,10 +565,12 @@ function composeBlogImage(
   let referenceImageUrl: string | undefined
 
   if (showSubject) {
-    const sceneType = pickSceneType(brand, `${job.pipelineId}:${kind}:scene`)
-    const descriptor = sceneType === 'interior' ? brand.unit.interior : brand.unit.full
+    // Interior framing only makes sense when the unit is the actual
+    // subject ('featured') — a background/incidental appearance is
+    // necessarily an exterior view (e.g. parked on a street).
+    const sceneType = presence === 'featured' ? pickSceneType(brand, `${job.pipelineId}:${kind}:scene`) : 'exterior'
     const pool = sceneType === 'interior' ? brand.referenceImages.interior : brand.referenceImages.exterior
-    parts.push(descriptor)
+    parts.push(sceneType === 'interior' ? brand.unit.interior : unitBrandingBlock(brand, presence))
     parts.push(containerSceneContext(job))
     const reference = pickReferenceFrom(pool, `${job.pipelineId}:${kind}`)
     if (reference) {
@@ -505,11 +578,12 @@ function composeBlogImage(
       referenceImageUrl = reference.url
     }
   } else {
-    parts.push(nonContainerSceneHint(brand))
+    parts.push(GENERIC_DOCUMENTARY_HINT)
+    parts.push(unitBrandingBlock(brand, 'none'))
   }
 
-  const noTextVariant = showSubject ? undefined : backgroundBrandingInstruction(brand)
-  parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariant))
+  parts.push(watermarkSafeZoneBlock())
+  parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariantFor(brand, presence)))
 
   return { prompt: parts.join(' '), referenceImageUrl }
 }
@@ -545,9 +619,12 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   // for every scene" describes downstream process, not visual content, so
   // Flux Kontext never needed it) — part of the same length-reduction as
   // containerDescriptor's own tightening, see that constant's comment.
+  // Always 'featured' — this is the project-level reference asset every
+  // scene edits from, never a background/incidental appearance by
+  // definition.
   const parts = [
     `A clean, well-lit reference photo of the ${brand.name} branded vehicle.`,
-    brand.unit.full,
+    unitBrandingBlock(brand, 'featured'),
     ONE_WORDMARK_ONLY,
   ]
 
@@ -599,6 +676,18 @@ interface SceneImageJob {
    *  prompts/types.ts) — undefined for scene 1, or if that scene had none.
    *  See continuityClauseFrom below for how this is used. */
   previousVisualState?: SceneVisualState | null
+  /** THIS scene's own Layer 2 plan fields (PROMPT_REFACTOR_BRIEF.md §4.3),
+   *  read back from the stored script/scene plan — see generateScript.ts's
+   *  extractSceneLayer2Fields. unitPresence undefined defaults to 'none'
+   *  (never force the unit in without a real signal — replaces the old
+   *  isVideoSceneAboutUnit keyword-regex gate, deleted). containsFood
+   *  undefined defaults to true (unknown — stay safe, keep the food-quality
+   *  guard) — the two default in opposite directions because the risk
+   *  profile differs: forcing the unit in without evidence risks a
+   *  hallucinated/wrong element, while keeping a harmless quality guard
+   *  when food isn't actually present costs nothing but a few characters. */
+  unitPresence?: UnitPresence
+  containsFood?: boolean
 }
 
 /**
@@ -665,41 +754,35 @@ function truncateToFit(text: string, maxChars: number): string {
 }
 
 export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob): ImageComposition {
-  // Added 2026-09-19: this composer used to ALWAYS attach the character-ref
-  // truck photo and containerDescriptor, for every scene, regardless of
-  // whether that scene had anything to do with the truck at all — a real
-  // generation showed the truck (and its branding) hallucinated inside a
-  // family's own kitchen and dining room. Gated on isVideoSceneAboutUnit,
-  // NOT isContainerRelevant/blog-photo's heuristic — a video scene's
-  // visual_description is free-form narrative prose built around whatever
-  // creative idea the job asked for (a mother and son walking down a road,
-  // for instance), so a generic-verb heuristic tuned for blog/photo's
-  // short topic strings would false-positive on ordinary sentences and
-  // force the truck into scenes that have nothing to do with it — see
-  // isVideoSceneAboutUnit's own comment in scene.ts for why it only fires
-  // on an explicit, unambiguous mention of the unit itself, and for the
-  // 2026-09-21 note on why a same-day attempt to replace this with an
-  // explicit LLM-authored field was reverted (needed a schema migration
-  // the user didn't want) — the real "videos feel disconnected from the
-  // brand" fix lives in composeVideoScriptSystemPrompt instead, not here.
-  const sceneText = `${job.visualDescription} ${job.shotNotes ?? ''}`
-  const showSubject = isVideoSceneAboutUnit(sceneText)
+  // Real, LLM-authored plan data now (PROMPT_REFACTOR_BRIEF.md §4.3/§8),
+  // read back from the stored scene plan by the caller (generateSceneVisual.ts
+  // via generateScript.ts's extractSceneLayer2Fields) — replaces the old
+  // isVideoSceneAboutUnit keyword-regex gate (prompts/core/scene.ts,
+  // deleted). See SceneImageJob's own header for the undefined-field default
+  // policy.
+  const unitPresence = job.unitPresence ?? 'none'
+  const showSubject = unitPresence !== 'none'
+  const containsFood = job.containsFood ?? true
 
   // Everything below is a fixed brand/safety constraint sent in full,
   // always — see SCENE_IMAGE_PROMPT_CHAR_LIMIT's header for why these can
   // never be the thing that gets cut when a prompt runs long. REALISTIC_PEOPLE
   // is deliberately NOT in this list — see the cascade below for why.
+  // FOOD_MUST_LOOK_CLEAN is now genuinely conditional (brief §4.4's own
+  // example) rather than always-on — containsFood defaults to true when
+  // unknown, so this only ever omits the guard when the plan positively
+  // says there's no food in frame.
   const fixedParts = [
     moodClause(),
-    FOOD_MUST_LOOK_CLEAN,
+    containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     PHYSICALLY_PLAUSIBLE_SCENE,
     CINEMATIC_QUALITY,
     NO_UNSCRIPTED_PEOPLE,
     NO_UNEXPLAINED_PROPS,
     SCENE_IS_CREATIVE_BRIEF,
-    showSubject ? brand.unit.full : NO_SUBJECT_IN_SCENE,
+    unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
-    showSubject ? brand.noNewTextInstruction : brand.noTextInstruction,
+    showSubject ? brand.noNewTextInstruction : noTextVariantFor(brand, unitPresence),
   ].filter(Boolean)
   const fixedLen = fixedParts.join(' ').length
 
@@ -772,7 +855,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // moodDetailFor directly) since job.visualDescription/shotNotes may
     // already specify their own lighting — see moodClause's own comment.
     moodClause(),
-    FOOD_MUST_LOOK_CLEAN,
+    containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     PHYSICALLY_PLAUSIBLE_SCENE,
     CINEMATIC_QUALITY,
     NO_UNSCRIPTED_PEOPLE,
@@ -787,18 +870,14 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     SCENE_IS_CREATIVE_BRIEF,
   ]
 
+  // unitBrandingBlock covers all three presence levels (featured/
+  // background/none) in one call — see that function's own header. A
+  // video scene's characterRefUrl is always provided when showSubject is
+  // true (never an empty-pool edge case the way blog/photo can have), so
+  // noNewTextInstruction is always the right no-text variant here.
   let referenceImageUrl: string | undefined
+  parts.push(unitBrandingBlock(brand, unitPresence))
   if (showSubject) {
-    // Every OTHER composer that can show the vehicle
-    // (composeCharacterRefPrompt, and composeBlogImage/composePhotoPrompt
-    // when showSubject is true) splices in the brand's full
-    // containerDescriptor — the fixed structural rule set (shape, color,
-    // wordmark placement, and critically "NEVER a door/hatch/window/vent on
-    // either side, the rear double door is the ONLY opening"), sourced from
-    // the same single constant (fresh-can.ts's CONTAINER_DESCRIPTOR) so it
-    // can never drift into a narrower paraphrase the way
-    // BACKGROUND_TRUCK_CLAUSE's own history warns against.
-    parts.push(brand.unit.full)
     // REFERENCE_IS_GUIDE_NOT_COPY explicitly tells the model to build a
     // genuinely new scene around the vehicle rather than copy the
     // character-ref photo — without it, a relevant scene risks coming out
@@ -812,7 +891,6 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // text-to-image generation, so edit-mode's own bias toward
     // incorporating its input (the truck photo) can never pull the truck
     // into a scene that was never about it in the first place.
-    parts.push(NO_SUBJECT_IN_SCENE)
     parts.push(brand.noTextInstruction)
   }
   if (regenInstructions) parts.push(`${regenInstructions}.`)
@@ -932,21 +1010,28 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
 }
 
 export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageComposition {
-  const sceneText = `${job.scene} ${job.regenInstructions ?? ''}`
-  // image_post's photo is inherently a "grocery access" post, so default to
-  // showing the subject unless the scene is clearly produce/recipe-only.
-  const showSubject = isContainerRelevant(sceneText, true)
+  // From planImage.ts's ImagePostPlan (PROMPT_REFACTOR_BRIEF.md §4.3) —
+  // replaces the old isContainerRelevant keyword-regex gate (deleted). See
+  // PhotoJob's own header for the undefined-field default policy.
+  const presence = job.unitPresence ?? 'none'
+  const showSubject = presence !== 'none'
+  const containsFood = job.containsFood ?? true
   const guidance = job.regenInstructions ? ` ${job.regenInstructions}.` : ''
 
   const parts = [
     `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
     moodClause(),
     SCENE_IS_CREATIVE_BRIEF,
-    FOOD_MUST_LOOK_CLEAN,
+    containsFood ? FOOD_MUST_LOOK_CLEAN : '',
+    job.castDescription ? `The people in this scene: ${job.castDescription}.` : '',
   ]
   let referenceImageUrl: string | undefined
   if (showSubject) {
-    parts.push(brand.unit.full)
+    // Interior framing only when the plan says so and the unit is the
+    // actual subject — same reasoning as composeBlogImage's sceneType gate.
+    const useInterior = job.setting === 'interior' && presence === 'featured'
+    const pool = useInterior ? brand.referenceImages.interior : brand.referenceImages.exterior
+    parts.push(useInterior ? brand.unit.interior : unitBrandingBlock(brand, presence))
     // job.scene is usually real, specific content from the dashboard's
     // clarifying-question answers, but image.ts's photoScene() falls back
     // to a bare "topic, in the context of category" when the
@@ -968,13 +1053,16 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
       `Build the scene around the vehicle as described above, never a plain reproduction of the reference ` +
         `photo's own background. ${REFERENCE_IS_GUIDE_NOT_COPY}`,
     )
-    const reference = pickReferenceFrom(brand.referenceImages.exterior, `${job.pipelineId}:photo`)
+    const reference = pickReferenceFrom(pool, `${job.pipelineId}:photo`)
     if (reference) {
       parts.push(describeReferencePhoto(reference))
       referenceImageUrl = reference.url
     }
+  } else {
+    parts.push(unitBrandingBlock(brand, 'none'))
   }
-  parts.push(textLayerFor(brand, job, referenceImageUrl))
+  parts.push(watermarkSafeZoneBlock())
+  parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariantFor(brand, presence)))
 
-  return { prompt: parts.join(' '), referenceImageUrl }
+  return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl }
 }

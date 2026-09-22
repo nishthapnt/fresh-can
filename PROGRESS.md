@@ -1429,3 +1429,45 @@
 **⭐ Pick Up Next Session**
 - Phase 4 (Layer 3 — render prompt composition, `PROMPT_REFACTOR_BRIEF.md` §4.4): the `PromptBlock` conditional-inclusion rewrite of `compose.ts`/`composeText.ts`'s image/video builders — this is where Phase 3's plan output (`unit_presence`, `setting`, `contains_food`, `cast_bible`, `look`, `ImagePostPlan`) actually starts changing rendered prompts, and where `isContainerRelevant`/`isVideoSceneAboutUnit` finally get retired.
 - Still open: owner review of §16.3/§16.6/§16.7, the `category`/`content_angle` dropdowns' fate, and per-endpoint character-limit verification (needed before Phase 5, good to start now).
+
+---
+
+### Session 15 — 2026-09-22 — Prompt architecture refactor, Phase 4: render prompt composition (Layer 3)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §4.4/§5.3–§5.7/§6.4/§6.5/§8/§10 — make Phase 3's plan data actually drive rendered prompts, and retire the keyword-regex unit gates. The largest phase; implemented incrementally (infra → video → image → blog) with a typecheck/test pass between each.*
+
+- **`prompts/core/scene.ts` deleted** — `isContainerRelevant`/`isVideoSceneAboutUnit` are gone. Unit presence is now the LLM-authored `UnitPresence` scale (`'none'|'background'|'featured'`) for all three content types: video reads its per-scene `unit_presence` back via a new `extractSceneLayer2Fields` (`generateScript.ts`); image_post reads `planImage.ts`'s `ImagePostPlan.unitPresence`; blog maps the `CreativeBrief`'s brief-level `unitRelevance` (`central→featured`/`incidental→background`/`none→none`) — a stopgap until Phase 6 gives blog a real per-image plan, but still strictly better than the regex it replaces (same granularity, LLM-judged).
+- **`unitBrandingBlock` — the §6.5 consolidation** — `BACKGROUND_TRUCK_CLAUSE`/`backgroundBrandingInstruction`/`nonContainerSceneHint`'s branding tail/`NO_SUBJECT_IN_SCENE` collapse into one presence-driven emitter (`featured`→`unit.full`, `background`→`unit.identity` + "never the compositional focus", `none`→explicit no-unit text). The `noTextExceptUnitBranding` carve-out now covers `featured` too, closing the same brief §12 contradiction class for both tiers instead of just one.
+- **Watermark safe zone (§10)** — new `lib/watermarkGeometry.ts` is the single source of truth imported by both `lib/watermark.ts`'s real `sharp` compositing and `compose.ts`'s new `watermarkSafeZoneBlock()`, so the prompt's description of the reserved corner can't drift from where the logo lands. Describes the vignette radius (42% of width), not the narrower logo box. Image composers only — video has no watermark step.
+- **Conditional inclusion** — `FOOD_MUST_LOOK_CLEAN` is now genuinely conditional on the plan's `containsFood` (brief §4.4's own example) in both the scene-image and photo paths; `castDescription` folds into the photo prompt when the plan supplies it; interior descriptor/reference pool is gated on `featured` (a background appearance is necessarily exterior).
+- **Undefined-field defaults deliberately differ**: `unitPresence` → `'none'` (never force the unit in without a signal), `containsFood` → `true` (unknown → keep the harmless guard). Documented on both job interfaces.
+
+**⚠️ Two deliberate deviations from the phase plan (both flagged, not silent)**
+- **No typed `PromptBlock` system shipped.** Built it, then found every composer still worked cleanly on plain arrays and that threading it through `composeSceneImagePrompt` meant touching the hand-tuned truncation cascade that belongs to Phase 5. Removed it rather than ship unused scaffolding — it lands in Phase 5 where the guard layer is its real consumer.
+- **Budget cascade untouched.** `SCENE_IMAGE_PROMPT_CHAR_LIMIT`'s drop order/arithmetic is byte-for-byte as before; only the inputs to its conditionals changed. Phase 4 decides WHAT goes in, Phase 5 decides HOW MUCH fits.
+
+**🧪 Testing**
+- `tsc --noEmit` clean. `eslint`: 0 errors, same 2 pre-existing `_`-prefixed warnings.
+- `compose.test.ts` substantially rewritten (75 tests): every unit-presence test now sets the plan field explicitly instead of relying on topic/scene keyword matching; new coverage for the three-way presence branching, background-vs-featured distinction, `containsFood` omission, `castDescription`, watermark safe zone, interior gating, and the contradiction-safe no-text carve-out.
+- Full non-e2e suite: 363/363 passing.
+- **Measured budget impact**: the consolidated branding block costs ~85 chars more than the bare descriptor on the featured scene-image path (the "never on any other vehicle" rule ships there now too), leaving ~150 chars of scene content before the realism guardrail drops. Conditional inclusion buys ~900 chars back on `none` scenes — the §4.4 payoff — but the featured path is tighter than after Phase 1. Left for Phase 5's real per-endpoint limits rather than papered over; a test now asserts the `none`-vs-`featured` saving explicitly.
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/core/scene.ts` — **deleted**
+- `src/server/pipeline/lib/watermarkGeometry.ts` — new; `lib/watermark.ts` now imports from it
+- `src/server/pipeline/prompts/core/compose.ts` — `UnitPresence`, `unitBrandingBlock`, `noTextExceptUnitBranding`/`noTextVariantFor`, `watermarkSafeZoneBlock`, `GENERIC_DOCUMENTARY_HINT`; all six composers rewired to plan flags
+- `src/server/pipeline/prompts/index.ts` — export `UnitPresence`
+- `src/server/pipeline/steps/video/generateScript.ts` — `extractSceneLayer2Fields` read-back helper
+- `src/server/pipeline/steps/video/generateSceneVisual.ts` — passes real `unitPresence`/`containsFood` per scene
+- `src/inngest/functions/image.ts` — reads the plan back and threads `unitPresence`/`setting`/`containsFood`/`castDescription` into `composePhotoPrompt`
+- `src/inngest/functions/blog.ts` — `mapUnitRelevanceToPresence`, re-derives the brief idempotently in the visuals block
+- `src/server/pipeline/prompts/core/compose.test.ts` — rewritten
+
+**⭐ Pick Up Next Session**
+- Phase 5 (Layer 4 — Guard, §4.5/§7/§12): single `PROMPT_LIMITS` config, the typed `PromptBlock` system deferred from Phase 4, priority-based dropping, and the contradiction validator. **Blocked on** verifying real per-endpoint character limits (§16.1) — the owner's stated 3,500 conflicts with the ~3000 KIE cap this code has hit live, and the Market/jobs endpoint fails far lower.
+- Still open: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.

@@ -22,6 +22,7 @@ export {
   composeSceneImagePrompt,
   composeSceneVideoPrompt,
   type ImageComposition,
+  type UnitPresence,
 } from './core/compose'
 export {
   composeIntentSystemPrompt,

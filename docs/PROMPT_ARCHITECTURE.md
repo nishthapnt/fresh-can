@@ -252,15 +252,91 @@ copy" genuinely needs the ordering change already scoped as Phase 6; wiring
 a "reference copy" pass in here would have been the kind of piecemeal,
 partly-thrown-away work this refactor has been avoiding since Phase 1.
 
+## Phase 4 — Render prompt composition (Layer 3)
+
+The phase where Phase 3's plan data finally changes what gets rendered, and
+where the keyword-regex unit gates are retired for good. `prompts/core/
+scene.ts` (`isContainerRelevant`, `isVideoSceneAboutUnit`) is **deleted**.
+
+### Unit presence is now LLM-authored everywhere
+
+`UnitPresence` (`'none' | 'background' | 'featured'`, `compose.ts`) is the
+single scale every composer branches on. Where each content type's value
+comes from:
+
+| Content type | Source |
+|---|---|
+| Video scene image | the scene's own `unit_presence` plan field, read back via `generateScript.ts`'s `extractSceneLayer2Fields` |
+| Image post | `planImage.ts`'s `ImagePostPlan.unitPresence` |
+| Blog hero/inline | the `CreativeBrief`'s brief-level `unitRelevance`, mapped `central→featured` / `incidental→background` / `none→none` by `blog.ts` |
+
+Blog's mapping is a deliberate stopgap: it has no real per-image plan until
+Phase 6 (image briefs from finished copy). It's still a strict improvement
+over the deleted regex — that heuristic was *also* topic+category-level
+rather than per-image, so this is like-for-like in granularity and
+LLM-judged instead of keyword-matched.
+
+**Undefined-field defaults differ on purpose.** `unitPresence` defaults to
+`'none'` (never force the unit in without a positive signal — a wrong unit
+is a hallucinated element), while `containsFood` defaults to `true`
+(unknown → keep the harmless quality guard; omitting it when food *is* in
+frame is a real regression). Both are documented on the job interfaces.
+
+### `unitBrandingBlock` — the §6.5 consolidation
+
+`BACKGROUND_TRUCK_CLAUSE`, `backgroundBrandingInstruction`,
+`nonContainerSceneHint`'s branding tail and `NO_SUBJECT_IN_SCENE` collapse
+into one presence-driven emitter: `featured` → `brand.unit.full`,
+`background` → `brand.unit.identity` plus an explicit "never the
+compositional focus", `none` → an explicit no-unit instruction. The
+`noTextExceptUnitBranding` carve-out now applies to `featured` too (not
+just `background`), since a blanket "no logos anywhere" contradicts
+`unit.full`'s own structural claims exactly the same way — brief §12's
+contradiction class, closed for both tiers instead of one.
+
+**Interior framing is gated on `featured`.** A background/incidental
+appearance is necessarily an exterior view (a unit parked on a street), so
+`background` never selects the interior descriptor or reference pool.
+
+### Watermark safe zone (§10)
+
+`watermarkGeometry.ts` is the new single source of truth for the logo's
+placement, imported by both `lib/watermark.ts` (the real `sharp`
+compositing math) and `compose.ts`'s `watermarkSafeZoneBlock()`, so the
+prompt's description of the reserved corner can't drift from where the logo
+actually lands. The block describes the *vignette* radius
+(`SAFE_ZONE_RADIUS_FRACTION`, 42% of width), not the narrower logo box,
+since the vignette is what actually darkens/obscures content. Image
+composers only — video has no watermark step.
+
+### Two deliberate deviations from the phase plan
+
+1. **No typed `PromptBlock` system.** The brief (§4.4) asks composers to
+   return a block list alongside the string. I built it, found every
+   composer still worked cleanly on plain arrays, and that threading it
+   through `composeSceneImagePrompt` meant touching the hand-tuned
+   truncation cascade that belongs to Phase 5 — so I removed it rather than
+   ship unused scaffolding. It lands in Phase 5, where the guard layer
+   (priority-based dropping, contradiction validation) is the real consumer.
+2. **The budget cascade is untouched.** `SCENE_IMAGE_PROMPT_CHAR_LIMIT`'s
+   drop order and arithmetic are exactly as before; only the *inputs* to its
+   conditionals changed. Phase 4 decides WHAT goes in the prompt, Phase 5
+   decides HOW MUCH fits.
+
+**Known cost:** the consolidated branding block adds ~85 characters to the
+featured scene-image path versus the bare descriptor the old code pushed
+(the "never on any other vehicle" rule now ships there too). Measured
+headroom for the realism guardrail on that path is ~150 characters of scene
+content. Conditional inclusion buys far more back on `none` scenes (~900
+characters saved), which is the payoff §4.4 predicted — but the featured
+path is tighter than after Phase 1, and Phase 5's real per-endpoint limits
+are what should resolve it properly.
+
 ## Not yet done (later phases)
 
-- `isContainerRelevant`/`isVideoSceneAboutUnit` keyword-regex unit gating
-  (`prompts/core/scene.ts`) — still in use; replaced by the LLM-authored
-  `unitPresence` fields Phase 3 now produces (video per-scene, image plan),
-  once Phase 4 actually wires them into the composers.
-- None of Phase 3's plan output (`story`/`look`/`cast_bible`/`locations`,
-  per-scene `unit_presence`/`setting`/`contains_food`, `ImagePostPlan`) is
-  read by any composer yet — Phase 4.
 - Blog's image-brief-from-finished-copy ordering change — Phase 6.
-- The full `PromptBlock` conditional-inclusion composer rewrite (Phase 4).
-- Per-endpoint budget config and contradiction validation (Phase 5).
+- The typed `PromptBlock` system + per-endpoint budget config +
+  contradiction validation — Phase 5 (see the deviation note above).
+- `cast_bible` verbatim injection into per-scene image prompts (brief §9.2)
+  — the plan data exists (Phase 3) but nothing reads it yet; deferred as
+  its own piece of work rather than squeezed into Phase 4.

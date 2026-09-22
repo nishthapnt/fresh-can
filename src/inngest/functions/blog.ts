@@ -29,11 +29,29 @@ import { OpenAIScriptGenerator } from '../../server/pipeline/adapters/openai'
 import { NanoBananaImageGenerator } from '../../server/pipeline/adapters/nanoBanana'
 import { FakeKieImageGenerator } from '../../server/pipeline/adapters/kieFake'
 import type { ImageGenerator } from '../../server/pipeline/adapters/types'
-import { BRAND_PROFILE, composeHeroPrompt, composeInlinePrompt, type ImageStyle } from '../../server/pipeline/prompts/index'
+import {
+  BRAND_PROFILE,
+  composeHeroPrompt,
+  composeInlinePrompt,
+  type ImageStyle,
+  type UnitPresence,
+} from '../../server/pipeline/prompts/index'
 import { parseAdCopy, deriveHeadline } from '../../server/pipeline/lib/adCopy'
 import { env } from '../../server/pipeline/env'
 
 type Step = GetStepTools<typeof inngest>
+
+// Blog has no real per-image plan yet (Phase 6 — image briefs derived from
+// the finished copy). Until then, the CreativeBrief's brief-level
+// unitRelevance (PROMPT_REFACTOR_BRIEF.md §4.2) is mapped onto hero/inline's
+// per-image UnitPresence scale (§8) — a fair like-for-like replacement for
+// the old isContainerRelevant keyword-regex gate (deleted), since that
+// heuristic was also topic+category-level, not per-image.
+function mapUnitRelevanceToPresence(value: 'central' | 'incidental' | 'none'): UnitPresence {
+  if (value === 'central') return 'featured'
+  if (value === 'incidental') return 'background'
+  return 'none'
+}
 
 // Matches worker/src/index.ts's own WORKER_POLL_INTERVAL_MS default — the
 // step functions below gate their own real work on isReadyToRetry
@@ -216,6 +234,27 @@ export const blogGenerate = inngest.createFunction(
         getLastSucceededStepOutputAnyGeneration(client, { contentPipelineId: pipelineId }, 'generate_outline'),
       )
       const { headline, subtitle } = parseAdCopy(outlineOutput, deriveHeadline(job.topic), job.category)
+      // Re-derives (idempotently — interpret-intent already ran in the
+      // outline block above) rather than threading a variable across the
+      // two status-gated blocks. Blog has no real per-image plan yet
+      // (Phase 6), so the brief's brief-level unitRelevance is mapped onto
+      // hero/inline's unitPresence — see BlogImageJob's own header.
+      const creativeBrief = await step.run('interpret-intent-for-visuals', () =>
+        interpretIntent(
+          client,
+          { contentPipelineId: pipelineId },
+          pipeline.current_generation,
+          scriptGenerator,
+          BRAND_PROFILE,
+          {
+            contentType: 'blog',
+            topic: job.topic,
+            category: job.category,
+            targetAudience: job.target_audience,
+            sceneNotes: job.scene_notes,
+          },
+        ),
+      )
       const blogImageJob = {
         pipelineId,
         topic: job.topic,
@@ -224,6 +263,7 @@ export const blogGenerate = inngest.createFunction(
         headline,
         subtitle,
         sceneNotes: job.scene_notes,
+        unitPresence: mapUnitRelevanceToPresence(creativeBrief.unitRelevance.value),
       }
       const hero = composeHeroPrompt(BRAND_PROFILE, blogImageJob)
       const inline = composeInlinePrompt(BRAND_PROFILE, blogImageJob)

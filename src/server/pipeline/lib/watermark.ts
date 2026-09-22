@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs'
 import path from 'path'
 import sharp from 'sharp'
+import { LOGO_WIDTH_FRACTION, MARGIN_FRACTION, SAFE_ZONE_RADIUS_FRACTION } from './watermarkGeometry'
 
 // Bundled with the deployed function via next.config.ts's
 // outputFileTracingIncludes for the /api/inngest route — without that entry
@@ -15,15 +16,12 @@ function loadLogo(): Buffer {
   return cachedLogo
 }
 
-// Percentages of the BASE image's own width, not fixed pixels — KIE's
-// output resolution isn't guaranteed constant, and a fixed pixel size would
-// look tiny on a large render or oversized on a small one.
-const LOGO_WIDTH_FRACTION = 0.16
-const MARGIN_FRACTION = 0.035
-// The corner vignette's radius and peak darkness — see the function's own
-// comment for why this replaced both earlier attempts (plain composite,
-// then a flat chip).
-const GRADIENT_RADIUS_FRACTION = 0.42
+// LOGO_WIDTH_FRACTION/MARGIN_FRACTION/SAFE_ZONE_RADIUS_FRACTION (percentages
+// of the BASE image's own width, not fixed pixels — KIE's output resolution
+// isn't guaranteed constant) now live in watermarkGeometry.ts, shared with
+// the prompt-side safe-zone description (PROMPT_REFACTOR_BRIEF.md §10).
+// The corner vignette's peak darkness — see the function's own comment for
+// why this replaced both earlier attempts (plain composite, then a flat chip).
 const GRADIENT_PEAK_OPACITY = 0.55
 
 /**
@@ -66,7 +64,7 @@ export async function compositeLogoWatermark(imageBuffer: Buffer): Promise<Buffe
   const margin = Math.round(width * MARGIN_FRACTION)
   const resizedLogo = await sharp(loadLogo()).resize({ width: logoWidth }).toBuffer()
 
-  const radius = Math.round(width * GRADIENT_RADIUS_FRACTION)
+  const radius = Math.round(width * SAFE_ZONE_RADIUS_FRACTION)
   // Two stops before the fade-out (rather than one linear ramp) so the
   // darkness stays close to peak through the whole area the logo actually
   // sits in, and only tapers away beyond that — a pure linear ramp from the

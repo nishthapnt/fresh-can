@@ -283,6 +283,35 @@ export function extractVisualState(narrationIntent: unknown): SceneVisualState |
   return visualState && typeof visualState === 'object' ? (visualState as SceneVisualState) : null
 }
 
+/** The current scene's Layer 2 fields (PROMPT_REFACTOR_BRIEF.md §4.3),
+ *  written by upsertVideoScenes alongside visual_state — see that call in
+ *  runGenerateScript below. Each field is undefined both for a genuinely
+ *  pre-Phase-3 scene (created before this refactor shipped) and for a scene
+ *  the model simply didn't populate a given field for; composeSceneImagePrompt
+ *  (Phase 4) treats an undefined unit_presence as 'none' (never force the
+ *  unit in without a real signal) and an undefined contains_food/
+ *  cast_present as "unknown — stay safe, include the guard" — see that
+ *  function's own header for why those two default in opposite directions. */
+export interface SceneLayer2Fields {
+  unit_presence?: 'none' | 'background' | 'featured'
+  setting?: 'exterior' | 'interior' | 'unrelated'
+  contains_food?: boolean
+  cast_present?: string[]
+  beat?: string
+}
+
+export function extractSceneLayer2Fields(narrationIntent: unknown): SceneLayer2Fields {
+  if (!narrationIntent || typeof narrationIntent !== 'object') return {}
+  const v = narrationIntent as Record<string, unknown>
+  return {
+    unit_presence: normalizeEnum(v.unit_presence, UNIT_PRESENCE_VALUES),
+    setting: normalizeEnum(v.setting, SETTING_VALUES),
+    contains_food: coerceBoolean(v.contains_food),
+    cast_present: toStringArray(v.cast_present),
+    beat: typeof v.beat === 'string' ? v.beat : undefined,
+  }
+}
+
 /**
  * Shared, pipeline-scoped step — the ONLY generation step that runs before
  * user approval (ARCHITECTURE.MD §6.4: video gates expensive spend behind

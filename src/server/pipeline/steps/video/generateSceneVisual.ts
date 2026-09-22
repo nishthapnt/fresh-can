@@ -20,7 +20,7 @@ import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/
 import { ASPECT_RATIO_RESOLUTIONS } from '../../lib/videoResolution'
 import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
 import { BRAND_PROFILE, composeSceneImagePrompt, composeSceneVideoPrompt } from '../../prompts/index'
-import { extractVisualState } from './generateScript'
+import { extractVisualState, extractSceneLayer2Fields } from './generateScript'
 
 const IMAGE_POLL_INTERVAL_MS = 2000
 const IMAGE_POLL_TIMEOUT_MS = 60_000
@@ -297,12 +297,13 @@ async function runSceneImageStep(
       }
 
       // referenceImageUrl comes from the composition itself, not
-      // characterRefUrl directly — composeSceneImagePrompt (2026-09-19) now
-      // gates whether the truck's reference photo is used at all on
-      // whether this scene is actually about the truck, so a non-relevant
-      // scene returns undefined here and gets a pure text-to-image
-      // generation instead of forcing the truck in as a Flux Kontext edit
-      // source.
+      // characterRefUrl directly — composeSceneImagePrompt gates whether
+      // the unit's reference photo is used at all on this scene's own
+      // unit_presence (Layer 2 plan field, PROMPT_REFACTOR_BRIEF.md §4.3/
+      // §8 — replaces the old isVideoSceneAboutUnit keyword-regex gate), so
+      // a 'none' scene returns undefined here and gets a pure text-to-image
+      // generation instead of forcing the unit in as an edit source.
+      const layer2 = extractSceneLayer2Fields(scene.narration_intent)
       const { prompt, referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
         pipelineId: pipeline.id,
         sceneNumber: scene.scene_number,
@@ -311,6 +312,8 @@ async function runSceneImageStep(
         characterRefUrl,
         regenInstructions,
         previousVisualState: previousScene ? extractVisualState(previousScene.narration_intent) : undefined,
+        unitPresence: layer2.unit_presence,
+        containsFood: layer2.contains_food,
       })
 
       console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)

@@ -88,10 +88,6 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   })
 
   it('treats the scene idea as the creative brief the image is built around, not light inspiration', () => {
-    // Regression test: scene_notes flipped from "For light inspiration
-    // only... without contradicting or replacing" to being the thing the
-    // scene is built around, with brand details reframed as constraints on
-    // what must look correct if they appear.
     const job = {
       pipelineId: 'pipeline-scene-brief',
       topic: 'Community garden fundraiser',
@@ -115,143 +111,234 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   it('omits the headline clause entirely when none is given (backward compatible)', () => {
     const job = { pipelineId: 'pipeline-no-headline', topic: 'Community garden', category: 'Community Impact' }
     const hero = composeHeroPrompt(testBrand, job)
-    // composeBlogImage quotes the headline as `about "${headline}"` when
-    // present (see the sibling test above) — assert that specific clause is
-    // absent, rather than banning quote characters entirely, since other
-    // brand text (e.g. a quoted wordmark) legitimately contains quotes.
     expect(hero.prompt).not.toContain('about "')
   })
 
-  it('omits the forced reference image for a topic unrelated to visiting the unit, using a non-container scene instead', () => {
-    // Reversed 2026-09-11 — blog hero/inline used to ALWAYS show the truck
-    // regardless of topic, which made every image look like "the truck from
-    // one of a handful of fixed angles." Now gated the same way
-    // composePhotoPrompt already was (isContainerRelevant), so a topic with
-    // no visit/facility signal gets a real, non-branded, topic-grounded
-    // scene with no reference photo instead. The container descriptor may
-    // still appear in text (see the "permits the truck/wordmark as an
-    // incidental background element" test below) — that's the conditional
-    // exception, not a forced reference-photo edit.
-    const job = { pipelineId: 'pipeline-3', topic: 'Community garden fundraiser', category: 'Community Impact' }
+  it('reserves the top-right watermark safe zone (PROMPT_REFACTOR_BRIEF.md §10)', () => {
+    const job = { pipelineId: 'pipeline-safe-zone', topic: 'Community garden', category: 'Community Impact' }
     const hero = composeHeroPrompt(testBrand, job)
-    expect(hero.referenceImageUrl).toBeUndefined()
+    expect(hero.prompt).toContain('top-right corner')
+    expect(hero.prompt).toContain('logo is composited into that corner')
   })
 
-  it('includes the container descriptor and reference image when the topic is about visiting the unit too', () => {
-    const job = { pipelineId: 'pipeline-4', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
-    const hero = composeHeroPrompt(testBrand, job)
-    expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
-    expect(hero.referenceImageUrl).toBe('https://example.com/exterior.jpg')
+  describe('unitPresence: none (default when omitted)', () => {
+    it('omits the reference image and uses the generic non-unit hint', () => {
+      const job = { pipelineId: 'pipeline-3', topic: 'Community garden fundraiser', category: 'Community Impact' }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.referenceImageUrl).toBeUndefined()
+      expect(hero.prompt).toContain('does not involve the Test Brand unit')
+    })
+
+    it('uses the strict no-text instruction (no unit branding text to reconcile with)', () => {
+      const job = { pipelineId: 'pipeline-none-text', topic: 'Community garden', category: 'Community Impact' }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain('NO TEXT INSTRUCTION')
+      expect(hero.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
+    })
   })
 
-  it('uses the strict no-text instruction when no reference photos are configured at all', () => {
-    // Container-relevant topic (showSubject: true) with an empty photo pool
-    // — the one case that still falls through to the blanket
-    // noTextInstruction, since there's no background-truck exception to
-    // reconcile it with (see the non-container describe block below for
-    // that case instead).
-    const brandWithNoPhotos: BrandProfile = { ...testBrand, referenceImages: { exterior: [], interior: [] } }
-    const job = { pipelineId: 'pipeline-5', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
-    expect(composeHeroPrompt(brandWithNoPhotos, job).prompt).toContain('NO TEXT INSTRUCTION')
-    expect(composeInlinePrompt(brandWithNoPhotos, job).prompt).toContain('NO TEXT INSTRUCTION')
-    expect(composeHeroPrompt(brandWithNoPhotos, job).prompt).not.toContain('NO NEW TEXT INSTRUCTION')
-    expect(composeHeroPrompt(brandWithNoPhotos, job).referenceImageUrl).toBeUndefined()
-  })
-
-  it('uses the preserve-real-signage instruction instead, once a reference image is attached', () => {
-    const job = { pipelineId: 'pipeline-6', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
-    const hero = composeHeroPrompt(testBrand, job)
-    expect(hero.referenceImageUrl).toBeDefined()
-    expect(hero.prompt).toContain('NO NEW TEXT INSTRUCTION')
-    expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION ')
-  })
-
-  it('never mismatches a framing description with a different photo\'s URL', () => {
-    // Regardless of which of the 3 real angles gets picked for hero vs.
-    // inline, the framing text in the prompt must always correspond to the
-    // SAME entry as referenceImageUrl — this is the exact bug class Flux
-    // Kontext confusion would come from (text describing one shot, photo
-    // attached being a different one).
-    const byUrl = new Map(multiAngleBrand.referenceImages.exterior.map((r) => [r.url, r.whatItShows]))
-    for (let i = 0; i < 20; i++) {
-      const job = { pipelineId: `pipeline-multi-${i}`, topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
-      const hero = composeHeroPrompt(multiAngleBrand, job)
-      expect(hero.referenceImageUrl).toBeDefined()
-      const expectedFraming = byUrl.get(hero.referenceImageUrl!)
-      expect(hero.prompt).toContain(expectedFraming)
-    }
-  })
-
-  it('lets hero and inline land on different camera angles for the same pipeline', () => {
-    // Not guaranteed for every single pipelineId (hash collisions happen),
-    // but across enough distinct ids at least one should differ, proving
-    // hero/inline are picked independently rather than always matching.
-    let sawDifference = false
-    for (let i = 0; i < 20; i++) {
-      const job = { pipelineId: `pipeline-diff-${i}`, topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
-      const hero = composeHeroPrompt(multiAngleBrand, job)
-      const inline = composeInlinePrompt(multiAngleBrand, job)
-      if (hero.referenceImageUrl !== inline.referenceImageUrl) sawDifference = true
-    }
-    expect(sawDifference).toBe(true)
-  })
-
-  it('never pairs the interior descriptor/photo with the exterior descriptor/photo, or vice versa', () => {
-    for (let i = 0; i < 20; i++) {
-      const job = { pipelineId: `pipeline-scene-${i}`, topic: 'Touring the Fresh-CAN truck', category: 'Community Impact' }
-      const hero = composeHeroPrompt(bothScenesBrand, job)
-      const isInterior = hero.referenceImageUrl === 'https://example.com/int.jpg'
-      const isExterior = hero.referenceImageUrl === 'https://example.com/ext.jpg'
-      expect(isInterior || isExterior).toBe(true)
-      if (isInterior) {
-        expect(hero.prompt).toContain('THE FIXED INTERIOR DESCRIPTION')
-        expect(hero.prompt).toContain('FRAMING INT')
-        expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
-        expect(hero.prompt).not.toContain('FRAMING EXT')
-      } else {
-        expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
-        expect(hero.prompt).toContain('FRAMING EXT')
-        expect(hero.prompt).not.toContain('THE FIXED INTERIOR DESCRIPTION')
-        expect(hero.prompt).not.toContain('FRAMING INT')
+  describe('unitPresence: background', () => {
+    it('permits the brand vehicle as an incidental background element, but never as the compositional focus, using the identity tier and no reference photo pool switch to interior', () => {
+      const job = {
+        pipelineId: 'pipeline-hint-brand',
+        topic: 'Community garden fundraiser',
+        category: 'Community Impact',
+        unitPresence: 'background' as const,
       }
-    }
-  })
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain('THE FIXED IDENTITY DESCRIPTION')
+      expect(hero.prompt).toContain('never as the compositional focus')
+      expect(hero.prompt).not.toContain('THE FIXED INTERIOR DESCRIPTION')
+    })
 
-  it('picks both exterior and interior scenes across enough pipelines (not stuck on one)', () => {
-    const sceneTypesSeen = new Set<string>()
-    for (let i = 0; i < 30; i++) {
-      const job = { pipelineId: `pipeline-scene-variety-${i}`, topic: 'Touring the Fresh-CAN truck', category: 'Community Impact' }
+    it('never sends the blanket no-text instruction alongside text that permits the vehicle in the background — no contradiction (brief §12)', () => {
+      const job = {
+        pipelineId: 'pipeline-no-contradiction',
+        topic: 'Community garden fundraiser',
+        category: 'Community Impact',
+        unitPresence: 'background' as const,
+      }
+      const brandNoPhotos: BrandProfile = { ...testBrand, referenceImages: { exterior: [], interior: [] } }
+      const hero = composeHeroPrompt(brandNoPhotos, job)
+      expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION')
+      expect(hero.prompt).toMatch(/never place the .* wordmark or logo on any other vehicle or object/i)
+      expect(hero.referenceImageUrl).toBeUndefined()
+    })
+
+    it('still includes the default mood clause and the job-specific topic line', () => {
+      const job = {
+        pipelineId: 'pipeline-hint-3',
+        topic: 'Community garden fundraiser',
+        category: 'Community Impact',
+        unitPresence: 'background' as const,
+      }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain('Community garden fundraiser')
+      expect(hero.prompt).toContain('If unspecified, default mood:')
+    })
+
+    it('attaches an exterior reference photo (background never picks interior)', () => {
+      const job = {
+        pipelineId: 'pipeline-bg-exterior',
+        topic: 'Community garden fundraiser',
+        category: 'Community Impact',
+        unitPresence: 'background' as const,
+      }
       const hero = composeHeroPrompt(bothScenesBrand, job)
-      sceneTypesSeen.add(hero.referenceImageUrl === 'https://example.com/int.jpg' ? 'interior' : 'exterior')
-    }
-    expect(sceneTypesSeen.size).toBe(2)
+      expect(hero.referenceImageUrl).toBe('https://example.com/ext.jpg')
+    })
   })
 
-  it('falls back to exterior-only when no interior photos are configured (existing brands keep working)', () => {
-    const job = { pipelineId: 'pipeline-fallback-1', topic: 'Touring the Fresh-CAN truck', category: 'Community Impact' }
-    const hero = composeHeroPrompt(testBrand, job)
-    expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
-    expect(hero.referenceImageUrl).toBe('https://example.com/exterior.jpg')
-  })
+  describe('unitPresence: featured', () => {
+    it('includes the full container descriptor and attaches a reference image', () => {
+      const job = {
+        pipelineId: 'pipeline-4',
+        topic: 'Scanning in at the unit',
+        category: 'How FreshCAN Works',
+        unitPresence: 'featured' as const,
+      }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(hero.referenceImageUrl).toBe('https://example.com/exterior.jpg')
+    })
 
-  it('falls back to interior-only when no exterior photos are configured', () => {
-    const interiorOnlyBrand: BrandProfile = {
-      ...testBrand,
-      referenceImages: {
-        exterior: [],
-        interior: [{ url: 'https://example.com/int-only.jpg', whatItShows: 'FRAMING INT ONLY', disregard: [] }],
-      },
-    }
-    const job = { pipelineId: 'pipeline-fallback-2', topic: 'Touring the Fresh-CAN truck', category: 'Community Impact' }
-    const hero = composeHeroPrompt(interiorOnlyBrand, job)
-    expect(hero.prompt).toContain('THE FIXED INTERIOR DESCRIPTION')
-    expect(hero.referenceImageUrl).toBe('https://example.com/int-only.jpg')
+    it('uses the unit-branding-exception no-text instruction when no reference photos are configured at all — avoids contradicting its own "must be built to this structure" text (brief §12)', () => {
+      const brandWithNoPhotos: BrandProfile = { ...testBrand, referenceImages: { exterior: [], interior: [] } }
+      const job = {
+        pipelineId: 'pipeline-5',
+        topic: 'Scanning in at the unit',
+        category: 'How FreshCAN Works',
+        unitPresence: 'featured' as const,
+      }
+      const hero = composeHeroPrompt(brandWithNoPhotos, job)
+      expect(hero.prompt).toContain("the unit's own real wordmark, exactly as described above")
+      expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION')
+      expect(hero.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
+      expect(hero.referenceImageUrl).toBeUndefined()
+    })
+
+    it('uses the preserve-real-signage instruction instead, once a reference image is attached', () => {
+      const job = {
+        pipelineId: 'pipeline-6',
+        topic: 'Scanning in at the unit',
+        category: 'How FreshCAN Works',
+        unitPresence: 'featured' as const,
+      }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.referenceImageUrl).toBeDefined()
+      expect(hero.prompt).toContain('NO NEW TEXT INSTRUCTION')
+      expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION ')
+    })
+
+    it('never mismatches a framing description with a different photo\'s URL', () => {
+      const byUrl = new Map(multiAngleBrand.referenceImages.exterior.map((r) => [r.url, r.whatItShows]))
+      for (let i = 0; i < 20; i++) {
+        const job = {
+          pipelineId: `pipeline-multi-${i}`,
+          topic: 'Scanning in at the unit',
+          category: 'How FreshCAN Works',
+          unitPresence: 'featured' as const,
+        }
+        const hero = composeHeroPrompt(multiAngleBrand, job)
+        expect(hero.referenceImageUrl).toBeDefined()
+        const expectedFraming = byUrl.get(hero.referenceImageUrl!)
+        expect(hero.prompt).toContain(expectedFraming)
+      }
+    })
+
+    it('lets hero and inline land on different camera angles for the same pipeline', () => {
+      let sawDifference = false
+      for (let i = 0; i < 20; i++) {
+        const job = {
+          pipelineId: `pipeline-diff-${i}`,
+          topic: 'Scanning in at the unit',
+          category: 'How FreshCAN Works',
+          unitPresence: 'featured' as const,
+        }
+        const hero = composeHeroPrompt(multiAngleBrand, job)
+        const inline = composeInlinePrompt(multiAngleBrand, job)
+        if (hero.referenceImageUrl !== inline.referenceImageUrl) sawDifference = true
+      }
+      expect(sawDifference).toBe(true)
+    })
+
+    it('never pairs the interior descriptor/photo with the exterior descriptor/photo, or vice versa', () => {
+      for (let i = 0; i < 20; i++) {
+        const job = {
+          pipelineId: `pipeline-scene-${i}`,
+          topic: 'Touring the unit',
+          category: 'Community Impact',
+          unitPresence: 'featured' as const,
+        }
+        const hero = composeHeroPrompt(bothScenesBrand, job)
+        const isInterior = hero.referenceImageUrl === 'https://example.com/int.jpg'
+        const isExterior = hero.referenceImageUrl === 'https://example.com/ext.jpg'
+        expect(isInterior || isExterior).toBe(true)
+        if (isInterior) {
+          expect(hero.prompt).toContain('THE FIXED INTERIOR DESCRIPTION')
+          expect(hero.prompt).toContain('FRAMING INT')
+          expect(hero.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+          expect(hero.prompt).not.toContain('FRAMING EXT')
+        } else {
+          expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+          expect(hero.prompt).toContain('FRAMING EXT')
+          expect(hero.prompt).not.toContain('THE FIXED INTERIOR DESCRIPTION')
+          expect(hero.prompt).not.toContain('FRAMING INT')
+        }
+      }
+    })
+
+    it('picks both exterior and interior scenes across enough pipelines (not stuck on one)', () => {
+      const sceneTypesSeen = new Set<string>()
+      for (let i = 0; i < 30; i++) {
+        const job = {
+          pipelineId: `pipeline-scene-variety-${i}`,
+          topic: 'Touring the unit',
+          category: 'Community Impact',
+          unitPresence: 'featured' as const,
+        }
+        const hero = composeHeroPrompt(bothScenesBrand, job)
+        sceneTypesSeen.add(hero.referenceImageUrl === 'https://example.com/int.jpg' ? 'interior' : 'exterior')
+      }
+      expect(sceneTypesSeen.size).toBe(2)
+    })
+
+    it('falls back to exterior-only when no interior photos are configured (existing brands keep working)', () => {
+      const job = {
+        pipelineId: 'pipeline-fallback-1',
+        topic: 'Touring the unit',
+        category: 'Community Impact',
+        unitPresence: 'featured' as const,
+      }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+      expect(hero.referenceImageUrl).toBe('https://example.com/exterior.jpg')
+    })
+
+    it('falls back to interior-only when no exterior photos are configured', () => {
+      const interiorOnlyBrand: BrandProfile = {
+        ...testBrand,
+        referenceImages: {
+          exterior: [],
+          interior: [{ url: 'https://example.com/int-only.jpg', whatItShows: 'FRAMING INT ONLY', disregard: [] }],
+        },
+      }
+      const job = {
+        pipelineId: 'pipeline-fallback-2',
+        topic: 'Touring the unit',
+        category: 'Community Impact',
+        unitPresence: 'featured' as const,
+      }
+      const hero = composeHeroPrompt(interiorOnlyBrand, job)
+      expect(hero.prompt).toContain('THE FIXED INTERIOR DESCRIPTION')
+      expect(hero.referenceImageUrl).toBe('https://example.com/int-only.jpg')
+    })
   })
 
   it('image_style "infographic" renders headline/subtitle/CTA instead of the no-text instructions', () => {
     const job = {
       pipelineId: 'pipeline-info-1',
-      topic: 'How to shop at Fresh-CAN',
+      topic: 'How to shop at the unit',
       category: 'Community Impact',
       imageStyle: 'infographic' as const,
       headline: 'Fresh Food, Closer To Home',
@@ -270,7 +357,7 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   it('throws if image_style "infographic" is used without both headline and subtitle', () => {
     const job = {
       pipelineId: 'pipeline-info-2',
-      topic: 'How to shop at Fresh-CAN',
+      topic: 'How to shop at the unit',
       category: 'Community Impact',
       imageStyle: 'infographic' as const,
       headline: 'Fresh Food, Closer To Home',
@@ -280,54 +367,25 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
   })
 
   it('defaults to "photo" style (no text) when imageStyle is omitted', () => {
-    const job = { pipelineId: 'pipeline-info-3', topic: 'Scanning in at the Fresh-CAN truck', category: 'How FreshCAN Works' }
+    const job = {
+      pipelineId: 'pipeline-info-3',
+      topic: 'Scanning in at the unit',
+      category: 'How FreshCAN Works',
+      unitPresence: 'featured' as const,
+    }
     const hero = composeHeroPrompt(testBrand, job)
     expect(hero.prompt).toMatch(/NO( NEW)? TEXT INSTRUCTION/)
   })
 
-  describe('non-container scenes (topic not about visiting the unit)', () => {
+  describe('non-container scenes (no per-category canned direction)', () => {
     // categoryVisualHints (per-category canned creative direction) was
     // removed (PROMPT_REFACTOR_BRIEF.md §6.2) — every non-container scene
     // now gets the same brand-agnostic hint regardless of category.
-
-    it('gives every category the same generic documentary-photo hint (no per-category canned direction)', () => {
+    it('gives every category the same generic documentary-photo hint', () => {
       const job = { pipelineId: 'pipeline-hint-2', topic: 'Community garden fundraiser', category: 'Community Impact' }
       const hero = composeHeroPrompt(testBrand, job)
       expect(hero.prompt).toContain('Photorealistic documentary-style photo')
       expect(hero.referenceImageUrl).toBeUndefined()
-    })
-
-    it('permits the brand vehicle as an incidental background element, but never as the forced main subject', () => {
-      const job = { pipelineId: 'pipeline-hint-brand', topic: 'Community garden fundraiser', category: 'Community Impact' }
-      const hero = composeHeroPrompt(testBrand, job)
-      expect(hero.prompt).toContain(`${testBrand.name} vehicle`)
-      expect(hero.prompt).toContain('never the main subject')
-      expect(hero.referenceImageUrl).toBeUndefined()
-    })
-
-    it('never sends the blanket "no logos anywhere" instruction alongside a hint that permits the vehicle in the background', () => {
-      // Regression test for the actual bug: nonContainerSceneHint tells the
-      // model the vehicle's wordmark may appear, while the OLD trailing
-      // instruction (brand.noTextInstruction) unconditionally said "no
-      // logos, no watermarks... anywhere" — a direct contradiction in the
-      // same prompt that left the model free to invent an off-model result,
-      // e.g. putting the wordmark on the wrong vehicle. The fixed prompt
-      // must never contain that blanket phrase in a non-container scene,
-      // and must instead spell out the vehicle's correct identity-tier
-      // structure plus an explicit "every other vehicle stays unbranded" rule.
-      const job = { pipelineId: 'pipeline-no-contradiction', topic: 'Community garden fundraiser', category: 'Community Impact' }
-      const hero = composeHeroPrompt(testBrand, job)
-      expect(hero.prompt).not.toContain('NO TEXT INSTRUCTION')
-      expect(hero.prompt).toContain('THE FIXED IDENTITY DESCRIPTION')
-      expect(hero.prompt).toMatch(/other vehicle.*unbranded/i)
-      expect(hero.referenceImageUrl).toBeUndefined()
-    })
-
-    it('still includes the default mood clause and the job-specific topic line in a non-container scene', () => {
-      const job = { pipelineId: 'pipeline-hint-3', topic: 'Community garden fundraiser', category: 'Community Impact' }
-      const hero = composeHeroPrompt(testBrand, job)
-      expect(hero.prompt).toContain('Community garden fundraiser')
-      expect(hero.prompt).toContain('If unspecified, default mood:')
     })
   })
 })
@@ -339,19 +397,20 @@ describe('composePhotoPrompt', () => {
     category: 'Community Impact',
   }
 
-  it('defaults to showing the container for a generic grocery-access topic', () => {
-    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+  it('shows the container when the plan says unitPresence: featured', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic, unitPresence: 'featured' })
     expect(photo.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
     expect(photo.referenceImageUrl).toBe('https://example.com/exterior.jpg')
   })
 
-  it('omits the container for a scene that is purely about produce', () => {
+  it('omits the container when the plan says unitPresence: none (default when omitted)', () => {
     const photo = composePhotoPrompt(testBrand, {
       ...baseJob,
       topic: 'Sweet PEI summer strawberries and corn',
       scene: 'fresh strawberries and corn from local farms',
     })
     expect(photo.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+    expect(photo.prompt).toContain('does not involve the Test Brand unit')
     expect(photo.referenceImageUrl).toBeUndefined()
   })
 
@@ -380,10 +439,7 @@ describe('composePhotoPrompt', () => {
   })
 
   it('tells the model the reference photo is a shape/color guide, never a literal copy', () => {
-    // Regression test: composePhotoPrompt's showSubject branch always
-    // attaches a real reference photo as a Flux Kontext edit source, which
-    // defaults toward reproducing its input verbatim unless told otherwise.
-    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic, unitPresence: 'featured' })
     expect(photo.prompt).toContain('only as a guide')
     expect(photo.prompt).toContain('never as a literal photo to copy')
   })
@@ -394,12 +450,50 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('never as a directive about the overall photographic style, mood, or composition')
   })
 
-  it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
+  it('requires any food/produce/groceries shown to look clean and fresh, never dirty (containsFood defaults to true when the plan is absent/unsure)', () => {
     const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
     expect(photo.prompt).toContain('clean, fresh, tidy, and appetizing')
     expect(photo.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
   })
 
+  it('omits the food-quality block when the plan says containsFood: false', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic, containsFood: false })
+    expect(photo.prompt).not.toContain('clean, fresh, tidy, and appetizing')
+  })
+
+  it('folds in the plan\'s castDescription when given', () => {
+    const photo = composePhotoPrompt(testBrand, {
+      ...baseJob,
+      scene: baseJob.topic,
+      castDescription: 'a mother and her young daughter',
+    })
+    expect(photo.prompt).toContain('The people in this scene: a mother and her young daughter.')
+  })
+
+  it('reserves the top-right watermark safe zone', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic })
+    expect(photo.prompt).toContain('top-right corner')
+  })
+
+  it('picks the interior pool only when setting is interior AND presence is featured', () => {
+    const interior = composePhotoPrompt(bothScenesBrand, {
+      ...baseJob,
+      scene: baseJob.topic,
+      unitPresence: 'featured',
+      setting: 'interior',
+    })
+    expect(interior.referenceImageUrl).toBe('https://example.com/int.jpg')
+    expect(interior.prompt).toContain('THE FIXED INTERIOR DESCRIPTION')
+
+    // background + interior is not a real combination (brief §8) — stays exterior.
+    const background = composePhotoPrompt(bothScenesBrand, {
+      ...baseJob,
+      scene: baseJob.topic,
+      unitPresence: 'background',
+      setting: 'interior',
+    })
+    expect(background.referenceImageUrl).toBe('https://example.com/ext.jpg')
+  })
 })
 
 describe('composeSceneImagePrompt', () => {
@@ -411,18 +505,20 @@ describe('composeSceneImagePrompt', () => {
     characterRefUrl: 'https://example.com/character-ref.jpg',
   }
 
-  it('attaches the character-ref photo as the edit source when the scene is actually about the truck', () => {
-    const scene = composeSceneImagePrompt(testBrand, baseJob)
+  it('attaches the character-ref photo as the edit source when the plan says unitPresence: featured', () => {
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
     expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
+    expect(scene.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
   })
 
-  it('does NOT attach the character-ref photo, containerDescriptor, or the wordmark instruction for a scene that has nothing to do with the truck', () => {
-    // Regression test: this composer used to ALWAYS attach the truck photo
-    // as the Flux Kontext edit source and ALWAYS inject containerDescriptor,
-    // for every scene — a real generation showed the truck hallucinated
-    // inside a family's own kitchen because of this. isContainerRelevant
-    // (defaultRelevant: false) now gates both on whether the scene's own
-    // text actually indicates the truck/unit is involved.
+  it('attaches the character-ref photo for unitPresence: background too, but with the never-the-focus caveat', () => {
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'background' })
+    expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
+    expect(scene.prompt).toContain('THE FIXED IDENTITY DESCRIPTION')
+    expect(scene.prompt).toContain('never as the compositional focus')
+  })
+
+  it('does NOT attach the character-ref photo for unitPresence: none (default when omitted) — replaces the old isVideoSceneAboutUnit keyword-regex gate', () => {
     const scene = composeSceneImagePrompt(testBrand, {
       ...baseJob,
       visualDescription: 'A family is at home in their kitchen, finding the cupboards empty.',
@@ -431,81 +527,31 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.referenceImageUrl).toBeUndefined()
     expect(scene.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
     expect(scene.prompt).not.toContain('NO NEW TEXT INSTRUCTION')
-    expect(scene.prompt).toContain('does not involve the Fresh-CAN truck or mobile unit')
+    expect(scene.prompt).toContain('does not involve the Test Brand unit')
     expect(scene.prompt).toContain('NO TEXT INSTRUCTION')
   })
 
-  it('does NOT show the truck for an unrelated creative scene that happens to use generic words like "arrive"/"enter"/"door"/"visit"/"pick up"/"shop" — regression for false-positiving on ordinary narrative prose', () => {
-    // Video scenes are free-form narrative built around whatever creative
-    // idea the job asked for (e.g. "a mother and son walking down the
-    // road"), not blog/photo's short topic+category strings — reusing
-    // blog/photo's isContainerRelevant (tuned for generic action verbs
-    // implying a visit) against sentences like these would wrongly force
-    // the truck in. isVideoSceneAboutUnit only fires on an explicit,
-    // unambiguous mention of the unit itself.
-    const scenes = [
-      'A mother and son walk hand in hand down a quiet residential road, laughing together.',
-      'They arrive at the park and sit on a bench, watching the sunset.',
-      'She enters the house and hangs up her coat by the front door.',
-      'He picks up his backpack and waves goodbye before visiting his grandmother next door.',
-      'They window shop along the street, pointing out things they like.',
-    ]
-    for (const visualDescription of scenes) {
-      const scene = composeSceneImagePrompt(testBrand, { ...baseJob, visualDescription, shotNotes: null })
-      expect(scene.referenceImageUrl).toBeUndefined()
-      expect(scene.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
-      expect(scene.prompt).toContain('does not involve the Fresh-CAN truck or mobile unit')
-    }
-  })
-
-  it('still shows the truck for a scene about arriving/parking/scanning in/browsing inside, even without the word "truck"', () => {
-    const scene = composeSceneImagePrompt(testBrand, {
-      ...baseJob,
-      visualDescription: 'The family approaches the unit, scanning the QR code with the app to enter.',
-      shotNotes: null,
-    })
-    expect(scene.referenceImageUrl).toBe('https://example.com/character-ref.jpg')
-    expect(scene.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
-  })
-
-  it('never adds unscripted people beyond who the scene describes, regardless of whether the truck appears', () => {
-    const relevant = composeSceneImagePrompt(testBrand, baseJob)
-    const notRelevant = composeSceneImagePrompt(testBrand, {
+  it('never adds unscripted people beyond who the scene describes, regardless of unit presence', () => {
+    const featured = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
+    const none = composeSceneImagePrompt(testBrand, {
       ...baseJob,
       visualDescription: 'A family cooks dinner together at home.',
       shotNotes: null,
     })
-    expect(relevant.prompt).toContain('no extra staff, workers, or bystanders')
-    expect(notRelevant.prompt).toContain('no extra staff, workers, or bystanders')
+    expect(featured.prompt).toContain('no extra staff, workers, or bystanders')
+    expect(none.prompt).toContain('no extra staff, workers, or bystanders')
   })
 
   it('never adds unexplained props, vehicles, or signage beyond what the scene describes', () => {
-    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
     expect(scene.prompt).toContain('no unexplained extras just to fill the frame')
   })
 
   it('tells the model the character-ref photo is a guide, not a literal copy — every scene reuses the same photo', () => {
-    // Regression test: every scene in a video reuses the SAME characterRefUrl
-    // as its edit source, so without this instruction the model has nothing
-    // pushing it to build THIS scene's actual visual_description instead of
-    // just reproducing the character-ref's own plain reference shot.
-    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
     expect(scene.prompt).toContain('only as a guide')
     expect(scene.prompt).toContain('never as a literal photo to copy')
     expect(scene.prompt).toContain(baseJob.visualDescription)
-  })
-
-  it("includes the brand's fixed containerDescriptor (structure/no-side-door rule), same as every other composer that can show the vehicle", () => {
-    // Regression test: this composer used to rely ENTIRELY on the character-ref
-    // image itself to anchor the vehicle's real structure, with no structural
-    // rule in the TEXT at all — unlike composeCharacterRefPrompt/composeBlogImage/
-    // composePhotoPrompt, which all splice in containerDescriptor. That gap let
-    // a side door get hallucinated: REFERENCE_IS_GUIDE_NOT_COPY explicitly tells
-    // the model to build a genuinely new scene around the vehicle rather than
-    // copy the reference photo, and nothing in the text ever ruled a side door
-    // out for that new interpretation.
-    const scene = composeSceneImagePrompt(testBrand, baseJob)
-    expect(scene.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
   })
 
   it('includes shot notes and regen instructions when given', () => {
@@ -514,10 +560,15 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain('warmer lighting')
   })
 
-  it('requires any food/produce/groceries shown to look clean and fresh, never dirty', () => {
+  it('requires any food/produce/groceries shown to look clean and fresh, never dirty (containsFood defaults to true)', () => {
     const scene = composeSceneImagePrompt(testBrand, baseJob)
     expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
     expect(scene.prompt).toContain('Never render food looking dirty, rotten, messy, or unappetizing')
+  })
+
+  it('omits the food-quality block when the plan says containsFood: false (brief §4.4\'s own example)', () => {
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, containsFood: false })
+    expect(scene.prompt).not.toContain('clean, fresh, tidy, and appetizing')
   })
 
   it('requires the depicted setting to be physically plausible and safe — regression for a real generation showing people eating dinner in the middle of a road', () => {
@@ -546,19 +597,19 @@ describe('composeSceneImagePrompt', () => {
   it("never exceeds KieImageGenerator's real ~3000-char prompt cap, even with a maximally long visual_description/shot_notes/regenInstructions — regression for \"The prompt word cannot exceed 3000 characters\" (confirmed live against KIE.ai, recurred 3 times before this guard was added)", () => {
     // Against the REAL BRAND_PROFILE, not testBrand's short placeholders —
     // the fixed overhead that matters in production is Fresh-CAN's real,
-    // already-hand-trimmed prose (see containerDescriptor's own comment
-    // history in fresh-can.ts for why hand-trimming alone isn't durable).
+    // already-hand-trimmed prose.
     const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(30)
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-length-guard',
       sceneNumber: 3,
-      visualDescription: `The family approaches the Fresh-CAN truck. ${longText}`,
+      visualDescription: `The family approaches the unit. ${longText}`,
       shotNotes: longText,
       characterRefUrl: 'https://example.com/character-ref.jpg',
       regenInstructions: longText,
+      unitPresence: 'featured',
     })
-    // showSubject=true (the larger-fixed-overhead branch) — confirms this
-    // exercised the containerDescriptor path, not the cheaper NO_SUBJECT one.
+    // featured (the larger-fixed-overhead branch) — confirms this exercised
+    // the full-structure path, not the cheaper 'none' one.
     expect(scene.referenceImageUrl).toBeDefined()
     expect(scene.prompt.length).toBeLessThanOrEqual(3000)
     // The fixed safety/brand clauses must survive truncation fully intact —
@@ -578,50 +629,68 @@ describe('composeSceneImagePrompt', () => {
       visualDescription,
       shotNotes,
       characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'featured',
     })
     expect(scene.prompt).toContain(visualDescription)
     expect(scene.prompt).toContain(shotNotes)
   })
 
   it('includes the realistic-hands/skin guardrail when there is room for it', () => {
-    // A minimal scene (short visual_description, no shot_notes/regen) —
-    // real headroom under the cap, so this quality nice-to-have (unlike
-    // the safety-critical guardrails above) fits without needing to drop
-    // it. See REALISTIC_PEOPLE's own comment for why it's NOT protected
-    // the way FOOD_MUST_LOOK_CLEAN etc. are.
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-realism-1',
       sceneNumber: 1,
       visualDescription: 'A woman smiles at the camera.',
       shotNotes: null,
       characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'featured',
     })
     expect(scene.prompt).toContain('Hands must be anatomically correct')
   })
 
-  it('keeps a normal-length scene, its shot notes, AND the realistic-hands guardrail all within budget — Phase 1\'s shortened brand data (unit.full) freed up real headroom that a longer fixed overhead used to force this guardrail to drop for', () => {
-    const visualDescription =
-      'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear doors'
-    const shotNotes = 'Slow push-in, shallow depth of field'
+  it('keeps a short featured scene AND the realistic-hands guardrail within budget', () => {
+    // Measured headroom for the featured branch against the real
+    // BRAND_PROFILE: the guardrail survives up to roughly 150 characters of
+    // scene content. Phase 4's consolidated unit-branding block costs ~85
+    // characters more than the bare descriptor the old code pushed (the
+    // "never on any other vehicle" rule now ships on this path too), so the
+    // window is tighter than it was after Phase 1 — see
+    // docs/PROMPT_ARCHITECTURE.md's Phase 4 note on why that's accepted
+    // here and left for Phase 5's real budget config to resolve.
+    const visualDescription = 'A woman lifts a crate of apples into the open rear doors at dusk.'
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-realism-2',
       sceneNumber: 1,
       visualDescription,
-      shotNotes,
+      shotNotes: null,
       characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'featured',
     })
     expect(scene.prompt).toContain(visualDescription)
-    expect(scene.prompt).toContain(shotNotes)
     expect(scene.prompt).toContain('Hands must be anatomically correct')
     expect(scene.prompt.length).toBeLessThanOrEqual(3000)
   })
 
+  it('gets materially more room for scene content when the unit is absent (unitPresence: none) — the conditional-inclusion payoff brief §4.4 is after', () => {
+    const visualDescription =
+      'A family unloading groceries at dusk, warm light spilling from the open doors, the parents carrying ' +
+      'reusable bags while their two children run ahead toward the front porch'
+    const withUnit = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'p', sceneNumber: 1, visualDescription, shotNotes: null,
+      characterRefUrl: 'https://example.com/character-ref.jpg', unitPresence: 'featured',
+    })
+    const withoutUnit = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'p', sceneNumber: 1, visualDescription, shotNotes: null,
+      characterRefUrl: 'https://example.com/character-ref.jpg', unitPresence: 'none',
+    })
+    // The same scene text survives untruncated in both, but the no-unit
+    // prompt is far shorter — that saved budget is what Phase 5 gets to
+    // spend on continuity/realism blocks instead of dropping them.
+    expect(withUnit.prompt).toContain(visualDescription)
+    expect(withoutUnit.prompt).toContain(visualDescription)
+    expect(withoutUnit.prompt.length).toBeLessThan(withUnit.prompt.length - 500)
+  })
+
   it('still drops the realistic-hands/skin guardrail (never the real scene content) once free-text content alone pushes the prompt over budget', () => {
-    // The cascade itself (REALISTIC_PEOPLE first, then continuity, then
-    // regen/shot notes, visualDescription last) is unchanged — only the
-    // fixed overhead's size changed in Phase 1, so this demonstrates the
-    // same drop with a longer (but still realistic) scene instead of relying
-    // on a specific historical headroom number.
     const visualDescription =
       'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear ' +
       'doors, the parents carrying reusable bags while their two children run ahead toward the front porch, ' +
@@ -634,6 +703,7 @@ describe('composeSceneImagePrompt', () => {
       visualDescription,
       shotNotes,
       characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'featured',
     })
     expect(scene.prompt).toContain(visualDescription)
     expect(scene.prompt).toContain(shotNotes)
@@ -658,11 +728,6 @@ describe('composeSceneVideoPrompt', () => {
   })
 
   it('gives real cinematographic technique explicit positive permission, not just "subtle" motion', () => {
-    // Regression test: the original "Subtle, natural, observational motion"
-    // wording was in tension with composeVideoScriptSystemPrompt's newer
-    // cinematic-shot-variety instruction — this locks in that deliberate
-    // camera moves (pans, tilts, tracking, dolly, rack focus) are now
-    // explicitly welcomed, not discouraged by default.
     const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
     expect(prompt).toContain('pans, tilts, tracking, slow dolly, rack focus')
   })
@@ -685,7 +750,6 @@ describe('composeSceneVideoPrompt', () => {
     const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(40)
     const prompt = composeSceneVideoPrompt({ visualDescription: longText, shotNotes: longText })
     expect(prompt.length).toBeLessThanOrEqual(2500)
-    // The fixed motion-safety clause must survive truncation fully intact.
     expect(prompt).toContain('never motion with no real cause')
     expect(prompt).toContain('never a staged product-reveal move')
   })
@@ -714,7 +778,6 @@ describe('composeSceneVideoPrompt', () => {
     const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(40)
     const prompt = composeSceneVideoPrompt({ visualDescription: longText, shotNotes: longText, isFinalScene: true })
     expect(prompt.length).toBeLessThanOrEqual(2500)
-    // The settle-motion clause is fixed content — must survive truncation.
     expect(prompt).toContain('FINAL shot')
   })
 })
@@ -727,14 +790,6 @@ describe('composeCharacterRefPrompt', () => {
   })
 
   it('always uses the FIRST exterior reference photo — the one shared reference every scene locks onto, so cleanliness of the source matters more than per-pipeline variety', () => {
-    // Regression test: a real character-ref generation showed a duplicate,
-    // garbled second wordmark-like decal over an unexplained red blob
-    // graphic — most likely bleed-through from one of the OTHER reference
-    // photos (documented in fresh-can.ts as showing a real decorative
-    // graphic + URL text the model is told to disregard). Picking
-    // deterministically from index 0 regardless of pipelineId is what
-    // stops a rotation ever landing on one of those contaminated photos
-    // for this specific, singular use.
     const refA = composeCharacterRefPrompt(multiAngleBrand, { pipelineId: 'pipeline-aaaa' })
     const refB = composeCharacterRefPrompt(multiAngleBrand, { pipelineId: 'pipeline-zzzz-different' })
     expect(refA.referenceImageUrl).toBe('https://example.com/back.jpg')
@@ -745,6 +800,12 @@ describe('composeCharacterRefPrompt', () => {
     const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-2' })
     expect(ref.prompt).toContain('Exactly one "Fresh CAN" wordmark total')
     expect(ref.prompt).toContain('no second or duplicate wordmark, decal, or graphic')
+  })
+
+  it('is always treated as unitPresence: featured — the full structural descriptor, not the identity tier', () => {
+    const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-3' })
+    expect(ref.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
+    expect(ref.prompt).not.toContain('THE FIXED IDENTITY DESCRIPTION')
   })
 })
 
@@ -776,11 +837,6 @@ describe('Fresh-CAN brand unit descriptor', () => {
   })
 
   it('the first exterior reference photo (character-ref\'s fixed source) shows the logo in exactly that correct side-only location', () => {
-    // composeCharacterRefPrompt always uses referenceImages.exterior[0] —
-    // this locks in that whichever photo occupies that slot actually
-    // matches the simplified brand rule above (a full side-profile view),
-    // rather than one that also shows the front or rear wordmark in the
-    // same frame.
     const first = BRAND_PROFILE.referenceImages.exterior[0]
     expect(first.whatItShows).toContain('full profile view')
     expect(first.whatItShows).toContain('reproduce that exact wordmark faithfully, once')

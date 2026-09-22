@@ -217,8 +217,7 @@ export const imageGenerate = inngest.createFunction(
         ),
       )
       // Layer 2 (PROMPT_REFACTOR_BRIEF.md §4.3) — image_post's first
-      // planning step. Generated and logged now; not yet consumed by
-      // generate_ad_copy/composePhotoPrompt (Phase 4 wires this in).
+      // planning step, now feeds composePhotoPrompt below (Phase 4).
       await step.run('plan-image', () =>
         planImage(client, { contentPipelineId: pipelineId }, pipeline.current_generation, scriptGenerator, BRAND_PROFILE, {
           imageStyle,
@@ -251,6 +250,15 @@ export const imageGenerate = inngest.createFunction(
         const { headline, subtitle } = parseAdCopy(adCopyOutput, deriveHeadline(job.topic), job.category)
         styleInputs = { headline, subtitle }
       }
+      // Re-derives (idempotently — plan-image already ran above) rather
+      // than threading a variable across the two status-gated blocks, same
+      // pattern this file already uses for re-fetching `job` in spirit.
+      const imagePostPlan = await step.run('plan-image-for-photo', () =>
+        planImage(client, { contentPipelineId: pipelineId }, pipeline.current_generation, scriptGenerator, BRAND_PROFILE, {
+          imageStyle,
+          scene: photoScene(job),
+        }),
+      )
       const photo = composePhotoPrompt(BRAND_PROFILE, {
         pipelineId,
         topic: job.topic,
@@ -258,6 +266,10 @@ export const imageGenerate = inngest.createFunction(
         scene: photoScene(job),
         regenInstructions: pipeline.regen_instructions,
         imageStyle,
+        unitPresence: imagePostPlan.unitPresence,
+        setting: imagePostPlan.setting,
+        containsFood: imagePostPlan.containsFood,
+        castDescription: imagePostPlan.castDescription,
         ...styleInputs,
       })
       pipeline = await runPhotoUntilSettled(
