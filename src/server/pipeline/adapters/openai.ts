@@ -48,7 +48,7 @@ export class OpenAIScriptGenerator implements ScriptGenerator {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: input.model ?? 'gpt-4o-mini',
+        model: input.model ?? 'gpt-4o',
         messages: [
           { role: 'system', content: input.systemPrompt },
           { role: 'user', content: input.userPrompt },
