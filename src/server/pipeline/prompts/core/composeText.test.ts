@@ -3,6 +3,7 @@ import {
   composeIntentSystemPrompt,
   composeImagePlanSystemPrompt,
   composeOutlineSystemPrompt,
+  composeReferenceCopySystemPrompt,
   composeCopySystemPrompt,
   composeCaptionSystemPrompt,
   composeAdCopySystemPrompt,
@@ -161,8 +162,15 @@ describe('composeOutlineSystemPrompt', () => {
 
   it('bounds section count and requires concrete, non-generic headings/summaries', () => {
     const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category')
-    expect(prompt).toContain('exactly 3 to 5 section headings')
+    expect(prompt).toContain('exactly 3 to 5 entries')
     expect(prompt).toContain('concrete and specific to this exact topic')
+  })
+
+  it('requires the parseable sections JSON shape (heading/summary) generateReferenceCopy.ts depends on', () => {
+    const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category')
+    expect(prompt).toContain('"heading"')
+    expect(prompt).toContain('"summary"')
+    expect(prompt).toContain('"sections"')
   })
 
   it('treats the scene idea as the creative brief the outline is built around, not light inspiration', () => {
@@ -195,6 +203,41 @@ describe('composeOutlineSystemPrompt', () => {
   it('omits the brief when none is given', () => {
     const prompt = composeOutlineSystemPrompt(testBrand, 'Test Category', 'A senior reaching a mobile unit at dusk')
     expect(prompt).not.toContain('TEST CORE MESSAGE')
+  })
+})
+
+describe('composeReferenceCopySystemPrompt', () => {
+  const opts = {
+    title: 'How Fresh-CAN Brings Groceries to Your Street',
+    sections: [
+      { heading: 'The Problem', summary: 'Many neighbourhoods lack easy access to fresh food.' },
+      { heading: 'How It Works', summary: 'Scan in with the app, take what you need, and go.' },
+    ],
+  }
+
+  it('includes the outline\'s title and every section heading, grounding the brief in the approved outline', () => {
+    const prompt = composeReferenceCopySystemPrompt(testBrand, opts)
+    expect(prompt).toContain('How Fresh-CAN Brings Groceries to Your Street')
+    expect(prompt).toContain('The Problem')
+    expect(prompt).toContain('How It Works')
+  })
+
+  it('requires the coreMessage/inlineHighlight JSON shape', () => {
+    const prompt = composeReferenceCopySystemPrompt(testBrand, opts)
+    expect(prompt).toContain('"coreMessage"')
+    expect(prompt).toContain('"inlineHighlight"')
+    expect(prompt).toContain('"visualMoment"')
+  })
+
+  it('requires the chosen heading to exactly match one of the real section headings', () => {
+    const prompt = composeReferenceCopySystemPrompt(testBrand, opts)
+    expect(prompt).toContain('must exactly match ONE of the section headings above')
+  })
+
+  it('frames this as expanding the already-approved outline, never rewriting its structure or writing the final copy', () => {
+    const prompt = composeReferenceCopySystemPrompt(testBrand, opts)
+    expect(prompt).toContain('already been approved')
+    expect(prompt).toContain('never producing')
   })
 })
 

@@ -178,14 +178,17 @@ export function composeOutlineSystemPrompt(
 ): string {
   return (
     brandContext(brand, category) +
-    'You are a content strategist. Produce a JSON outline for a blog post with a title, ' +
-    'a list of exactly 3 to 5 section headings, and a one-sentence summary of each section. Each heading and ' +
-    'summary must reference something concrete and specific to this exact topic — a real detail, angle, or ' +
-    'example — never a generic restatement of the brand\'s mission or a vague marketing angle that could ' +
-    'apply to any post. Also include "headline" ' +
-    '(max 6 words, a punchy standalone version of the title, suitable for rendering on an image) and ' +
-    '"subtitle" (2-5 words) — these are only used if the post\'s image style calls for on-image text, but ' +
-    'always include them.' +
+    'You are a content strategist. Respond with strictly valid JSON matching this exact shape:\n' +
+    '{\n' +
+    '  "title": string,\n' +
+    '  "headline": string (max 6 words, a punchy standalone version of the title, suitable for rendering on ' +
+    'an image — only used if the post\'s image style calls for on-image text, but always include it),\n' +
+    '  "subtitle": string (2-5 words, same on-image-only caveat as headline),\n' +
+    '  "sections": [ { "heading": string, "summary": string (one sentence) } ] (exactly 3 to 5 entries)\n' +
+    '}\n' +
+    'Each heading and summary must reference something concrete and specific to this exact topic — a real ' +
+    'detail, angle, or example — never a generic restatement of the brand\'s mission or a vague marketing ' +
+    'angle that could apply to any post.' +
     // The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
     // required going forward (see src/app/dashboard/new's submit
     // validation), so this is normally always present. It's the creative
@@ -199,6 +202,44 @@ export function composeOutlineSystemPrompt(
         'never as the angle itself. The scene idea decides what this post is actually about.' +
         (creativeBrief ? `\n\n${creativeBriefContext(creativeBrief)}` : '')
       : '')
+  )
+}
+
+export interface ReferenceCopySystemPromptOptions {
+  title: string
+  sections: { heading: string; summary: string }[]
+}
+
+/**
+ * Layer 2 addition (PROMPT_REFACTOR_BRIEF.md §9.3) — the shared,
+ * language-neutral pass between the outline and hero/inline image
+ * generation. NOT the final published copy (that's composeCopySystemPrompt,
+ * generated separately per language track, after images already exist) —
+ * this exists solely to give the shared images real, specific substance to
+ * be grounded in, instead of just the outline's bare headline/subtitle.
+ * Expands the ALREADY-APPROVED outline; never invents new structure or
+ * sections of its own.
+ */
+export function composeReferenceCopySystemPrompt(brand: BrandProfile, opts: ReferenceCopySystemPromptOptions): string {
+  const sectionsList = opts.sections.map((s, i) => `${i + 1}. "${s.heading}" — ${s.summary}`).join('\n')
+  return (
+    `${brand.missionStatement} Voice: ${brand.voiceGuidelines}\n\n` +
+    'An outline for this blog post has already been approved. You are expanding it into a compact brief for ' +
+    'the images that will illustrate it — never rewriting the outline\'s own structure, and never producing ' +
+    `the actual publishable copy (that is written separately, per language, later).\n\nTitle: "${opts.title}"\n` +
+    `Sections:\n${sectionsList}\n\n` +
+    'Respond with strictly valid JSON matching this exact shape:\n' +
+    '{\n' +
+    '  "coreMessage": string (2-3 sentences capturing the single specific idea this whole article is ' +
+    'actually about — grounded in the title and sections above, never a generic restatement of the brand\'s ' +
+    'mission),\n' +
+    '  "inlineHighlight": {\n' +
+    '    "heading": string (must exactly match ONE of the section headings above — pick whichever section ' +
+    'suggests the most genuinely specific, concrete visual moment, not necessarily the first one),\n' +
+    '    "visualMoment": string (1-2 sentences describing a real, specific visual moment that section\'s ' +
+    'content suggests — not a restatement of the heading or summary)\n' +
+    '  }\n' +
+    '}'
   )
 }
 

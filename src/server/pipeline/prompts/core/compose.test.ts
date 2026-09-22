@@ -121,6 +121,48 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     expect(hero.prompt).toContain('logo is composited into that corner')
   })
 
+  describe('referenceCopy (PROMPT_REFACTOR_BRIEF.md §9.3)', () => {
+    const referenceCopy = {
+      coreMessage: 'A mobile grocery store makes fresh food genuinely reachable, no matter the neighbourhood.',
+      inlineHighlight: {
+        heading: 'A Real Family',
+        visualMoment: 'A mother and her two kids carrying grocery bags out the rear doors at golden hour.',
+      },
+    }
+
+    it('grounds the hero image in the whole article\'s core message', () => {
+      const job = { pipelineId: 'pipeline-ref-hero', topic: 'Community garden', category: 'Community Impact', referenceCopy }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).toContain(referenceCopy.coreMessage)
+      expect(hero.prompt).not.toContain(referenceCopy.inlineHighlight.visualMoment)
+    })
+
+    it('grounds the inline image in its own section\'s visual moment, never the hero\'s core message', () => {
+      const job = { pipelineId: 'pipeline-ref-inline', topic: 'Community garden', category: 'Community Impact', referenceCopy }
+      const inline = composeInlinePrompt(testBrand, job)
+      expect(inline.prompt).toContain(referenceCopy.inlineHighlight.visualMoment)
+      expect(inline.prompt).toContain(referenceCopy.inlineHighlight.heading)
+      expect(inline.prompt).not.toContain(referenceCopy.coreMessage)
+    })
+
+    it('omits the reference-copy line entirely when none is given (legacy caller predating Phase 6)', () => {
+      const job = { pipelineId: 'pipeline-ref-none', topic: 'Community garden', category: 'Community Impact' }
+      const hero = composeHeroPrompt(testBrand, job)
+      expect(hero.prompt).not.toContain('core message')
+    })
+
+    it('omits the inline reference-copy line when the fallback left no real visual moment (no-sections case)', () => {
+      const job = {
+        pipelineId: 'pipeline-ref-empty',
+        topic: 'Community garden',
+        category: 'Community Impact',
+        referenceCopy: { coreMessage: 'A Pre-existing Post', inlineHighlight: { heading: '', visualMoment: '' } },
+      }
+      const inline = composeInlinePrompt(testBrand, job)
+      expect(inline.prompt).not.toContain('visual moment')
+    })
+  })
+
   describe('unitPresence: none (default when omitted)', () => {
     it('omits the reference image and uses the generic non-unit hint', () => {
       const job = { pipelineId: 'pipeline-3', topic: 'Community garden fundraiser', category: 'Community Impact' }

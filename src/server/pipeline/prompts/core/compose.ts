@@ -51,13 +51,22 @@ interface BlogImageJob extends StyleInputs {
    *  present, it's the creative brief the scene is built around — see
    *  SCENE_IS_CREATIVE_BRIEF — not a light, non-binding influence. */
   sceneNotes?: string | null
-  /** Blog has no real per-image plan yet (that's Phase 6 — image briefs
-   *  derived from the finished copy). Until then, the caller maps the
-   *  CreativeBrief's brief-level unitRelevance ('central'/'incidental'/
-   *  'none') onto this field ('featured'/'background'/'none') — see
-   *  inngest/functions/blog.ts. Defaults to 'none' if omitted (a legacy
-   *  caller predating Phase 4 — never force the unit in without a signal). */
+  /** Blog has no real per-image PLAN yet (image_post's ImagePostPlan
+   *  equivalent) — that's still a future refinement. Until then, the caller
+   *  maps the CreativeBrief's brief-level unitRelevance ('central'/
+   *  'incidental'/'none') onto this field ('featured'/'background'/'none')
+   *  — see inngest/functions/blog.ts. Defaults to 'none' if omitted (a
+   *  legacy caller predating Phase 4 — never force the unit in without a
+   *  signal). */
   unitPresence?: UnitPresence
+  /** generateReferenceCopy.ts's output (PROMPT_REFACTOR_BRIEF.md §9.3) —
+   *  hero uses coreMessage, inline uses inlineHighlight. Optional so a
+   *  legacy caller predating Phase 6 still works exactly as before
+   *  (falling back to the bare topic/headline framing). */
+  referenceCopy?: {
+    coreMessage: string
+    inlineHighlight: { heading: string; visualMoment: string }
+  }
 }
 
 interface PhotoJob extends StyleInputs {
@@ -543,6 +552,23 @@ function composeBlogImage(
     ? `${label} about "${job.headline}" (${job.topic}), in the context of ${job.category}.`
     : `${label} about ${job.topic}, in the context of ${job.category}.`
 
+  // Phase 6 (PROMPT_REFACTOR_BRIEF.md §9.3) — grounds the shared image in
+  // the finished reference copy generateReferenceCopy.ts produced, not just
+  // the outline's bare headline. Hero gets the whole article's core
+  // message; inline gets its OWN specific section's visual moment — never
+  // the same content hero gets, and never a restatement of the section
+  // heading. Absent for a caller predating Phase 6, or when
+  // generateReferenceCopy.ts's own no-sections fallback left nothing real
+  // to add.
+  const referenceCopyLine = !job.referenceCopy
+    ? ''
+    : kind === 'hero'
+      ? `The whole article's core message: ${job.referenceCopy.coreMessage}`
+      : job.referenceCopy.inlineHighlight.visualMoment
+        ? `This section's specific visual moment ("${job.referenceCopy.inlineHighlight.heading}"): ` +
+          job.referenceCopy.inlineHighlight.visualMoment
+        : ''
+
   // Reversed 2026-09-11: blog hero/inline used to ALWAYS show the Fresh-CAN
   // unit regardless of topic — every image ended up looking like "the truck
   // from one of 5 fixed angles," since edit-mode anchors composition to
@@ -553,7 +579,9 @@ function composeBlogImage(
   const presence = job.unitPresence ?? 'none'
   const showSubject = presence !== 'none'
 
-  const parts = [topicLine, moodClause(), FOOD_MUST_LOOK_CLEAN]
+  const parts = [topicLine]
+  if (referenceCopyLine) parts.push(referenceCopyLine)
+  parts.push(moodClause(), FOOD_MUST_LOOK_CLEAN)
   // The dashboard's "Your Scene Idea" field — the creative brief this scene
   // is built around (see SCENE_IS_CREATIVE_BRIEF above the type declaring
   // this field). Absent only for a job created before the field became

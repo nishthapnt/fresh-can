@@ -1510,3 +1510,42 @@
 **⭐ Pick Up Next Session**
 - Phase 6 (blog image ordering — image briefs from finished copy, §9.3) or Phase 7 (video continuity research — chained reference frames, recommend-only) or Phase 8 (structural test rewrite + e2e substring-dispatch decoupling, §13).
 - Still open: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.
+
+---
+
+### Session 17 — 2026-09-22 — Prompt architecture refactor, Phase 6: blog image ordering (§9.3)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §9.3 — ground blog's shared hero/inline images in real substance instead of just the outline's headline/subtitle. Found the brief's own literal wording ("images from the finished copy") doesn't work as stated — full per-language copy can't ground a shared asset — and implemented the shared-reference-copy alternative already agreed back in Phase 0/1.*
+
+- **New shared "reference copy" pass** (`steps/blog/generateReferenceCopy.ts`) — same lightweight, best-effort pattern as `interpretIntent`/`planImage` (idempotent, no claim/backoff loop, falls back to today's exact outline-derived behavior on failure or malformed output). Produces `{coreMessage, inlineHighlight: {heading, visualMoment}}` from the already-approved outline. Crucially **never gates `content_pipelines.status`** — runs entirely inside the existing `'generating'`-gated block, so `blog.ts`'s CAS/retry machinery (which the brief explicitly asks to preserve) is completely untouched.
+- **`composeOutlineSystemPrompt` gained an explicit, parseable JSON schema** for `sections` — it previously asked for sections in prose only, with no machine-checkable field names, and nothing in the codebase had ever actually read that field. Needed so the new step has something reliable to consume; a natural tightening exactly where this phase already had to touch the seam.
+- **`composeBlogImage` is now kind-aware**: hero grounds in `referenceCopy.coreMessage` (the whole article's idea), inline grounds in `referenceCopy.inlineHighlight.visualMoment` (its own specific section) — never the same content twice. Both fields are additive/optional, so a caller predating Phase 6 is unaffected.
+- **Flagged, not fixed, a second pre-existing gap found along the way**: each language track's own `composeCopySystemPrompt` output independently decides `has_inline_image` on one of its own sections — a decision made twice, per language, with no shared source of truth. Harmless before this phase (the shared image had no section grounding to agree or disagree with); now that it does, a track could in principle name a different section than `generateReferenceCopy` chose. Documented in `docs/PROMPT_ARCHITECTURE.md` as a follow-up, not squeezed into this phase.
+
+**🧪 Testing**
+- `tsc --noEmit` clean. `eslint`: 0 errors, same pre-existing `_`-prefixed-destructure warning class only.
+- New `generateReferenceCopy.test.ts` (9 tests) — `normalizeReferenceCopyOutput`'s validation (including rejecting an `inlineHighlight.heading` that doesn't match a real outline section) and `deriveFromOutline`'s fallback derivation, including the no-sections edge case.
+- `composeText.test.ts` gained a `composeReferenceCopySystemPrompt` describe block (4 tests) and one schema-tightening assertion for the outline prompt.
+- `compose.test.ts` gained a `referenceCopy` describe block (4 tests) covering hero-vs-inline grounding, the legacy-caller omission case, and the empty-fallback omission case.
+- Full non-e2e suite: 390/390 passing (374 + 16 new). Confirmed (statically, e2e tests aren't run in this environment) that the outline schema tightening doesn't break `blogPipeline.e2e.test.ts`'s substring-dispatch routing (`'content strategist'` is preserved verbatim) and that its mock outline's non-conforming `sections` shape degrades gracefully to the fallback path rather than throwing.
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/core/composeText.ts` — `composeOutlineSystemPrompt`'s explicit JSON schema; new `composeReferenceCopySystemPrompt`
+- `src/server/pipeline/prompts/index.ts` — export both
+- `src/server/pipeline/prompts/core/compose.ts` — `BlogImageJob.referenceCopy`, kind-aware grounding in `composeBlogImage`
+- `src/server/pipeline/steps/blog/generateReferenceCopy.ts`, `generateReferenceCopy.test.ts` — new
+- `src/inngest/functions/blog.ts` — `parseOutlineSections` helper, wires `generateReferenceCopy` into the visuals block
+- `src/server/pipeline/prompts/core/composeText.test.ts`, `compose.test.ts` — new coverage
+
+**💡 Decisions Made**
+- Kept the pipeline status machine completely untouched rather than introduce a new intermediate status or share retry-count bookkeeping between two sequential LLM calls in the same `drafting` phase — the lightweight best-effort pattern sidesteps that risk entirely by not needing to gate anything.
+- Tightened `composeOutlineSystemPrompt`'s schema rather than have the new step re-derive its own section structure independently (which would risk diverging from the outline the per-language copy step is separately supposed to follow).
+
+**⭐ Pick Up Next Session**
+- Phase 7 (video continuity research — chained reference frames, recommend-only) or Phase 8 (structural test rewrite + e2e substring-dispatch decoupling, §13).
+- Still open: owner review of §16.3/§16.6/§16.7, the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation flagged above.

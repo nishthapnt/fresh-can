@@ -406,12 +406,74 @@ hand-tuned cascade. Phase 5 re-parameters that cascade from the shared
 brief asks (§7's "one config", §12's contradiction prevention) are met
 without it.
 
+## Phase 6 — Blog image ordering (§9.3)
+
+### The real conflict the brief's own wording glossed over
+
+§9.3 says "generate outline → copy → image briefs from the finished copy."
+Taken literally, "copy" means the full per-language blog body
+(`composeCopySystemPrompt`'s output) — but that's generated **per language
+track**, independently, while hero/inline images are **shared** (one hero +
+one inline per pipeline, generated once, before any track's copy exists).
+Grounding a shared asset in one track's copy would make the image depend on
+which language happened to finish first. This is the exact conflict flagged
+back in Phase 0/1 and accepted then: a new **shared, language-neutral
+"reference copy" pass** — not the real per-language copy — sits between the
+outline and image generation instead.
+
+### A second, pre-existing gap this phase surfaced but didn't fix
+
+`composeCopySystemPrompt`'s own schema asks each language track to
+independently decide `has_inline_image: true` on one of its own sections —
+a decision made twice, independently, per language, with no shared source
+of truth. This didn't matter before Phase 6 because the shared inline image
+was generated from raw topic/category with no section grounding at all —
+there was nothing to disagree about. Now that the inline image is
+section-specific (via `generateReferenceCopy`'s `inlineHighlight`), a track
+could in principle pick a *different* section as its own `has_inline_image`
+than the one the shared image actually depicts. Not fixed this phase —
+`generateReferenceCopy`'s choice is a strict improvement over "no grounding
+at all," and reconciling the two decision points is a separate, pre-existing
+loose end, not something Phase 6 introduced.
+
+### Design: lightweight, best-effort, never gates the status machine
+
+`generateReferenceCopy` (`steps/blog/generateReferenceCopy.ts`) follows the
+same pattern as `interpretIntent`/`planImage`: idempotent via
+`hasSucceededStep`/`recordStepAttempt`, no claim, no backoff loop. Crucially,
+it **never gates `content_pipelines.status`** — `blog.ts`'s existing
+`created`→`drafting`→`generating` machinery is completely unchanged;
+`generate_outline` still owns the `drafting`→`generating` transition alone.
+This step runs entirely inside the already-existing `'generating'`-gated
+block, right before `composeHeroPrompt`/`composeInlinePrompt`, so there was
+no need to touch the CAS/retry semantics the brief asks to preserve.
+
+A failed or malformed response falls back to `deriveFromOutline` —
+literally today's exact behavior (the outline's own title + first section),
+not a degraded state. `composeOutlineSystemPrompt` gained an explicit,
+parseable JSON schema for `sections` (previously prose-only instructions
+with no machine-checkable field names — nothing in the codebase had ever
+actually read `sections` before this phase) so this new step has something
+reliable to consume.
+
+### `composeBlogImage` — kind-aware grounding
+
+Hero gets `referenceCopy.coreMessage` (the whole article's idea); inline
+gets `referenceCopy.inlineHighlight.visualMoment` (its own specific
+section) — never the same content twice. Both are additive: absent
+entirely for a caller predating Phase 6, falling back to the bare
+topic/headline framing exactly as before.
+
 ## Not yet done (later phases)
 
-- Blog's image-brief-from-finished-copy ordering change — Phase 6.
 - `cast_bible` verbatim injection into per-scene image prompts (brief §9.2)
   — the plan data exists (Phase 3) but nothing reads it yet; deferred as
   its own piece of work rather than squeezed into Phase 4.
 - Structural test rewrite for `compose.test.ts`/`composeText.test.ts`'s
   remaining phrase-pinning assertions, and the e2e substring-dispatch
   coupling in the three `*Pipeline.e2e.test.ts` files — Phase 8 (§13).
+- Reconciling per-track `has_inline_image` against the shared
+  `inlineHighlight` decision (see Phase 6's second finding above) — a
+  pre-existing gap, not newly introduced, left for a future pass.
+- Video continuity research (chained reference frames) — Phase 7,
+  recommend-only per the brief.

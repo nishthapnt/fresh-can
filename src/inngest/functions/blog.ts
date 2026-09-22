@@ -22,6 +22,7 @@ import {
 } from '../../server/pipeline/db'
 import { interpretIntent } from '../../server/pipeline/steps/shared/interpretIntent'
 import { runGenerateOutline, type OutlineJobInput } from '../../server/pipeline/steps/blog/generateOutline'
+import { generateReferenceCopy, type OutlineSection } from '../../server/pipeline/steps/blog/generateReferenceCopy'
 import { runGenerateVisualImage } from '../../server/pipeline/steps/blog/generateVisualImage'
 import { runGenerateCopy, type CopyJobInput } from '../../server/pipeline/steps/blog/generateCopy'
 import { runFinalizeDraft } from '../../server/pipeline/steps/blog/finalizeDraft'
@@ -41,16 +42,37 @@ import { env } from '../../server/pipeline/env'
 
 type Step = GetStepTools<typeof inngest>
 
-// Blog has no real per-image plan yet (Phase 6 — image briefs derived from
-// the finished copy). Until then, the CreativeBrief's brief-level
-// unitRelevance (PROMPT_REFACTOR_BRIEF.md §4.2) is mapped onto hero/inline's
-// per-image UnitPresence scale (§8) — a fair like-for-like replacement for
-// the old isContainerRelevant keyword-regex gate (deleted), since that
-// heuristic was also topic+category-level, not per-image.
+// Blog has no real per-image PLAN yet (image_post's ImagePostPlan
+// equivalent). Until then, the CreativeBrief's brief-level unitRelevance
+// (PROMPT_REFACTOR_BRIEF.md §4.2) is mapped onto hero/inline's per-image
+// UnitPresence scale (§8) — a fair like-for-like replacement for the old
+// isContainerRelevant keyword-regex gate (deleted), since that heuristic
+// was also topic+category-level, not per-image.
 function mapUnitRelevanceToPresence(value: 'central' | 'incidental' | 'none'): UnitPresence {
   if (value === 'central') return 'featured'
   if (value === 'incidental') return 'background'
   return 'none'
+}
+
+/** Tolerant extraction of generate_outline's title/sections
+ * (composeOutlineSystemPrompt's schema) — falls back to the job's own
+ * topic/an empty section list if the model omitted them or the step
+ * hasn't produced well-formed JSON, so generateReferenceCopy.ts always
+ * gets a safe input rather than throwing here. */
+function parseOutlineSections(output: unknown, fallbackTitle: string): { title: string; sections: OutlineSection[] } {
+  const obj = output as { title?: unknown; sections?: unknown } | null
+  const title = typeof obj?.title === 'string' && obj.title.trim() ? obj.title.trim() : fallbackTitle
+  const sectionsRaw = Array.isArray(obj?.sections) ? obj.sections : []
+  const sections: OutlineSection[] = []
+  for (const s of sectionsRaw) {
+    if (!s || typeof s !== 'object') continue
+    const heading = (s as Record<string, unknown>).heading
+    const summary = (s as Record<string, unknown>).summary
+    if (typeof heading === 'string' && heading.trim() && typeof summary === 'string') {
+      sections.push({ heading: heading.trim(), summary: summary.trim() })
+    }
+  }
+  return { title, sections }
 }
 
 // Matches worker/src/index.ts's own WORKER_POLL_INTERVAL_MS default — the
@@ -237,8 +259,9 @@ export const blogGenerate = inngest.createFunction(
       // Re-derives (idempotently — interpret-intent already ran in the
       // outline block above) rather than threading a variable across the
       // two status-gated blocks. Blog has no real per-image plan yet
-      // (Phase 6), so the brief's brief-level unitRelevance is mapped onto
-      // hero/inline's unitPresence — see BlogImageJob's own header.
+      // (a full ImagePostPlan-style step), so the brief's brief-level
+      // unitRelevance is mapped onto hero/inline's unitPresence — see
+      // BlogImageJob's own header.
       const creativeBrief = await step.run('interpret-intent-for-visuals', () =>
         interpretIntent(
           client,
@@ -255,6 +278,24 @@ export const blogGenerate = inngest.createFunction(
           },
         ),
       )
+      // Phase 6 (PROMPT_REFACTOR_BRIEF.md §9.3) — expands the already-
+      // approved outline into a shared, language-neutral brief the images
+      // can be genuinely grounded in, instead of just the bare headline.
+      // Never gates the drafting->generating transition (that's still
+      // entirely owned by generate_outline, unchanged) — this runs after
+      // it, inside the same 'generating'-gated block hero/inline already
+      // compose in.
+      const { title: outlineTitle, sections: outlineSections } = parseOutlineSections(outlineOutput, job.topic)
+      const referenceCopy = await step.run('generate-reference-copy', () =>
+        generateReferenceCopy(
+          client,
+          { contentPipelineId: pipelineId },
+          pipeline.current_generation,
+          scriptGenerator,
+          BRAND_PROFILE,
+          { title: outlineTitle, sections: outlineSections },
+        ),
+      )
       const blogImageJob = {
         pipelineId,
         topic: job.topic,
@@ -264,6 +305,7 @@ export const blogGenerate = inngest.createFunction(
         subtitle,
         sceneNotes: job.scene_notes,
         unitPresence: mapUnitRelevanceToPresence(creativeBrief.unitRelevance.value),
+        referenceCopy,
       }
       const hero = composeHeroPrompt(BRAND_PROFILE, blogImageJob)
       const inline = composeInlinePrompt(BRAND_PROFILE, blogImageJob)
