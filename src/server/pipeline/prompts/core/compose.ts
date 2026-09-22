@@ -9,6 +9,8 @@
 import type { BrandProfile, BrandReferenceImage, ImageStyle, SceneVisualState } from '../types'
 import { pickDeterministic } from './rotation'
 import { SAFE_ZONE_RADIUS_FRACTION } from '../../lib/watermarkGeometry'
+import { PROMPT_LIMITS } from './limits'
+import { assertNoContradiction } from './contradictions'
 
 export interface ImageComposition {
   prompt: string
@@ -212,7 +214,7 @@ function unitBrandingBlock(brand: BrandProfile, presence: UnitPresence): string 
   // Deliberately terse framing around the descriptor itself: this text is
   // on composeSceneImagePrompt's FIXED (never-truncated) path, where the
   // measured headroom under KIE's cap is single-digit characters for an
-  // ordinary scene (see SCENE_IMAGE_PROMPT_CHAR_LIMIT's own header). Every
+  // ordinary scene (see limits.ts's PROMPT_LIMITS.sceneImage). Every
   // character of wrapper prose here is a character less available for real
   // scene content, so the consolidation keeps the RULES and drops the
   // connective framing.
@@ -470,7 +472,7 @@ const NO_UNEXPLAINED_PROPS =
 // people, and floating objects. Kept in ONE constant with the existing
 // hands/skin guardrail rather than as a separate fixedParts addition —
 // fixedLen is already within single-digit characters of real headroom (see
-// SCENE_IMAGE_PROMPT_CHAR_LIMIT's own comment), so a new unconditional
+// limits.ts's PROMPT_LIMITS.sceneImage), so a new unconditional
 // clause would truncate real scene content on nearly every generation;
 // this only costs headroom on the same borderline-length scenes the
 // existing hands/skin guardrail already sometimes drops for.
@@ -585,7 +587,9 @@ function composeBlogImage(
   parts.push(watermarkSafeZoneBlock())
   parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariantFor(brand, presence)))
 
-  return { prompt: parts.join(' '), referenceImageUrl }
+  const prompt = parts.join(' ')
+  assertNoContradiction(prompt, brand)
+  return { prompt, referenceImageUrl }
 }
 
 export function composeHeroPrompt(brand: BrandProfile, job: BlogImageJob): ImageComposition {
@@ -653,10 +657,32 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
     if (disregard) parts.push(disregard)
     referenceImageUrl = reference.url
   }
-  parts.push(referenceImageUrl ? brand.noNewTextInstruction : brand.noTextInstruction)
-  if (job.regenInstructions) parts.push(`${job.regenInstructions}.`)
+  // Phase 5 fix: this used to fall straight to the blanket
+  // brand.noTextInstruction ("no logos anywhere") whenever no reference
+  // photo was configured — a real contradiction against unitBrandingBlock's
+  // "must be built to this structure" text just above, the exact §12 bug
+  // class, for the edge case of a brand with an empty exterior pool. Every
+  // other composer already routes through noTextVariantFor; this one hadn't.
+  parts.push(referenceImageUrl ? brand.noNewTextInstruction : noTextVariantFor(brand, 'featured'))
 
-  return { prompt: parts.join(' '), referenceImageUrl }
+  // Budget enforcement (Phase 5, PROMPT_REFACTOR_BRIEF.md §7) — this
+  // composer shares KieImageGenerator's endpoint (and its real 3000-char
+  // cap, limits.ts's PROMPT_LIMITS.sceneImage) with composeSceneImagePrompt,
+  // but had no cascade at all before Phase 5. regenInstructions (user-typed,
+  // from the Regenerate dialog) is the only variable-length field here, so
+  // this is a single truncation, not the multi-clause cascade the scene
+  // composers need.
+  const fixedLen = parts.join(' ').length
+  let regenInstructions = job.regenInstructions ?? ''
+  const overflow = fixedLen + (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) - PROMPT_LIMITS.sceneImage
+  if (overflow > 0 && regenInstructions) {
+    regenInstructions = truncateToFit(regenInstructions, regenInstructions.length - overflow)
+  }
+  if (regenInstructions) parts.push(`${regenInstructions}.`)
+
+  const prompt = parts.join(' ')
+  assertNoContradiction(prompt, brand)
+  return { prompt, referenceImageUrl }
 }
 
 interface SceneImageJob {
@@ -696,7 +722,7 @@ interface SceneImageJob {
  * context" for scene-to-scene continuity. Deliberately built from just a
  * people count and a short object list, never the full scene, and kept in
  * the SAME droppable cascade tier as REALISTIC_PEOPLE below (never
- * fixedParts — see SCENE_IMAGE_PROMPT_CHAR_LIMIT's own header for why
+ * fixedParts — see limits.ts's PROMPT_LIMITS.sceneImage for why
  * fixedParts has essentially no headroom left to spend). Returns '' when
  * there's nothing worth carrying forward (scene 1, or a previous scene
  * whose visual_state was empty/never generated).
@@ -717,30 +743,10 @@ function continuityClauseFrom(previous: SceneVisualState | null | undefined): st
   )
 }
 
-// Hard ceiling under KieImageGenerator's real, confirmed 3000-char cap
-// ("The prompt word cannot exceed 3000 characters") — added 2026-09-21
-// after a real generation hit that cap for a THIRD time despite two prior
-// rounds of hand-trimming the fixed brand/guardrail prose (see
-// containerDescriptor's and REFERENCE_IS_GUIDE_NOT_COPY's comment history).
-// Neither round added an actual ceiling — they just bought back margin that
-// the next incident-driven safety clause (CINEMATIC_QUALITY,
-// NO_UNSCRIPTED_PEOPLE, NO_UNEXPLAINED_PROPS, all also 2026-09-19) ate right
-// back up. The fixed overhead alone measures ~2822 chars even after that
-// trimming (showSubject=true branch, real BRAND_PROFILE) — confirmed by
-// direct measurement, not estimated — so a merely-average visual_description
-// /shot_notes/regenInstructions — all free text, all unbounded upstream (see
-// generateScript.ts's normalizeScriptOutput and the /video/regenerate route)
-// — can still push the total over 3000 and fail the whole scene.
-//
-// 2995, not 3000: KIE's own error text is unambiguous ("cannot exceed 3000
-// characters", not a word-tokenization limit), so this only needs a few
-// characters of margin against an off-by-one on their side, NOT the ~100
-// chars a first pass at this used — that turned out to eat nearly the
-// entire scene-content budget (fixedLen ~2822 left only ~78 chars for
-// visualDescription+shotNotes+regenInstructions combined, truncating even
-// short, ordinary scenes). At 2995, ordinary scenes have ~170 chars of
-// headroom before this cap's cascading truncation ever engages at all.
-const SCENE_IMAGE_PROMPT_CHAR_LIMIT = 2995
+// The real cap this guards against, and its history, now live in
+// limits.ts's PROMPT_LIMITS.sceneImage (Phase 5, PROMPT_REFACTOR_BRIEF.md
+// §7) — one shared config every composer reads from, not a local constant
+// per composer.
 
 // Cuts at the last word boundary at/under maxChars rather than mid-word, so
 // a truncated scene never ends the prompt on a fragment. Never lengthens
@@ -765,7 +771,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   const containsFood = job.containsFood ?? true
 
   // Everything below is a fixed brand/safety constraint sent in full,
-  // always — see SCENE_IMAGE_PROMPT_CHAR_LIMIT's header for why these can
+  // always — see limits.ts's PROMPT_LIMITS.sceneImage for why these can
   // never be the thing that gets cut when a prompt runs long. REALISTIC_PEOPLE
   // is deliberately NOT in this list — see the cascade below for why.
   // FOOD_MUST_LOOK_CLEAN is now genuinely conditional (brief §4.4's own
@@ -814,10 +820,10 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     (includeRealismClause ? 1 + REALISTIC_PEOPLE.length : 0) +
     (continuityClause ? 1 + continuityClause.length : 0)
 
-  let overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+  let overflow = totalLen() - PROMPT_LIMITS.sceneImage
   if (overflow > 0 && includeRealismClause) {
     includeRealismClause = false
-    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   if (overflow > 0 && continuityClause) {
     // Second to drop — a real scene-to-scene continuity aid, but still an
@@ -825,15 +831,15 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // NO_UNEXPLAINED_PROPS constraints above, never the only thing
     // enforcing consistency.
     continuityClause = ''
-    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   if (overflow > 0 && regenInstructions) {
     regenInstructions = truncateToFit(regenInstructions, regenInstructions.length - overflow)
-    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   if (overflow > 0 && shotNotes) {
     shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
-    overflow = totalLen() - SCENE_IMAGE_PROMPT_CHAR_LIMIT
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   if (overflow > 0) {
     visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
@@ -895,7 +901,9 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   }
   if (regenInstructions) parts.push(`${regenInstructions}.`)
 
-  return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl }
+  const prompt = parts.filter(Boolean).join(' ')
+  assertNoContradiction(prompt, brand)
+  return { prompt, referenceImageUrl }
 }
 
 interface SceneVideoJob {
@@ -946,15 +954,15 @@ interface SceneVideoJob {
  *  move at all (a real, visible cause), rather than leaving "ambient
  *  motion" open to whatever the model invents to avoid a "still backdrop."
  *
- *  SCENE_VIDEO_PROMPT_CHAR_LIMIT added the same day, mirroring
- *  composeSceneImagePrompt's SCENE_IMAGE_PROMPT_CHAR_LIMIT — Seedance's
- *  video endpoint has its own documented prompt cap (`input.prompt`:
- *  3-2500 characters per docs.kie.ai/market/bytedance/seedance-1-5-pro,
- *  separate from and tighter than the image endpoint's 3000), and this
- *  function's fixed suffix + a long visual_description/shot_notes (both
- *  free text, unbounded upstream — see generateScript.ts) could exceed it
- *  the same way composeSceneImagePrompt's fixed overhead did. shotNotes is
- *  truncated before visualDescription (the actual creative brief), same
+ *  Budget: Seedance's video endpoint has its own documented prompt cap
+ *  (`input.prompt`: 3-2500 characters per
+ *  docs.kie.ai/market/bytedance/seedance-1-5-pro, separate from and
+ *  tighter than the image endpoint's 3000 — see limits.ts's
+ *  PROMPT_LIMITS.sceneVideo), and this function's fixed suffix + a long
+ *  visual_description/shot_notes (both free text, unbounded upstream —
+ *  see generateScript.ts) could exceed it the same way
+ *  composeSceneImagePrompt's fixed overhead did. shotNotes is truncated
+ *  before visualDescription (the actual creative brief), same
  *  lowest-value-first cascade as the image prompt's guard.
  *
  *  `isFinalScene` clause added 2026-09-21 — real renders showed the video
@@ -968,7 +976,6 @@ interface SceneVideoJob {
  *  something that already reads as an ending. Paired with a render-level
  *  fade-out (avMerger.ts's buildMuxCommand) as the deterministic half of
  *  this fix — this clause is the soft, model-compliance half. */
-const SCENE_VIDEO_PROMPT_CHAR_LIMIT = 2450
 
 const FINAL_SCENE_SETTLE_CLAUSE =
   ' This is the FINAL shot of the video — ease subject and camera motion into a settled, held final beat by ' +
@@ -996,10 +1003,10 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const totalLen = () =>
     visualDescription.length + (shotNotes ? 1 + shotNotes.length : 0) + suffix.length
 
-  let overflow = totalLen() - SCENE_VIDEO_PROMPT_CHAR_LIMIT
+  let overflow = totalLen() - PROMPT_LIMITS.sceneVideo
   if (overflow > 0 && shotNotes) {
     shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
-    overflow = totalLen() - SCENE_VIDEO_PROMPT_CHAR_LIMIT
+    overflow = totalLen() - PROMPT_LIMITS.sceneVideo
   }
   if (overflow > 0) {
     visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
@@ -1064,5 +1071,7 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
   parts.push(watermarkSafeZoneBlock())
   parts.push(textLayerFor(brand, job, referenceImageUrl, noTextVariantFor(brand, presence)))
 
-  return { prompt: parts.filter(Boolean).join(' '), referenceImageUrl }
+  const prompt = parts.filter(Boolean).join(' ')
+  assertNoContradiction(prompt, brand)
+  return { prompt, referenceImageUrl }
 }

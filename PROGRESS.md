@@ -1471,3 +1471,42 @@
 **⭐ Pick Up Next Session**
 - Phase 5 (Layer 4 — Guard, §4.5/§7/§12): single `PROMPT_LIMITS` config, the typed `PromptBlock` system deferred from Phase 4, priority-based dropping, and the contradiction validator. **Blocked on** verifying real per-endpoint character limits (§16.1) — the owner's stated 3,500 conflicts with the ~3000 KIE cap this code has hit live, and the Market/jobs endpoint fails far lower.
 - Still open: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.
+
+---
+
+### Session 16 — 2026-09-22 — Prompt architecture refactor, Phase 5: Guard (Layer 4)
+
+**Developer:** Pri
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+
+*Ask: `PROMPT_REFACTOR_BRIEF.md` §4.5/§7/§12 — one shared `PROMPT_LIMITS` config, budget enforcement everywhere it was missing, and a contradiction validator. Blocked at the end of Phase 4 on the real per-endpoint character limits (§16.1); resolved this session, not guessed.*
+
+- **Character limits verified, not guessed (§16.1 resolved)** — checked which adapter is actually wired in production today: `KieImageGenerator` (Flux Kontext dedicated endpoint, video scene images + character-ref) confirmed live at **3000 chars** ("The prompt word cannot exceed 3000 characters"); `KieVideoGenerator` (Seedance 1.5 Pro) documented at **2500 chars** (docs.kie.ai). Neither matches the owner's originally-stated 3,500 — owner confirmed to use the real numbers. New `prompts/core/limits.ts`'s `PROMPT_LIMITS` is now the one config both scene composers read from; the old local `SCENE_IMAGE_PROMPT_CHAR_LIMIT`/`SCENE_VIDEO_PROMPT_CHAR_LIMIT` constants are gone. `KieSceneImageGenerator` (the tighter, never-fully-confirmed Market-endpoint cap the original brief worried about) is confirmed dead code — production moved off it 2026-09-19 — so it gets no entry.
+- **Blog/photo budget — owner-confirmed to leave unbounded.** `NanoBananaImageGenerator` (nano-banana-2, currently serving blog hero/inline + image_post photo as a temporary test-cost measure) has no documented prompt-length limit and has never failed in production; not budgeted rather than guessed against a cap that may not even apply to that model.
+- **`composeCharacterRefPrompt` gained real budget enforcement** — it had none before Phase 5, despite sharing `KieImageGenerator`'s 3000-char cap with scene images. Single-field truncation (`regenInstructions` is its only variable input).
+- **Found and fixed a real §12 contradiction bug while doing that work** — `composeCharacterRefPrompt`'s empty-reference-pool branch fell straight to the blanket `noTextInstruction` instead of Phase 4's `noTextVariantFor` carve-out, directly contradicting the "must be built to this structure" text right next to it. Every other composer already routed through the carve-out; this one hadn't. Fixed, not just flagged.
+- **Contradiction validator** (`prompts/core/contradictions.ts`) — `assertNoContradiction(prompt, brand)` throws if a prompt asserts both "no text/logos at all" and "the unit must look like X." Wired into every image composer right before it returns. Defense-in-depth (Phase 4 already made the pairing structurally hard to construct correctly) — its value is catching a *regression*, which it did once already in this same phase.
+- **Deliberately did not build the generic `PromptBlock`-with-template-reassembly engine** — same call as Phase 4, for the same reason: free text here is interpolated into label+value templates ("Shot notes: X."), and a generic engine would need real complexity for uncertain benefit over the existing, working cascade. Re-parameterized the cascade from the shared config instead of rebuilding it.
+
+**🧪 Testing**
+- `tsc --noEmit` clean. `eslint`: 0 errors, 0 new warnings on any Phase 5 file.
+- New `contradictions.test.ts` (7 tests) — no-throw cases (no-text alone, unit-structure alone for both tiers), throw cases (both classes of pairing), error message content.
+- `compose.test.ts` gained 3 new `composeCharacterRefPrompt` tests: the contradiction-fix regression test, a worst-case budget test (real `BRAND_PROFILE`, maximally long `regenInstructions`, asserts fixed brand text survives fully intact), and a normal-length no-truncation test.
+- Full non-e2e suite: 373/373 passing (363 + 10 new).
+
+**📁 Files Changed**
+- `src/server/pipeline/prompts/core/limits.ts` — new, `PROMPT_LIMITS`
+- `src/server/pipeline/prompts/core/contradictions.ts`, `contradictions.test.ts` — new
+- `src/server/pipeline/prompts/core/compose.ts` — imports `PROMPT_LIMITS` (local char-limit constants removed), `composeCharacterRefPrompt` budget enforcement + contradiction fix, `assertNoContradiction` wired into all four image composers
+- `src/server/pipeline/prompts/core/compose.test.ts` — new `composeCharacterRefPrompt` coverage
+
+**💡 Decisions Made**
+- Real, verified per-endpoint limits win over the brief's originally-stated 3,500 — confirmed with the owner rather than silently picking either number (brief §16.1's own instruction).
+- Blog/photo images stay unbounded — owner-confirmed, since they're not on the endpoint that would need budgeting today and no documented limit exists for the one they are on.
+- Fixed the character-ref contradiction bug directly rather than just documenting that the validator would now catch it — the validator's job is to prevent *future* regressions, not to be the mechanism that ships a known bug to production with a log line.
+
+**⭐ Pick Up Next Session**
+- Phase 6 (blog image ordering — image briefs from finished copy, §9.3) or Phase 7 (video continuity research — chained reference frames, recommend-only) or Phase 8 (structural test rewrite + e2e substring-dispatch decoupling, §13).
+- Still open: owner review of §16.3/§16.6/§16.7 and the `category`/`content_angle` dropdowns' fate.

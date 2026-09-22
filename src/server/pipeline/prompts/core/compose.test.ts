@@ -807,6 +807,35 @@ describe('composeCharacterRefPrompt', () => {
     expect(ref.prompt).toContain('THE FIXED CONTAINER DESCRIPTION')
     expect(ref.prompt).not.toContain('THE FIXED IDENTITY DESCRIPTION')
   })
+
+  it('Phase 5 fix: never falls back to the blanket no-text instruction when no reference photo is configured — that would contradict its own "must be built to this structure" text (brief §12)', () => {
+    const brandWithNoPhotos: BrandProfile = { ...testBrand, referenceImages: { exterior: [], interior: [] } }
+    const ref = composeCharacterRefPrompt(brandWithNoPhotos, { pipelineId: 'pipeline-char-ref-no-photos' })
+    expect(ref.referenceImageUrl).toBeUndefined()
+    expect(ref.prompt).not.toContain('NO TEXT INSTRUCTION')
+    expect(ref.prompt).toContain("the unit's own real wordmark, exactly as described above")
+  })
+
+  it('never exceeds the real ~3000-char KieImageGenerator cap even with a maximally long regenInstructions — Phase 5: this composer had no budget enforcement at all before', () => {
+    const longText = 'make it warmer and more inviting, with softer light and a cleaner background '.repeat(30)
+    const ref = composeCharacterRefPrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-char-ref-length',
+      regenInstructions: longText,
+    })
+    expect(ref.prompt.length).toBeLessThanOrEqual(3000)
+    // The fixed structural/brand text must survive fully intact — only
+    // regenInstructions (the one variable field here) is ever truncated.
+    expect(ref.prompt).toContain('ONLY entrance')
+    expect(ref.prompt).toContain('Exactly one "Fresh CAN" wordmark total')
+  })
+
+  it('does not truncate ordinary regenInstructions at all', () => {
+    const ref = composeCharacterRefPrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-char-ref-normal',
+      regenInstructions: 'warmer lighting, slightly wider angle',
+    })
+    expect(ref.prompt).toContain('warmer lighting, slightly wider angle')
+  })
 })
 
 // Phase 1 (PROMPT_REFACTOR_BRIEF.md): containerDescriptor was restructured

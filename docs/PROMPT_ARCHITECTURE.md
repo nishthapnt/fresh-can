@@ -332,11 +332,86 @@ characters saved), which is the payoff §4.4 predicted — but the featured
 path is tighter than after Phase 1, and Phase 5's real per-endpoint limits
 are what should resolve it properly.
 
+## Phase 5 — Guard (Layer 4)
+
+### Character limits, verified not guessed (§16.1, resolved)
+
+The original brief flagged a conflict: the owner's stated 3,500-character
+limit versus whatever the real provider caps turn out to be. Verification
+(checking which adapter is actually wired in production today, not just
+what's defined) found the conflict was real, but not ambiguous:
+
+| Path | Adapter | Real limit | Source |
+|---|---|---|---|
+| Video scene images + character-ref | `KieImageGenerator` (Flux Kontext dedicated endpoint) | **3000 chars** | Confirmed live error text: "The prompt word cannot exceed 3000 characters." |
+| Scene video clips | `KieVideoGenerator` (Seedance 1.5 Pro) | **2500 chars** | Documented at docs.kie.ai/market/bytedance/seedance-1-5-pro (`input.prompt: 3-2500`). |
+| Blog hero/inline + image_post photo | `NanoBananaImageGenerator` (nano-banana-2) | unconfirmed | No documented limit found; currently unbounded, never failed in production. Owner-confirmed to leave unbounded rather than budget against a limit that may not apply to this model. |
+
+Neither confirmed number is 3,500 — the owner confirmed the real numbers
+(3000/2500) should be used instead. `prompts/core/limits.ts`'s
+`PROMPT_LIMITS` is the single config both scene composers now read from
+(`SCENE_IMAGE_PROMPT_CHAR_LIMIT`/`SCENE_VIDEO_PROMPT_CHAR_LIMIT` local
+constants are gone). One more finding folded in: `KieSceneImageGenerator`
+(the Market/jobs endpoint with the tighter, never-fully-confirmed
+~1300-char-observed cap the original brief worried about) is **dead
+code** — `video.ts`'s own comment confirms production moved off it on
+2026-09-19 because that cap kept failing ordinary scenes. It has no entry
+in `PROMPT_LIMITS`.
+
+### `composeCharacterRefPrompt` — a real bug the validator work surfaced
+
+This composer had **no budget enforcement at all** before Phase 5, despite
+sharing `KieImageGenerator`'s 3000-char cap with scene images. Fixed with a
+single-field truncation (`regenInstructions` is its only variable-length
+input — no multi-clause cascade needed).
+
+While wiring it up, a second, independent bug surfaced: its empty-reference-
+pool branch fell straight to the blanket `brand.noTextInstruction` ("no
+logos anywhere") instead of Phase 4's `noTextVariantFor` carve-out — a real
+instance of brief §12's contradiction class (this text sits right next to
+`unitBrandingBlock('featured')`'s "must be built to this structure" text).
+Every other composer already routed through `noTextVariantFor`; this one
+hadn't. Fixed as part of this phase, not left for the validator to merely
+detect.
+
+### Contradiction validator (§12)
+
+`prompts/core/contradictions.ts`'s `assertNoContradiction(prompt, brand)`
+throws `PromptContradictionError` if a prompt contains both
+`brand.noTextInstruction` (the blanket "no text/logos at all") and either
+`brand.unit.full` or `brand.unit.identity` (a "must be built to this
+structure" claim) — brief §12's own named bug class. Called by every image
+composer right before it returns (not `composeSceneVideoPrompt`, which is
+motion-only and never references the brand's unit descriptors at all).
+
+**This is defense-in-depth, not a fix for a live bug** — Phase 4's
+`unitBrandingBlock`/`noTextVariantFor` already made the contradiction
+structurally hard to construct in a *correctly-wired* composer. The value
+is catching a *regression*: exactly the class of bug the character-ref fix
+above turned out to be, if a future edit reintroduces it. It found a real
+bug once already, in this same phase.
+
+### Deliberate deviation: no generic `PromptBlock`-with-template-reassembly engine
+
+The Phase 4 brief (and the original phase plan) called for a typed
+`PromptBlock` system that composers reorganize around. Built, then set
+aside for the same reason Phase 4 set it aside: the free-text fields in
+`composeSceneImagePrompt`/`composeSceneVideoPrompt` are interpolated into
+larger label+value template strings ("Shot notes: X.", not just "X") —
+a generic block-truncation engine would either need to break that
+templating or add real complexity (partial-block truncation with prefix/
+suffix preservation) for uncertain benefit over the existing, working,
+hand-tuned cascade. Phase 5 re-parameters that cascade from the shared
+`PROMPT_LIMITS` config instead of rebuilding its mechanics — the actual
+brief asks (§7's "one config", §12's contradiction prevention) are met
+without it.
+
 ## Not yet done (later phases)
 
 - Blog's image-brief-from-finished-copy ordering change — Phase 6.
-- The typed `PromptBlock` system + per-endpoint budget config +
-  contradiction validation — Phase 5 (see the deviation note above).
 - `cast_bible` verbatim injection into per-scene image prompts (brief §9.2)
   — the plan data exists (Phase 3) but nothing reads it yet; deferred as
   its own piece of work rather than squeezed into Phase 4.
+- Structural test rewrite for `compose.test.ts`/`composeText.test.ts`'s
+  remaining phrase-pinning assertions, and the e2e substring-dispatch
+  coupling in the three `*Pipeline.e2e.test.ts` files — Phase 8 (§13).
