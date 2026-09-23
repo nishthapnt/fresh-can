@@ -241,23 +241,21 @@ export class KieSceneImageGenerator implements ImageGenerator {
  * and sceneClipDuration.ts's header for what pickClipDurationSeconds is
  * (and is no longer) used for.
  *
- * `resolution: '720p'` is set explicitly (2026-09-21) to keep Seedance's
- * per-clip cost at or below Kling's. Unlike Kling, Seedance bills by
- * resolution x duration (tokens = height x width x 24fps x duration / 1024,
- * $1.2/million tokens with audio off — derived from fal.ai's published rate
- * for the same underlying model, NOT independently confirmed against
- * kie.ai's own dashboard). At 720p a no-audio clip is roughly 47% of
- * Kling's per-clip cost at both 5s and 10s; 1080p (this pipeline's actual
- * delivery resolution, ASPECT_RATIO_RESOLUTIONS in videoResolution.ts)
- * would be roughly break-even at 5s but ~6% MORE than Kling at 10s, so it
- * doesn't reliably satisfy "same or less." The trade-off: Kling's native
- * output already landed near the 1080x1920 delivery target (so
- * SceneClipScaler only ever downscaled slightly), but Seedance at 720p
- * natively outputs ~720x1280 — below that target — so every clip now gets
- * UPSCALED to delivery resolution instead, which will look softer than
- * Kling's clips did. Watch the first real renders for visible softness
- * before assuming this trade-off is acceptable at scale; bump back to
- * `1080p` here if it isn't.
+ * `resolution: '1080p'` (2026-09-22) — this pipeline's actual delivery
+ * resolution (ASPECT_RATIO_RESOLUTIONS in videoResolution.ts). Was `720p`
+ * from 2026-09-21 as a cost lever: Seedance bills by resolution x duration
+ * (tokens = height x width x 24fps x duration / 1024, $1.2/million tokens
+ * with audio off — derived from fal.ai's published rate for the same
+ * underlying model, NOT independently confirmed against kie.ai's own
+ * dashboard), so 720p ran ~47% of Kling's per-clip cost while 1080p is
+ * roughly break-even at 5s and ~6% MORE than Kling at 10s. Moved back to
+ * 1080p because 720p forced SceneClipScaler to UPSCALE every clip to
+ * delivery resolution (visibly softer), and made that upscale pass a hard
+ * dependency on upload-post.com's FFmpeg queue, whose wait-to-start was
+ * confirmed live 2026-09-22 at ~15min for a 5-scene job (processing itself
+ * took seconds) — far past SCALE_POLL_TIMEOUT_MS. Native 1080p output
+ * already matches the delivery target (or lands within a few pixels of it),
+ * so the scale pass only ever needs a no-op/near-no-op correction.
  *
  * Reverted 2026-09-19 back from a 2026-09-17 TEST-CHEAP MODE swap to Hailuo
  * 02 Standard (`hailuo/02-image-to-video-standard`, 512P, `image_url`
@@ -292,9 +290,9 @@ export class KieVideoGenerator implements VideoGenerator {
           prompt: input.prompt,
           input_urls: [input.referenceImageUrl],
           aspect_ratio: input.aspectRatio,
-          // Cost lever, not a quality default — see this class's header for
-          // the per-resolution cost math and the upscale trade-off it buys.
-          resolution: '720p',
+          // Matches delivery resolution so no upscale is needed downstream —
+          // see this class's header for the per-resolution cost math.
+          resolution: '1080p',
           // Narration audio is composited separately at render time
           // (avMerger.ts) — this call never carries the language-specific
           // narration, so no ambient/audio track is requested here either.

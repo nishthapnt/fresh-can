@@ -113,6 +113,10 @@ export interface ImageValidationResult {
    *  something a regeneration instruction can act on (e.g. "unexplained
    *  hand on the right side of frame"), not a generic verdict. */
   issues: string[]
+  /** Defects the validator reported but that did NOT count toward a
+   *  rejection (minor severity, or not high confidence) — recorded for
+   *  observability only, never fed into a regeneration. */
+  ignoredIssues?: string[]
 }
 
 /**

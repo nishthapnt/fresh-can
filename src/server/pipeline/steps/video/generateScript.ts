@@ -169,7 +169,7 @@ function normalizeStory(value: unknown): VideoScriptStory | undefined {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-function normalizeLook(value: unknown): VideoScriptLook | undefined {
+export function normalizeLook(value: unknown): VideoScriptLook | undefined {
   if (!value || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   const out: VideoScriptLook = {}
@@ -186,7 +186,7 @@ function normalizeLook(value: unknown): VideoScriptLook | undefined {
  *  than kept with a made-up one, since a scene referencing a missing id is
  *  a safer failure mode than two different ids silently meaning the same
  *  person. */
-function normalizeCastBible(value: unknown): CastBibleEntry[] | undefined {
+export function normalizeCastBible(value: unknown): CastBibleEntry[] | undefined {
   if (!Array.isArray(value)) return undefined
   const entries: CastBibleEntry[] = []
   for (const raw of value) {

@@ -4,6 +4,7 @@ import {
   composeInlinePrompt,
   composePhotoPrompt,
   composeSceneImagePrompt,
+  composeSceneImageEditPrompt,
   composeSceneVideoPrompt,
   composeCharacterRefPrompt,
 } from './compose'
@@ -574,27 +575,49 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain('NO TEXT INSTRUCTION')
   })
 
-  it('never adds unscripted people beyond who the scene describes, regardless of unit presence', () => {
+  it('limits the frame to the people, objects, and setting the scene describes, regardless of unit presence — one positive rule, not a list of "never add X" negations', () => {
     const featured = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
     const none = composeSceneImagePrompt(testBrand, {
       ...baseJob,
       visualDescription: 'A family cooks dinner together at home.',
       shotNotes: null,
     })
-    expect(featured.prompt).toContain('no extra staff, workers, or bystanders')
-    expect(none.prompt).toContain('no extra staff, workers, or bystanders')
+    for (const { prompt } of [featured, none]) {
+      expect(prompt).toContain('Show only the people, objects, and setting this scene describes or clearly implies')
+      expect(prompt).toContain('Every visible hand belongs to one of those people, with natural anatomy')
+    }
   })
 
-  it('never adds unexplained props, vehicles, or signage beyond what the scene describes', () => {
-    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
-    expect(scene.prompt).toContain('no unexplained extras just to fill the frame')
-  })
-
-  it('tells the model the character-ref photo is a guide, not a literal copy — every scene reuses the same photo', () => {
-    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
-    expect(scene.prompt).toContain('only as a guide')
-    expect(scene.prompt).toContain('never as a literal photo to copy')
-    expect(scene.prompt).toContain(baseJob.visualDescription)
+  it('keeps scene-specific content (description, shot notes, cast, look) a meaningful share of the prompt — regression for a real run where the scene was only 9-12% of each prompt, the rest fixed guard text', () => {
+    // Real scene + plan values from that run (5ba554e7, scene 2).
+    const visualDescription =
+      "The student's gaze lands on a handwritten recipe note on the counter, igniting a glimmer of hope and excitement."
+    const shotNotes = 'Close-up on the note, then rack focus to her face'
+    const cast = [
+      {
+        id: 'student',
+        role: 'busy student',
+        wardrobe: 'comfortable home attire, hint of study wear',
+        age_range: '18-25',
+        appearance: 'casual, slightly disheveled hair, youthful energy',
+      },
+    ]
+    const look = { palette: 'earthy tones with pops of color', lighting: 'soft, warm', time_of_day: 'evening', style_direction: 'uplifting and homey' }
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-share-1',
+      sceneNumber: 2,
+      visualDescription,
+      shotNotes,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'none',
+      cast,
+      look,
+    })
+    const sceneSpecific = scene.prompt
+      .split(/(?<=\.) /)
+      .filter((part) => /student|recipe|rack focus|earthy|Recurring|Visual look/.test(part))
+      .join(' ').length
+    expect(sceneSpecific / scene.prompt.length).toBeGreaterThan(0.35)
   })
 
   it('includes shot notes and regen instructions when given', () => {
@@ -623,7 +646,6 @@ describe('composeSceneImagePrompt', () => {
   it('asks for real cinematographic craft as a quality floor, without dictating a specific style', () => {
     const scene = composeSceneImagePrompt(testBrand, baseJob)
     expect(scene.prompt).toContain('cinematographic craft')
-    expect(scene.prompt).toContain('elevating whatever mood or style the scene above calls for')
   })
 
   it('does not frame the scene as "a marketing video" — that framing itself primed a staged/ad look', () => {
@@ -633,8 +655,70 @@ describe('composeSceneImagePrompt', () => {
   })
 
   it('treats brand/vehicle details as a fixed constraint, never a directive on style — never the reason the scene exists', () => {
-    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, unitPresence: 'featured' })
     expect(scene.prompt).toContain('never as the reason this scene exists')
+  })
+
+  it('omits the brand-details-are-constraints clause for a unitPresence: none scene, which carries no brand details for it to govern', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).not.toContain('never as the reason this scene exists')
+  })
+
+  it("splices in the locked cast_bible description for the scene's people, right after the scene itself", () => {
+    const scene = composeSceneImagePrompt(testBrand, {
+      ...baseJob,
+      cast: [
+        {
+          id: 'student',
+          role: 'busy student',
+          age_range: '18-25',
+          appearance: 'curly dark hair, round glasses',
+          wardrobe: 'a mustard hoodie',
+        },
+      ],
+    })
+    expect(scene.prompt).toContain(
+      'the busy student (18-25, curly dark hair, round glasses, wearing a mustard hoodie)',
+    )
+    expect(scene.prompt).toContain('same face, hair, and clothing as every other scene')
+    expect(scene.prompt.indexOf('busy student')).toBeGreaterThan(scene.prompt.indexOf(baseJob.visualDescription))
+    expect(scene.prompt.indexOf('busy student')).toBeLessThan(scene.prompt.indexOf('Show only the people'))
+  })
+
+  it('adds no cast clause when the scene lists no cast', () => {
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, cast: [] })
+    expect(scene.prompt).not.toContain('Recurring people')
+  })
+
+  it("uses the plan's look instead of the neutral daylight default", () => {
+    const withLook = composeSceneImagePrompt(testBrand, {
+      ...baseJob,
+      look: { time_of_day: 'evening', lighting: 'soft, warm', palette: 'earthy tones', style_direction: 'homey' },
+    })
+    expect(withLook.prompt).toContain(
+      'Visual look shared by every scene of this video: evening; soft, warm lighting; palette: earthy tones; homey feel.',
+    )
+    expect(withLook.prompt).not.toContain('Natural daylight')
+
+    const withoutLook = composeSceneImagePrompt(testBrand, baseJob)
+    expect(withoutLook.prompt).toContain('If unspecified, default mood: Natural daylight')
+  })
+
+  it('drops the cast clause before ever truncating the scene description, and stays within budget', () => {
+    const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(30)
+    const visualDescription = `The student reads the note. ${longText}`.slice(0, 600).trimEnd()
+    const scene = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'pipeline-cast-budget',
+      sceneNumber: 2,
+      visualDescription,
+      shotNotes: longText,
+      characterRefUrl: 'https://example.com/character-ref.jpg',
+      unitPresence: 'featured',
+      cast: [{ id: 'student', role: 'student', appearance: longText, wardrobe: longText }],
+    })
+    expect(scene.prompt.length).toBeLessThanOrEqual(3000)
+    expect(scene.prompt).toContain(visualDescription)
+    expect(scene.prompt).not.toContain('Recurring people')
   })
 
   it("never exceeds KieImageGenerator's real ~3000-char prompt cap, even with a maximally long visual_description/shot_notes/regenInstructions — regression for \"The prompt word cannot exceed 3000 characters\" (confirmed live against KIE.ai, recurred 3 times before this guard was added)", () => {
@@ -678,7 +762,7 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain(shotNotes)
   })
 
-  it('includes the realistic-hands/skin guardrail when there is room for it', () => {
+  it('always includes the hands/skin realism rule — it is part of the fixed scene-contents rule now, never dropped', () => {
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-realism-1',
       sceneNumber: 1,
@@ -687,10 +771,10 @@ describe('composeSceneImagePrompt', () => {
       characterRefUrl: 'https://example.com/character-ref.jpg',
       unitPresence: 'featured',
     })
-    expect(scene.prompt).toContain('Hands must be anatomically correct')
+    expect(scene.prompt).toContain('with natural anatomy; skin looks real')
   })
 
-  it('keeps a short featured scene AND the realistic-hands guardrail within budget', () => {
+  it('keeps a short featured scene AND the hands/skin realism rule within budget', () => {
     // Measured headroom for the featured branch against the real
     // BRAND_PROFILE: the guardrail survives up to roughly 150 characters of
     // scene content. Phase 4's consolidated unit-branding block costs ~85
@@ -709,7 +793,7 @@ describe('composeSceneImagePrompt', () => {
       unitPresence: 'featured',
     })
     expect(scene.prompt).toContain(visualDescription)
-    expect(scene.prompt).toContain('Hands must be anatomically correct')
+    expect(scene.prompt).toContain('with natural anatomy; skin looks real')
     expect(scene.prompt.length).toBeLessThanOrEqual(3000)
   })
 
@@ -733,7 +817,7 @@ describe('composeSceneImagePrompt', () => {
     expect(withoutUnit.prompt.length).toBeLessThan(withUnit.prompt.length - 500)
   })
 
-  it('still drops the realistic-hands/skin guardrail (never the real scene content) once free-text content alone pushes the prompt over budget', () => {
+  it('keeps long real scene content AND the hands/skin realism rule intact', () => {
     const visualDescription =
       'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear ' +
       'doors, the parents carrying reusable bags while their two children run ahead toward the front porch, ' +
@@ -750,12 +834,48 @@ describe('composeSceneImagePrompt', () => {
     })
     expect(scene.prompt).toContain(visualDescription)
     expect(scene.prompt).toContain(shotNotes)
-    expect(scene.prompt).not.toContain('Hands must be anatomically correct')
+    expect(scene.prompt).toContain('with natural anatomy; skin looks real')
     expect(scene.prompt.length).toBeLessThanOrEqual(3000)
   })
 })
 
+describe('composeSceneImageEditPrompt', () => {
+  it('edits the rejected image itself, asking for only the flagged fix and nothing else', () => {
+    const edit = composeSceneImageEditPrompt(testBrand, {
+      rejectedImageUrl: 'https://example.com/rejected.png',
+      issues: ['disembodied hand above the counter'],
+    })
+    expect(edit.referenceImageUrl).toBe('https://example.com/rejected.png')
+    expect(edit.prompt).toContain('fix only this defect: disembodied hand above the counter.')
+    expect(edit.prompt).toContain('Keep everything else exactly as it is')
+    // Never re-sends the scene/brand structure — that invites a re-render
+    // instead of an edit.
+    expect(edit.prompt).not.toContain('THE FIXED CONTAINER DESCRIPTION')
+    expect(edit.prompt).toContain('NO TEXT INSTRUCTION')
+  })
+
+  it("keeps the vehicle's real signage when the unit is in the image", () => {
+    const edit = composeSceneImageEditPrompt(testBrand, {
+      rejectedImageUrl: 'https://example.com/rejected.png',
+      issues: ['extra person behind the counter', 'floating crate'],
+      unitPresence: 'featured',
+    })
+    expect(edit.prompt).toContain('fix only these defects: extra person behind the counter; floating crate.')
+    expect(edit.prompt).toContain('NO NEW TEXT INSTRUCTION')
+  })
+})
+
 describe('composeSceneVideoPrompt', () => {
+  it("holds the plan's lighting steady when a look is given, and adds nothing without one", () => {
+    const withLook = composeSceneVideoPrompt({
+      visualDescription: 'X',
+      shotNotes: null,
+      look: { lighting: 'soft, warm', time_of_day: 'evening' },
+    })
+    expect(withLook).toContain("Keep the frame's soft, warm, evening lighting and color steady for the whole shot")
+    expect(composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })).not.toContain("Keep the frame's")
+  })
+
   it('includes the visual description and shot notes', () => {
     const prompt = composeSceneVideoPrompt({
       visualDescription: 'A family unloading groceries from the Fresh-CAN truck at dusk',

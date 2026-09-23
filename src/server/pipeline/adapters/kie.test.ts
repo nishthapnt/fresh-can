@@ -129,7 +129,7 @@ describe('KieImageGenerator (Flux Kontext — docs.kie.ai)', () => {
 })
 
 describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/market)', () => {
-  it('submit() sends model=bytedance/seedance-1.5-pro with the scene image in input_urls, resolution=720p, and generate_audio=false', async () => {
+  it('submit() sends model=bytedance/seedance-1.5-pro with the scene image in input_urls, resolution=1080p, and generate_audio=false', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       capturedBody = init?.body as string
@@ -154,7 +154,7 @@ describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/mar
         prompt: 'the truck pulls up to the curb',
         input_urls: ['https://example.com/scene-1.png'],
         aspect_ratio: '9:16',
-        resolution: '720p',
+        resolution: '1080p',
         generate_audio: false,
         duration: 5,
       },

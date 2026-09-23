@@ -6,7 +6,14 @@
 // This is what makes the container/logo look the same across every image
 // that includes it, and what makes reference-image usage automatic instead
 // of something every call site has to remember to wire up.
-import type { BrandProfile, BrandReferenceImage, ImageStyle, SceneVisualState } from '../types'
+import type {
+  BrandProfile,
+  BrandReferenceImage,
+  CastBibleEntry,
+  ImageStyle,
+  SceneVisualState,
+  VideoScriptLook,
+} from '../types'
 import { pickDeterministic } from './rotation'
 import { SAFE_ZONE_RADIUS_FRACTION } from '../../lib/watermarkGeometry'
 import { PROMPT_LIMITS } from './limits'
@@ -401,95 +408,29 @@ const GENERIC_DOCUMENTARY_HINT =
   'Photorealistic documentary-style photo capturing a genuine, specific moment relevant to the topic above ' +
   '— real people, real food, or a real neighbourhood setting as appropriate. Natural lighting.'
 
-// Added 2026-09-19 after a real video generation depicted people gathered
-// and eating dinner in the middle of a road — composeVideoScriptSystemPrompt
-// now carries the primary fix (a plausibility constraint at scene-planning
-// time, before visual_description is ever written), but this is a second
-// line of defense at image-render time, the same layered-constraint pattern
-// FOOD_MUST_LOOK_CLEAN already uses: if a scene's visual_description is
-// ever ambiguous enough to admit an implausible reading, this catches it
-// here too instead of depending on the script step alone.
-// Tightened 2026-09-19 — see REFERENCE_IS_GUIDE_NOT_COPY's comment above
-// for why (composeSceneImagePrompt's overall length, KieImageGenerator's
-// real 3000-char cap). Kept the exact scenario named, since specificity is
-// what makes a constraint like this land rather than read as generic
-// boilerplate.
-// Shortened 2026-09-19 (same rule, only connecting prose cut) to make room
-// for NO_UNSCRIPTED_PEOPLE/the containerDescriptor customer-window addition
-// without exceeding KieImageGenerator's real ~3000-char cap — see
-// REFERENCE_IS_GUIDE_NOT_COPY's comment above for that cap's history. Kept
-// both anchor phrases ('physically plausible and safe' / 'middle of a
-// road') exactly, since compose.test.ts asserts on them directly.
-const PHYSICALLY_PLAUSIBLE_SCENE =
-  'The setting must be physically plausible and safe — never implausible or unsafe, like people eating in ' +
-  'the middle of a road.'
+// Scene-image guardrails, consolidated 2026-09-23. These used to be five
+// separate constants (PHYSICALLY_PLAUSIBLE_SCENE, CINEMATIC_QUALITY,
+// NO_UNSCRIPTED_PEOPLE, NO_UNEXPLAINED_PROPS, REALISTIC_PEOPLE — see git
+// history for each one's incident notes), mostly phrased as "never/do not
+// add X". Measured on a real post-refactor run (5ba554e7): the scene's own
+// visual_description was only 9-12% of each ~1850-2130 char prompt, the
+// rest fixed guard text — and image models weight that boilerplate heavily
+// against the one sentence that says what to draw, while "no extra hands /
+// people" style negations can prime the very thing they forbid (consistent
+// with the vision gate's dominant "unexplained hand" rejection). One
+// positive statement of what belongs in frame covers the same four
+// incident classes (implausible setting, unscripted people, invented
+// props, bad hands/skin) in a fraction of the length. Kept 'physically
+// plausible and safe' / 'middle of a road' — the specific named scenario
+// is what makes the plausibility rule land.
+const SCENE_CONTENTS_RULE =
+  'Show only the people, objects, and setting this scene describes or clearly implies, in a physically ' +
+  'plausible and safe setting (never, e.g., people eating in the middle of a road). Every visible hand ' +
+  'belongs to one of those people, with natural anatomy; skin looks real.'
 
-// Added 2026-09-19 — a production-value QUALITY floor, not a style
-// dictate: SCENE_IS_CREATIVE_BRIEF already forbids dictating overall
-// mood/style/composition (that's the scene description's call alone), but
-// nothing was asking for basic cinematographic craft — framing, depth,
-// lighting quality — regardless of which style the scene actually picks.
-// Worded as elevating whatever style is already specified, never
-// replacing it, the same "constraint on quality, never on creative
-// direction" pattern FOOD_MUST_LOOK_CLEAN already uses.
-// Shortened 2026-09-19, same reason/anchors kept as PHYSICALLY_PLAUSIBLE_SCENE
-// above.
-const CINEMATIC_QUALITY =
-  'Shot with real cinematographic craft — framing, depth of field, lighting — elevating whatever mood or ' +
-  'style the scene above calls for, never a flat, snapshot-like composition.'
-
-// Added 2026-09-19 after a real video scene (family browsing inside the
-// unit) showed an unscripted person already inside restocking shelves —
-// nothing was telling the model to stick to the cast the scene's own
-// visual_description actually called for.
-const NO_UNSCRIPTED_PEOPLE =
-  'Do not add people beyond who the scene above describes — no extra staff, workers, or bystanders.'
-
-// Added 2026-09-19 alongside the video-script-level version of this same
-// rule (composeVideoScriptSystemPrompt) — a second line of defense at
-// image-render time, same layered-constraint pattern as
-// PHYSICALLY_PLAUSIBLE_SCENE/FOOD_MUST_LOOK_CLEAN: even a well-planned scene
-// description can leave an image model free to fill visual gaps with
-// plausible-looking invented objects (a random vehicle, sign, or prop) that
-// have nothing to do with the actual story.
-const NO_UNEXPLAINED_PROPS =
-  'Do not add props, vehicles, signage, or background objects beyond what the scene above describes or ' +
-  'clearly implies — no unexplained extras just to fill the frame.'
-
-// Added 2026-09-21 — guards against the two most common AI-image rendering
-// artifacts (malformed hands, uncanny/synthetic-looking skin), neither of
-// which the existing guardrails above cover: those are all about scene
-// LOGIC (what's in frame, whether it's plausible), never about whether a
-// person the scene DOES call for renders like a real photo.
-//
-// Deliberately NOT in fixedParts below (unlike every other guardrail
-// here) — real measurement showed composeSceneImagePrompt's fixed overhead
-// was already within single-digit characters of KIE's 3000 cap for a
-// perfectly ordinary scene, so protecting this unconditionally would have
-// truncated real scene content on nearly every generation. This is a
-// quality nice-to-have, not a correctness/safety constraint the way
-// FOOD_MUST_LOOK_CLEAN or PHYSICALLY_PLAUSIBLE_SCENE are — so it's the
-// FIRST thing the truncation cascade below drops when a scene runs long,
-// included only when there's genuinely room. Kept intentionally short for
-// exactly this reason: every character here is a character less available
-// for real scene content on borderline-length scenes.
-// Extended 2026-09-22 (still the same droppable, quality-not-safety tier —
-// see this constant's own history just above) to also cover the visual-
-// consistency failure modes a well-planned scene can still produce:
-// unexplained/disembodied hands (the single most common defect — an object
-// being "placed" or "held" with no established owner named), duplicate
-// people, and floating objects. Kept in ONE constant with the existing
-// hands/skin guardrail rather than as a separate fixedParts addition —
-// fixedLen is already within single-digit characters of real headroom (see
-// limits.ts's PROMPT_LIMITS.sceneImage), so a new unconditional
-// clause would truncate real scene content on nearly every generation;
-// this only costs headroom on the same borderline-length scenes the
-// existing hands/skin guardrail already sometimes drops for.
-const REALISTIC_PEOPLE =
-  'Hands must be anatomically correct — never extra or missing fingers — and every visible hand or arm must ' +
-  'clearly belong to an already-established person in the scene, never unexplained or disembodied; skin must ' +
-  'look real, not synthetic. Only depict entities the scene establishes or clearly implies — never a ' +
-  'duplicate of an established person or a floating, unexplained object.'
+// A production-value quality floor, not a style dictate — the scene's own
+// description still decides mood/style/composition (SCENE_IS_CREATIVE_BRIEF).
+const CINEMATIC_QUALITY = 'Real cinematographic craft: deliberate framing, depth of field, and lighting.'
 
 // Added 2026-09-19 after a real character-ref generation (the ONE shared
 // reference every scene in a pipeline then edits from) showed a duplicate,
@@ -753,6 +694,58 @@ interface SceneImageJob {
    *  when food isn't actually present costs nothing but a few characters. */
   unitPresence?: UnitPresence
   containsFood?: boolean
+  /** The cast_bible entries for the people THIS scene lists in its
+   *  cast_present (Layer 2, generateScript.ts) — the caller does the
+   *  filtering. Spliced in as a locked physical description so a
+   *  recurring person looks the same in every scene: most scenes are pure
+   *  text-to-image (unitPresence 'none' attaches no reference image), so
+   *  without this each scene re-invents the person from scratch. Omitted
+   *  or empty adds nothing — never adds a person the scene doesn't list. */
+  cast?: readonly CastBibleEntry[]
+  /** The script's pipeline-level `look` (Layer 2) — replaces the neutral
+   *  daylight mood default, so every scene shares the planned lighting/
+   *  time of day/palette instead of a hardcoded one that can contradict
+   *  it. Omitted falls back to moodClause()'s default. */
+  look?: VideoScriptLook | null
+}
+
+// Per-field cap for plan-derived free text spliced into the scene prompts
+// below — LLM-authored, unbounded upstream, so each field is bounded here
+// rather than letting one verbose field eat the scene's own budget.
+const PLAN_FIELD_MAX_CHARS = 120
+
+/** The planned look, rendered as one sentence shared by every scene of a
+ *  video. Falls back to moodClause()'s neutral default when the plan has
+ *  no usable look fields (a legacy script, or the model omitted it). */
+export function sceneLookClause(look: VideoScriptLook | null | undefined): string {
+  const field = (v: string | undefined) => (v?.trim() ? truncateToFit(v.trim(), PLAN_FIELD_MAX_CHARS) : '')
+  const bits = [
+    field(look?.time_of_day),
+    look?.lighting?.trim() ? `${field(look.lighting)} lighting` : '',
+    look?.palette?.trim() ? `palette: ${field(look.palette)}` : '',
+    look?.style_direction?.trim() ? `${field(look.style_direction)} feel` : '',
+  ].filter(Boolean)
+  if (bits.length === 0) return moodClause()
+  return `Visual look shared by every scene of this video: ${bits.join('; ')}.`
+}
+
+/** Locked physical descriptions for the people in this scene — see
+ *  SceneImageJob.cast. Capped at 4 people; a scene with more named cast
+ *  than that is already beyond what one image renders reliably. */
+function castClause(cast: readonly CastBibleEntry[] | undefined): string {
+  if (!cast || cast.length === 0) return ''
+  const field = (v: string | undefined) => (v?.trim() ? truncateToFit(v.trim(), PLAN_FIELD_MAX_CHARS) : '')
+  const people = cast.slice(0, 4).map((c) => {
+    const details = [
+      field(c.age_range),
+      field(c.appearance),
+      c.wardrobe?.trim() ? `wearing ${field(c.wardrobe)}` : '',
+      field(c.distinguishing_details),
+    ].filter(Boolean)
+    const name = field(c.role) || c.id
+    return details.length > 0 ? `the ${name} (${details.join(', ')})` : `the ${name}`
+  })
+  return `Recurring people — render each exactly like this, same face, hair, and clothing as every other scene: ${people.join('; ')}.`
 }
 
 /**
@@ -760,7 +753,7 @@ interface SceneImageJob {
  * visual_state — "use the previous scene's compact visual state as
  * context" for scene-to-scene continuity. Deliberately built from just a
  * people count and a short object list, never the full scene, and kept in
- * the SAME droppable cascade tier as REALISTIC_PEOPLE below (never
+ * the FIRST-dropped tier of the cascade below (never
  * fixedParts — see limits.ts's PROMPT_LIMITS.sceneImage for why
  * fixedParts has essentially no headroom left to spend). Returns '' when
  * there's nothing worth carrying forward (scene 1, or a previous scene
@@ -808,67 +801,56 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   const unitPresence = job.unitPresence ?? 'none'
   const showSubject = unitPresence !== 'none'
   const containsFood = job.containsFood ?? true
+  const look = sceneLookClause(job.look)
 
   // Everything below is a fixed brand/safety constraint sent in full,
   // always — see limits.ts's PROMPT_LIMITS.sceneImage for why these can
-  // never be the thing that gets cut when a prompt runs long. REALISTIC_PEOPLE
-  // is deliberately NOT in this list — see the cascade below for why.
-  // FOOD_MUST_LOOK_CLEAN is now genuinely conditional (brief §4.4's own
-  // example) rather than always-on — containsFood defaults to true when
-  // unknown, so this only ever omits the guard when the plan positively
-  // says there's no food in frame.
+  // never be the thing that gets cut when a prompt runs long.
+  // FOOD_MUST_LOOK_CLEAN is genuinely conditional (brief §4.4's own
+  // example) — containsFood defaults to true when unknown, so this only
+  // ever omits the guard when the plan positively says there's no food in
+  // frame. SCENE_IS_CREATIVE_BRIEF only matters when brand details are
+  // actually in the prompt (it tells the model those are constraints, not
+  // the point) — a 'none' scene carries no brand details for it to govern.
   const fixedParts = [
-    moodClause(),
+    look,
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
-    PHYSICALLY_PLAUSIBLE_SCENE,
+    SCENE_CONTENTS_RULE,
     CINEMATIC_QUALITY,
-    NO_UNSCRIPTED_PEOPLE,
-    NO_UNEXPLAINED_PROPS,
-    SCENE_IS_CREATIVE_BRIEF,
+    showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
     unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
     showSubject ? brand.noNewTextInstruction : noTextVariantFor(brand, unitPresence),
   ].filter(Boolean)
   const fixedLen = fixedParts.join(' ').length
 
-  // The only free text in this prompt — LLM-generated (visualDescription/
-  // shotNotes) or user-typed (regenInstructions) — and so the only part
-  // that can grow past what fixedParts leaves room for. Cascading
-  // truncation, lowest-value first: REALISTIC_PEOPLE (a quality nice-to-have
-  // added 2026-09-21 — unlike everything in fixedParts above, it's not
-  // preventing actively wrong/unsafe content, just improving rendering
-  // quality, so it's the first thing dropped rather than eating into the
-  // scene's own content — real measurement showed its fixed cost alone
-  // left almost no room for a typical scene otherwise), then
-  // regenInstructions (a refinement on an already-generated scene), then
-  // shotNotes (secondary cinematography detail), then — only as a last
-  // resort — visualDescription itself, since it's the actual creative
-  // brief the scene is built around.
+  // The free text in this prompt — LLM-generated (visualDescription/
+  // shotNotes/cast/continuity) or user-typed (regenInstructions) — and so
+  // the only parts that can grow past what fixedParts leaves room for.
+  // Cascading truncation, lowest-value first: continuity (an enhancement
+  // on top of SCENE_CONTENTS_RULE, never the only thing enforcing
+  // consistency), then regenInstructions (a refinement on an already-
+  // generated scene), then shotNotes (secondary cinematography detail),
+  // then the cast descriptions (dropped whole, never half a person), and —
+  // only as a last resort — visualDescription itself, since it's the actual
+  // creative brief the scene is built around.
   let visualDescription = job.visualDescription
   let shotNotes = job.shotNotes ?? ''
   let regenInstructions = job.regenInstructions ?? ''
-  let includeRealismClause = true
+  let cast = castClause(job.cast)
   let continuityClause = continuityClauseFrom(job.previousVisualState)
 
   const totalLen = () =>
     fixedLen +
-    1 + // join space between the scene/shotNotes block and fixedParts, always present
+    1 + // join space between the scene block and fixedParts, always present
     `Scene ${job.sceneNumber}: ${visualDescription}`.length +
     (shotNotes ? 1 + `Shot notes: ${shotNotes}.`.length : 0) +
+    (cast ? 1 + cast.length : 0) +
     (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) +
-    (includeRealismClause ? 1 + REALISTIC_PEOPLE.length : 0) +
     (continuityClause ? 1 + continuityClause.length : 0)
 
   let overflow = totalLen() - PROMPT_LIMITS.sceneImage
-  if (overflow > 0 && includeRealismClause) {
-    includeRealismClause = false
-    overflow = totalLen() - PROMPT_LIMITS.sceneImage
-  }
   if (overflow > 0 && continuityClause) {
-    // Second to drop — a real scene-to-scene continuity aid, but still an
-    // enhancement on top of the always-present NO_UNSCRIPTED_PEOPLE/
-    // NO_UNEXPLAINED_PROPS constraints above, never the only thing
-    // enforcing consistency.
     continuityClause = ''
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
@@ -880,6 +862,10 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
+  if (overflow > 0 && cast) {
+    cast = ''
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
   if (overflow > 0) {
     visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
   }
@@ -887,32 +873,22 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   const parts = [
     // Dropped "of a marketing video" (2026-09-19) — that framing itself
     // primed the model toward a polished, staged ad look before it even
-    // read the scene content. The actual creative brief now lives upstream
-    // in the script/scene plan's own visual_description (see
-    // composeVideoScriptSystemPrompt's sceneNotes/anti-ad handling) — this
-    // composer just needs to render it faithfully, not re-frame it as an ad.
+    // read the scene content. The actual creative brief lives upstream in
+    // the script/scene plan's own visual_description — this composer just
+    // needs to render it faithfully, not re-frame it as an ad.
     `Scene ${job.sceneNumber}: ${visualDescription}`,
     shotNotes ? `Shot notes: ${shotNotes}.` : '',
+    // Right after the scene itself — who is in frame is part of what to
+    // draw, not a trailing constraint.
+    cast,
     continuityClause,
-    // Same mood per pipeline (not per scene) — keeps lighting/atmosphere
-    // consistent across all of one video's scenes, same reasoning as
-    // composeBlogImage's hero/inline pairing. Deferential (moodClause, not
-    // moodDetailFor directly) since job.visualDescription/shotNotes may
-    // already specify their own lighting — see moodClause's own comment.
-    moodClause(),
+    // Same look per pipeline (not per scene) — keeps lighting/atmosphere
+    // consistent across all of one video's scenes.
+    look,
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
-    PHYSICALLY_PLAUSIBLE_SCENE,
+    SCENE_CONTENTS_RULE,
     CINEMATIC_QUALITY,
-    NO_UNSCRIPTED_PEOPLE,
-    NO_UNEXPLAINED_PROPS,
-    includeRealismClause ? REALISTIC_PEOPLE : '',
-    // Same instruction blog/photo images use (SCENE_IS_CREATIVE_BRIEF) —
-    // added 2026-09-19. Without this the model has nothing pushing back
-    // against reference-photo edit-mode's own bias toward a clean,
-    // product-hero treatment of the vehicle instead of treating it as just
-    // one constrained element in whatever moment visualDescription
-    // actually describes.
-    SCENE_IS_CREATIVE_BRIEF,
+    showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
   ]
 
   // unitBrandingBlock covers all three presence levels (featured/
@@ -936,13 +912,49 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // text-to-image generation, so edit-mode's own bias toward
     // incorporating its input (the truck photo) can never pull the truck
     // into a scene that was never about it in the first place.
-    parts.push(brand.noTextInstruction)
+    parts.push(noTextVariantFor(brand, unitPresence))
   }
   if (regenInstructions) parts.push(`${regenInstructions}.`)
 
   const prompt = parts.filter(Boolean).join(' ')
   assertNoContradiction(prompt, brand)
   return { prompt, referenceImageUrl }
+}
+
+interface SceneImageEditJob {
+  /** The rejected image itself — becomes the Flux Kontext edit source. */
+  rejectedImageUrl: string
+  /** The vision gate's blocking issues for that image. */
+  issues: readonly string[]
+  unitPresence?: UnitPresence
+}
+
+/**
+ * Targeted-fix prompt for a validation-driven retry (generateSceneVisual.ts).
+ * Before this (2026-09-23), a rejected scene image was "retried" by
+ * regenerating from scratch — the character-ref (or nothing) as the edit
+ * source, plus a "preserve everything else exactly as already generated"
+ * sentence the model had no way to honour, since it never saw the image it
+ * was meant to preserve. Real data: the same defect usually came straight
+ * back. Flux Kontext is an image-EDIT model, so the retry now hands it the
+ * rejected image and asks for exactly the fix — everything the image got
+ * right (people, framing, the unit if present) carries over for free.
+ * Deliberately short: the scene description and brand structure are
+ * already baked into the input image, so re-sending them would only invite
+ * the model to re-render instead of edit.
+ */
+export function composeSceneImageEditPrompt(brand: BrandProfile, job: SceneImageEditJob): ImageComposition {
+  const unitPresence = job.unitPresence ?? 'none'
+  const issues = job.issues.map((i) => truncateToFit(i, PLAN_FIELD_MAX_CHARS)).slice(0, 5)
+  const parts = [
+    `Edit this image to fix only ${issues.length === 1 ? 'this defect' : 'these defects'}: ${issues.join('; ')}.`,
+    'Keep everything else exactly as it is — the same people, faces, clothing, poses, objects, composition, ' +
+      'framing, lighting, and colors. Every visible hand belongs to a person in the image, with natural anatomy.',
+    unitPresence === 'none' ? noTextVariantFor(brand, 'none') : brand.noNewTextInstruction,
+  ]
+  const prompt = parts.join(' ')
+  assertNoContradiction(prompt, brand)
+  return { prompt, referenceImageUrl: job.rejectedImageUrl }
 }
 
 interface SceneVideoJob {
@@ -953,6 +965,10 @@ interface SceneVideoJob {
    *  function's own header for why the "abrupt ending" bug is really a
    *  motion problem, not just a script/pacing one. */
   isFinalScene?: boolean
+  /** The script's pipeline-level look — when present, the clip is told to
+   *  hold the frame's planned lighting steady instead of drifting (see
+   *  SceneImageJob.look for where the frame itself gets that look). */
+  look?: VideoScriptLook | null
 }
 
 /** Prompt for Seedance 1.5 Pro image-to-video (adapters/kie.ts's
@@ -986,7 +1002,7 @@ interface SceneVideoJob {
  *  no steam/wind/fabric of its own, and solid objects sitting in frame
  *  (produce, packaged goods) were the most visually salient thing left to
  *  move — this is the video-motion equivalent of the image prompt's
- *  PHYSICALLY_PLAUSIBLE_SCENE constraint, which has no counterpart here.
+ *  SCENE_CONTENTS_RULE plausibility constraint, which has no counterpart here.
  *  Now explicitly scopes which motion is allowed (steam, smoke, wind on
  *  hair/fabric/leaves, water, shifting light — all passive/environmental)
  *  and states the rule a static object must pass before it's allowed to
@@ -1021,6 +1037,14 @@ const FINAL_SCENE_SETTLE_CLAUSE =
   'the end of the shot rather than staying in active movement right up to the cut; the last moment on screen ' +
   'should already read as an ending, not get cut off mid-motion.'
 
+function lookHoldClause(look: VideoScriptLook | null | undefined): string {
+  const bits = [look?.lighting, look?.time_of_day]
+    .map((v) => (v?.trim() ? truncateToFit(v.trim(), PLAN_FIELD_MAX_CHARS) : ''))
+    .filter(Boolean)
+  if (bits.length === 0) return ''
+  return ` Keep the frame's ${bits.join(', ')} lighting and color steady for the whole shot — no lighting shifts.`
+}
+
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
@@ -1034,6 +1058,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
     'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
     'a new person, limb, or object that was not already in that frame.' +
+    lookHoldClause(job.look) +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
   let visualDescription = job.visualDescription

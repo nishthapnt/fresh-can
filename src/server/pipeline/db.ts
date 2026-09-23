@@ -452,6 +452,82 @@ export async function getLastFailedStepErrorMessage(
   return (data?.error_message as string | null) ?? null
 }
 
+/** Same lookup as getLastFailedStepErrorMessage, plus that attempt's
+ *  output_snapshot — used by generateSceneVisual.ts to recover a
+ *  validation-rejected image's URL so the retry can edit it instead of
+ *  regenerating from scratch. */
+export async function getLastFailedStepAttempt(
+  client: SupabaseClient,
+  scope: StepScope,
+  stepName: string,
+  generation: number,
+): Promise<{ errorMessage: string | null; outputSnapshot: unknown } | null> {
+  const query = scopedQuery(
+    client
+      .from('pipeline_steps')
+      .select('error_message, output_snapshot')
+      .eq('step_name', stepName)
+      .eq('generation', generation)
+      .eq('status', 'failed_retryable')
+      .order('created_at', { ascending: false })
+      .limit(1),
+    scope,
+  )
+  const { data, error } = await query.maybeSingle()
+  if (error) throw error
+  if (!data) return null
+  return { errorMessage: (data.error_message as string | null) ?? null, outputSnapshot: data.output_snapshot ?? null }
+}
+
+/** The video pipeline's shared script/plan blob (content_drafts.draft_data,
+ *  written by upsertVideoScriptDraft) — null if the draft row is missing.
+ *  Read by generateSceneVisual.ts for the plan-level look/cast_bible. */
+export async function getVideoPlanDraftData(
+  client: SupabaseClient,
+  contentPipelineId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await client
+    .from('content_drafts')
+    .select('draft_data')
+    .eq('content_pipeline_id', contentPipelineId)
+    .eq('content_type', 'video')
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  const draftData = data?.draft_data
+  return draftData && typeof draftData === 'object' ? (draftData as Record<string, unknown>) : null
+}
+
+/**
+ * How many failed_retryable attempts of `stepName` at `generation` carry an
+ * error_message starting with `prefix` — used by generateSceneVisual.ts to
+ * give validation-driven regenerations their OWN small budget, separate
+ * from the provider-failure budget (MAX_ATTEMPTS.kie) they'd otherwise
+ * share. `prefix` is matched literally (LIKE wildcards escaped).
+ */
+export async function countFailedStepAttemptsWithPrefix(
+  client: SupabaseClient,
+  scope: StepScope,
+  stepName: string,
+  generation: number,
+  prefix: string,
+): Promise<number> {
+  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`)
+  const query = scopedQuery(
+    client
+      .from('pipeline_steps')
+      .select('id', { count: 'exact', head: true })
+      .eq('step_name', stepName)
+      .eq('generation', generation)
+      .eq('status', 'failed_retryable')
+      .like('error_message', `${escaped}%`),
+    scope,
+  )
+  const { count, error } = await query
+  if (error) throw error
+  return count ?? 0
+}
+
 export async function recordStepAttempt(
   client: SupabaseClient,
   input: {

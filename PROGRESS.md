@@ -1647,3 +1647,47 @@
 - All 9 phases of `PROMPT_REFACTOR_BRIEF.md` are now complete.
 - Independently of the phase sequence: `cast_bible` verbatim injection into scene-image prompts (Phase 7's recommended follow-up).
 - Still open, unactioned: owner review of §16.3 (reference-photo pre-correction), §16.6 (interior counter/sink wording), §16.7 (2018 statistic), the `category`/`content_angle` dropdowns' fate, and the per-track `has_inline_image` reconciliation (Session 17).
+
+---
+
+### 2026-09-23 — Scene-image QA gate credit-waste investigation (plan only, no code changed)
+**Tool:** ✅ Claude Code CLI
+
+**✅ Completed**
+- Measured the OpenAI vision QA gate on video scene images (`OpenAIImageValidator`, `generateSceneVisual.ts` `runSceneImageStep`) from `pipeline_steps`: it rejected 54 paid KIE images across 18 scenes. 8 of those scenes used up the retry budget and were accepted anyway with the same issue; only 7 passed after a retry.
+- Root causes: false positives ("unexplained hand" on scenes that involve hands, like tapping a phone, cooking, or reading a note); gpt-4o-mini; a retry prompt that says "preserve what was generated" when the retry is actually a fresh generation from the character ref; validation retries sharing the 5-attempt KIE budget.
+
+**✅ Implemented (steps 1+2 of the plan)**
+- Validation retries now have their own budget: `MAX_VALIDATION_RETRIES = 1` in `generateSceneVisual.ts`, counted with the new `countFailedStepAttemptsWithPrefix` helper in `db.ts`. `MAX_ATTEMPTS.kie = 5` now covers only genuine provider failures. Worst case per scene drops from 5 KIE images to 2.
+- `OpenAIImageValidator` changes: moved from gpt-4o-mini to gpt-4o; the prompt now explicitly allows hands and people the scene implies; the response is now `{ issues: [{ text, severity, confidence }] }` and only a blocking, high-confidence issue rejects. Everything else goes to `ignoredIssues`, recorded as `validationIgnoredIssues` in the step's `output_snapshot`.
+- Tests: 6 new `OpenAIImageValidator` unit tests, plus an e2e test showing an always-rejecting validator costs exactly 1 extra KIE image per scene. Unit suite 402/402, video e2e 20/20.
+
+**⭐ Next steps**
+- Plan step 3: make the validation retry an edit of the rejected image rather than a fresh image. Step 4: hand-anatomy prompt block. Step 5: keep the best candidate.
+- Watch `validationIgnoredIssues` on the next real runs to confirm the new rejection bar isn't letting real defects through.
+
+---
+
+### 2026-09-23 — Why the prompt refactor didn't visibly improve video (analysis only, no code changed)
+- Rebuilt the real scene prompts for post-refactor run `5ba554e7`. Only 9–12% of each scene-image prompt (~1850–2130 chars) is the scene itself; the rest is fixed constraints.
+- Phase 3's `cast_bible` and `look` are generated and stored but never read by `composeSceneImagePrompt` or `composeSceneVideoPrompt`. `moodClause()` still sends the neutral daylight default even when `look` says evening/warm.
+- Every scene in that run had `unit_presence = none`, so there was no reference image: 5 independent text-to-image generations with no description of the recurring student.
+- ⭐ Next: wire `cast_bible` (for `cast_present`) and `look` into the scene image/video composers, and trim the fixed boilerplate.
+
+### 2026-09-22 — Scene clip "downscale poll timed out": root cause + Seedance → 1080p
+- Root cause confirmed live on job `bd268a7e`: all 5 upload-post.com scale jobs sat `queued` ~15 min before starting, then finished in seconds. `SCALE_POLL_TIMEOUT_MS` (3 min) assumes near-instant start, so every attempt timed out. The poll interval is not the cause.
+- 720p Seedance meant the "downscale" was actually a 720→1080 upscale. Switched `KieVideoGenerator` to `resolution: '1080p'` (`adapters/kie.ts`, test updated). Costs about 6% more than Kling per 10s clip.
+- ⭐ Next: skip the upload-post scale job when the native clip already matches the target dims (or fold `scale=` into the duration-match pass). Also make upload-post waits queue-aware: a long budget while `queued`, the short timeout only once `started`. Not done yet because `generateSceneVisual.ts` was being edited by another session.
+
+---
+
+### 2026-09-23 — Plan wiring, guard consolidation, edit-mode validation retry
+**✅ Completed**
+- **Cast + look wired in.** `generateSceneVisual.ts` now loads the script draft's `look`/`cast_bible` once per run (`getVideoPlanDraftData` in `db.ts`). `composeSceneImagePrompt` adds locked descriptions for the people in each scene's `cast_present` and uses the plan's look instead of the daylight default (`sceneLookClause`). `composeSceneVideoPrompt` holds the planned lighting steady.
+- **Guard text consolidated.** Five scene-image guard constants (PHYSICALLY_PLAUSIBLE_SCENE, NO_UNSCRIPTED_PEOPLE, NO_UNEXPLAINED_PROPS, REALISTIC_PEOPLE, the old CINEMATIC_QUALITY) became one positive `SCENE_CONTENTS_RULE` plus a short `CINEMATIC_QUALITY`. SCENE_IS_CREATIVE_BRIEF is now sent only when the unit is shown. Fixed overhead dropped by about 880 chars for `none` scenes and about 590 for `featured`. On a real scene, scene-specific content went from about 12% to 37% of the prompt.
+- **Credit plan step 3.** A validation retry now edits the rejected image (`composeSceneImageEditPrompt`, with the rejected image as the Kontext input) instead of regenerating from scratch. Scene images are stored per generation and attempt (`scene-N-image-g{gen}-a{attempt}.png`), and the rejected image's URL and issues are saved in the failed step's `output_snapshot` (`getLastFailedStepAttempt`). Older rows fall back to the regenInstructions correction.
+- **Tests.** Unit suite 409/409, video e2e 21/21. New e2e tests cover plan wiring and edit-mode retries. M5 got its own 120s timeout: it measured about 47s on the baseline, already over the 45s default.
+
+**⭐ Next steps**
+- Real dashboard run: check that the student looks the same across scenes, the lighting matches the plan, and edit-mode retries actually fix the flagged defect.
+- Credit plan step 5 (keep the best candidate) is still open.

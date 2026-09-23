@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ImageGenerator, VideoGenerator, SceneClipScaler, ImageValidator } from '../../adapters/types'
+import type {
+  ImageGenerator,
+  VideoGenerator,
+  SceneClipScaler,
+  ImageValidator,
+  ImageValidationResult,
+} from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
 import type { VideoStorageUploader } from '../../adapters/storage'
 import {
@@ -11,7 +17,9 @@ import {
   getVisualAssets,
   getVideoScenes,
   isPipelineFailed,
-  getLastFailedStepErrorMessage,
+  getLastFailedStepAttempt,
+  getVideoPlanDraftData,
+  countFailedStepAttemptsWithPrefix,
   type PipelineRow,
   type VideoSceneRow,
   type VisualAssetRow,
@@ -19,11 +27,24 @@ import {
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
 import { ASPECT_RATIO_RESOLUTIONS } from '../../lib/videoResolution'
 import { pickClipDurationSeconds } from '../../lib/sceneClipDuration'
-import { BRAND_PROFILE, composeSceneImagePrompt, composeSceneVideoPrompt } from '../../prompts/index'
-import { extractVisualState, extractSceneLayer2Fields } from './generateScript'
+import {
+  BRAND_PROFILE,
+  composeSceneImagePrompt,
+  composeSceneImageEditPrompt,
+  composeSceneVideoPrompt,
+} from '../../prompts/index'
+import type { CastBibleEntry, VideoScriptLook } from '../../prompts/types'
+import { extractVisualState, extractSceneLayer2Fields, normalizeLook, normalizeCastBible } from './generateScript'
 
 const IMAGE_POLL_INTERVAL_MS = 2000
-const IMAGE_POLL_TIMEOUT_MS = 60_000
+// Raised from 60_000 (2026-09-22): a real 6-scene concurrent wave had
+// every one of the 6 scenes time out on at least one attempt at 60s, with
+// 2 of them exhausting all 5 retries this way — the same class of problem
+// VIDEO_POLL_TIMEOUT_MS was already bumped for below, just never applied
+// to the image side. Doubled, matching that fix's own ratio, pending real
+// timing data on how long KIE.ai's Flux Kontext endpoint actually takes
+// under concurrent submission load.
+const IMAGE_POLL_TIMEOUT_MS = 120_000
 // Kling clips take meaningfully longer than a still image to generate.
 // Raised from 180_000 (2026-09-14): a real 9-scene run had 3 of 9 scenes
 // (1, 4, 7) time out on their first poll window at 180s, and scene 7 timed
@@ -52,13 +73,35 @@ const VIDEO_POLL_TIMEOUT_MS = 360_000
 // stored keeps the eventual concatenated file well within that limit,
 // without a perceptible quality loss (nothing downstream displays more
 // than that resolution anyway).
-const SCALE_POLL_INTERVAL_MS = 5000
+// Raised from 5000 (2026-09-23): this poll is gated by the SAME
+// account-wide uploadPostSubmitLimiter every submission also shares (see
+// avMerger.ts's poll(), and uploadPostRateLimiter.ts's own 45-req/60s cap
+// — confirmed live 2026-09-19 that polling ALONE, with no new submissions,
+// can blow that budget). A flat 5s interval means N concurrently-
+// downscaling scenes nominally demand N polls every 5s — for the video
+// script schema's own documented max of 10 scenes (composeVideoScriptSystemPrompt),
+// that's 120 polls/min against a 45/min account-wide budget. The limiter's
+// acquire() BLOCKS rather than rejects when exhausted, so that overrun
+// doesn't error — it silently eats into each scene's own fixed
+// SCALE_POLL_TIMEOUT_MS deadline as queuing delay, indistinguishable from
+// the provider itself being slow. Confirmed live 2026-09-22/23: a real
+// 5-scene job's downscale step timed out repeatedly this way, even though
+// this same file's own history (below) already established that real
+// upload-post.com jobs typically finish in under a second — the work was
+// almost certainly done; we just weren't checking back often enough to
+// notice within our own deadline. Widened to 20s so even 10 concurrent
+// scenes (10 x 3/min = 30 polls/min) stay comfortably under the 45/min cap
+// with real headroom for jitter and any other upload-post.com traffic
+// sharing the same account (mux/concat/caption/social-publish calls).
+const SCALE_POLL_INTERVAL_MS = 20_000
 // Real evidence (2026-09-13) that a single-file re-encode via this same
 // provider completes in under a second (buildVideoConcatCommand's own
 // 2-scene concat took 0.73-0.77s) — a single clip's downscale should be at
 // least as fast. Generous margin over that anyway, rather than a tight
 // timeout, since we don't yet have a real timing sample for a full-length
-// (~10s) clip specifically.
+// (~10s) clip specifically. Still comfortably fits several poll attempts
+// (9, at the 20s interval above) even under the contention that motivated
+// widening the interval.
 const SCALE_POLL_TIMEOUT_MS = 3 * 60_000
 
 /** A poll() call throwing (connection reset, "fetch failed", etc.) means the
@@ -184,12 +227,38 @@ function findAsset(
 
 // Marks a failed_retryable step attempt's error_message as carrying a
 // validation correction rather than a genuine provider error — read back by
-// runSceneImageStep's next attempt (via getLastFailedStepErrorMessage) to
-// build that attempt's regenInstructions. See this file's own header for
+// runSceneImageStep's next attempt (via getLastFailedStepAttempt), whose
+// output_snapshot carries the rejected image's URL + issues for an edit-mode
+// retry (see composeSceneImageEditPrompt). Rows written before that
+// snapshot existed fall back to the old regenInstructions correction. See this file's own header for
 // why this rides the EXISTING error_message column instead of a new one.
 const VALIDATION_RETRY_PREFIX = 'VALIDATION_RETRY:'
 
-/** Turns the validator's issue list into a short, targeted correction
+// Validation-driven regenerations get their OWN budget, separate from
+// MAX_ATTEMPTS.kie (which exists for genuine provider failures). Before
+// this (2026-09-23), both shared the 5-attempt KIE budget, so one scene
+// could burn up to 5 paid KIE images on the validator's opinion alone.
+// Real data across 4 jobs: 54 validation rejections over 18 scenes, 8 of
+// which exhausted every retry and were accepted anyway with the SAME
+// issue still present — those regenerations bought nothing. One targeted
+// retry, then accept.
+const MAX_VALIDATION_RETRIES = 1
+
+/** Plan-level (pipeline-wide) Layer 2 fields from the script draft, loaded
+ *  once per runGenerateSceneVisual call and shared by every scene. */
+interface ScenePlanContext {
+  look?: VideoScriptLook
+  castBible?: CastBibleEntry[]
+}
+
+/** Shape of a validation-rejected attempt's output_snapshot. */
+interface RejectedImageSnapshot {
+  rejectedImageUrl?: unknown
+  issues?: unknown
+}
+
+/** Legacy fallback only (a rejection recorded before rejected-image URLs
+ *  were stored) — turns the validator's issue list into a short, targeted correction
  *  instruction — never a full re-plan of the scene (request #6: "do NOT
  *  regenerate the entire creative concept from scratch"). Reuses
  *  composeSceneImagePrompt's existing regenInstructions channel, so this is
@@ -219,6 +288,7 @@ async function runSceneImageStep(
    *  adapters/types.ts) — omitted entirely by every existing caller/test,
    *  which just skips this quality gate, same as before it existed. */
   imageValidator?: ImageValidator,
+  plan: ScenePlanContext = {},
 ): Promise<boolean> {
   const generation = pipeline.current_generation
   const alreadySucceeded = await hasSucceededStep(
@@ -276,23 +346,26 @@ async function runSceneImageStep(
       })
 
       // Targeted regeneration (request #6): if the PREVIOUS attempt at this
-      // exact scene image failed because the validator rejected it (never a
-      // genuine provider failure — those don't carry this prefix), recover
-      // its correction instruction and feed it in as regenInstructions —
-      // the same channel a user's own Regenerate-dialog guidance already
-      // uses. Never a re-plan of the scene, just one targeted fix on top of
-      // it.
+      // exact scene image was rejected by the validator (never a genuine
+      // provider failure — those don't carry this prefix), EDIT that
+      // rejected image to fix just its defects, rather than regenerating
+      // the scene from scratch — see composeSceneImageEditPrompt's header
+      // for why a from-scratch retry kept reproducing the same defect.
       let regenInstructions = pipeline.regen_instructions
+      let editFrom: { rejectedImageUrl: string; issues: string[] } | undefined
       if (existing?.status === 'failed') {
-        const lastError = await getLastFailedStepErrorMessage(
-          client,
-          { contentPipelineId: pipeline.id },
-          stepName,
-          generation,
-        )
-        if (lastError?.startsWith(VALIDATION_RETRY_PREFIX)) {
-          const correction = lastError.slice(VALIDATION_RETRY_PREFIX.length)
-          regenInstructions = [pipeline.regen_instructions, correction].filter(Boolean).join(' ')
+        const last = await getLastFailedStepAttempt(client, { contentPipelineId: pipeline.id }, stepName, generation)
+        if (last?.errorMessage?.startsWith(VALIDATION_RETRY_PREFIX)) {
+          const snapshot = last.outputSnapshot as RejectedImageSnapshot | null
+          const issues = Array.isArray(snapshot?.issues)
+            ? snapshot.issues.filter((i): i is string => typeof i === 'string')
+            : []
+          if (typeof snapshot?.rejectedImageUrl === 'string' && issues.length > 0) {
+            editFrom = { rejectedImageUrl: snapshot.rejectedImageUrl, issues }
+          } else {
+            const correction = last.errorMessage.slice(VALIDATION_RETRY_PREFIX.length)
+            regenInstructions = [pipeline.regen_instructions, correction].filter(Boolean).join(' ')
+          }
         }
       }
 
@@ -302,20 +375,32 @@ async function runSceneImageStep(
       // unit_presence (Layer 2 plan field, PROMPT_REFACTOR_BRIEF.md §4.3/
       // §8 — replaces the old isVideoSceneAboutUnit keyword-regex gate), so
       // a 'none' scene returns undefined here and gets a pure text-to-image
-      // generation instead of forcing the unit in as an edit source.
+      // generation instead of forcing the unit in as an edit source. An
+      // edit-mode retry instead uses the rejected image itself as the edit
+      // source.
       const layer2 = extractSceneLayer2Fields(scene.narration_intent)
-      const { prompt, referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
-        pipelineId: pipeline.id,
-        sceneNumber: scene.scene_number,
-        visualDescription: scene.visual_description,
-        shotNotes: scene.shot_notes,
-        characterRefUrl,
-        regenInstructions,
-        previousVisualState: previousScene ? extractVisualState(previousScene.narration_intent) : undefined,
-        unitPresence: layer2.unit_presence,
-        containsFood: layer2.contains_food,
-      })
+      const castIds = new Set(layer2.cast_present ?? [])
+      const { prompt, referenceImageUrl } = editFrom
+        ? composeSceneImageEditPrompt(BRAND_PROFILE, { ...editFrom, unitPresence: layer2.unit_presence })
+        : composeSceneImagePrompt(BRAND_PROFILE, {
+            pipelineId: pipeline.id,
+            sceneNumber: scene.scene_number,
+            visualDescription: scene.visual_description,
+            shotNotes: scene.shot_notes,
+            characterRefUrl,
+            regenInstructions,
+            previousVisualState: previousScene ? extractVisualState(previousScene.narration_intent) : undefined,
+            unitPresence: layer2.unit_presence,
+            containsFood: layer2.contains_food,
+            // Only people this scene explicitly lists — an unknown/empty
+            // cast_present never pulls a recurring person into the frame.
+            cast: plan.castBible?.filter((c) => castIds.has(c.id)),
+            look: plan.look,
+          })
 
+      if (editFrom) {
+        console.log(`[${stepName}] EDIT-MODE RETRY (attempt ${attemptNumber}) — fixing: ${editFrom.issues.join('; ')}`)
+      }
       console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
       jobRef = await imageGenerator.submit({ prompt, referenceImageUrl, aspectRatio })
 
@@ -353,7 +438,10 @@ async function runSceneImageStep(
 
     if ('fileUrl' in outcome) {
       const permanentUrl = await uploader.uploadFromUrl(
-        `${pipeline.job_id}/scene-${scene.scene_number}-image.png`,
+        // Per-generation, per-attempt path — a validation-rejected image
+        // must survive the retry, since the retry edits it (see editFrom
+        // above) rather than regenerating from scratch.
+        `${pipeline.job_id}/scene-${scene.scene_number}-image-g${generation}-a${attemptNumber}.png`,
         outcome.fileUrl,
       )
 
@@ -363,7 +451,7 @@ async function runSceneImageStep(
       // runSceneVideoClipStep is even called) is what actually enforces
       // "before video generation" here; this function just has to avoid
       // marking the asset 'ready' until validation says so.
-      let validation: { pass: boolean; issues: string[] } = { pass: true, issues: [] }
+      let validation: ImageValidationResult = { pass: true, issues: [] }
       if (imageValidator) {
         try {
           validation = await imageValidator.validate({
@@ -380,7 +468,23 @@ async function runSceneImageStep(
         }
       }
 
-      if (!validation.pass && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+      // Only queried on a rejection — the common (passing) path costs no
+      // extra DB round-trip.
+      const validationRetriesUsed = validation.pass
+        ? 0
+        : await countFailedStepAttemptsWithPrefix(
+            client,
+            { contentPipelineId: pipeline.id },
+            stepName,
+            generation,
+            VALIDATION_RETRY_PREFIX,
+          )
+
+      if (
+        !validation.pass &&
+        validationRetriesUsed < MAX_VALIDATION_RETRIES &&
+        !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)
+      ) {
         // Targeted regeneration (request #6) — reject this image and let
         // the EXISTING retry/backoff machinery pick it up next wave, same
         // as a genuine provider failure. The correction instruction that
@@ -404,8 +508,15 @@ async function runSceneImageStep(
           status: 'failed_retryable',
           provider: 'openai',
           errorMessage: `${VALIDATION_RETRY_PREFIX}${buildCorrectionInstruction(validation.issues)}`,
+          outputSnapshot: { rejectedImageUrl: permanentUrl, issues: validation.issues },
         })
         return true
+      }
+
+      if (!validation.pass) {
+        console.log(
+          `[${stepName}] image validation FAILED again after ${validationRetriesUsed} validation retr${validationRetriesUsed === 1 ? 'y' : 'ies'} — accepting as-is, no further KIE spend: ${validation.issues.join('; ')}`,
+        )
       }
 
       // Either validation passed, or a validation-driven correction
@@ -430,8 +541,49 @@ async function runSceneImageStep(
         attemptNumber,
         status: 'succeeded',
         provider: 'kie',
-        outputSnapshot: { fileUrl: permanentUrl, validationIssues: validation.issues },
+        outputSnapshot: {
+          fileUrl: permanentUrl,
+          validationIssues: validation.issues,
+          ...(validation.ignoredIssues?.length ? { validationIgnoredIssues: validation.ignoredIssues } : {}),
+        },
       })
+    } else if ('timedOut' in outcome && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+      // Resume, don't discard: our poll gave up, but KIE never confirmed
+      // failure — the task may still be running server-side. Keeping
+      // provider_ref (instead of clearing it, as the genuine-failure path
+      // below does) means the next attempt's RESUMED branch re-polls this
+      // EXACT task instead of paying for and re-queuing a brand new
+      // submission — the same "an interruption can never turn one paid
+      // generation into two" reasoning the crash-recovery RESUMED branch
+      // above already relies on, just extended to a timeout as well as a
+      // process crash. Still recorded as failed_retryable and still
+      // counted against MAX_ATTEMPTS.kie (not a free retry) — this only
+      // stops a slow response from ALSO costing a wasted duplicate
+      // submission on top of its own slowness (confirmed live 2026-09-22:
+      // a 6-scene concurrent wave regularly exceeded the poll window, and
+      // every timeout unconditionally discarded the in-flight task).
+      console.log(
+        `[${stepName}] poll timed out (attempt ${attemptNumber}) — leaving task ${jobRef.providerRef} resumable, not resubmitting`,
+      )
+      await upsertVisualAsset(client, {
+        contentPipelineId: pipeline.id,
+        generation,
+        assetType: 'scene_image',
+        videoSceneId: scene.id,
+        status: 'generating',
+        providerRef: jobRef.providerRef,
+        attemptNumber: attemptNumber + 1,
+      })
+      await recordStepAttempt(client, {
+        contentPipelineId: pipeline.id,
+        stepName,
+        generation,
+        attemptNumber,
+        status: 'failed_retryable',
+        provider: 'kie',
+        errorMessage: 'KIE.ai poll timed out (task left resumable, not resubmitted)',
+      })
+      return true
     } else {
       const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
       throw new ProviderCallError('kie', null, detail)
@@ -478,6 +630,7 @@ async function runSceneVideoClipStep(
   scaler: SceneClipScaler,
   isFinalScene: boolean,
   aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
+  plan: ScenePlanContext = {},
 ): Promise<boolean> {
   const generation = pipeline.current_generation
   const alreadySucceeded = await hasSucceededStep(
@@ -506,22 +659,46 @@ async function runSceneVideoClipStep(
   // this way (3 attempts x 6 scenes, every single one failing on the exact
   // same "downscale poll timed out") before being cancelled.
   let rawUrl: string | undefined
+  // Set only when a downscale job was already submitted (and billed, though
+  // upload-post.com's downscale is unbilled today) and left unresolved by a
+  // previous attempt — same "provider_ref set + status still 'generating'"
+  // resumability signal the KIE branches use, just scoped to the scale
+  // step. provider_ref is safe to reuse for this once raw_file_url exists:
+  // the KIE clip it originally referred to is already fully captured by
+  // raw_file_url at that point, so nothing downstream ever needs to resume
+  // the OLD KIE task via provider_ref again.
+  let scaleJobRef: { providerRef: string } | undefined
 
   if (existing?.raw_file_url) {
-    // KIE already succeeded and was already billed on a previous attempt —
-    // only the downscale step failed. Retry that alone; never resubmit to
-    // KIE for this scene again in this generation. Same backoff gate as the
-    // ordinary retry branch below, just keyed off this row instead.
-    const ready = isReadyToRetry({
-      lastError: 'previous downscale attempt did not succeed',
-      retryCount: existing.attempt_number,
-      updatedAt: new Date(existing.updated_at),
-      baseDelayMs: backoffBaseDelayMs,
-    })
-    if (!ready) return false
-    attemptNumber = existing.attempt_number + 1
     rawUrl = existing.raw_file_url
-    console.log(`[${stepName}] RESUMED FROM RAW KIE CLIP (attempt ${attemptNumber}) — retrying downscale only, no new KIE charge`)
+    if (existing.status === 'generating' && existing.provider_ref) {
+      // A downscale job was already submitted for this exact raw clip and
+      // the worker just never observed its result (timeout or crash).
+      // Resuming it — never gated by backoff, same reasoning as the KIE
+      // RESUMED branch below — is what stops a slow-but-still-running
+      // downscale from also costing a wasted duplicate submission on top
+      // of its own slowness (confirmed live 2026-09-22: a real run had
+      // scene 1/3/5's downscale time out repeatedly in a row, each timeout
+      // previously discarding the in-flight job and resubmitting fresh).
+      attemptNumber = existing.attempt_number
+      scaleJobRef = { providerRef: existing.provider_ref }
+      console.log(`[${stepName}] RESUMED existing downscale task ${scaleJobRef.providerRef} (attempt ${attemptNumber}) — no new submission`)
+    } else {
+      // KIE already succeeded and was already billed on a previous attempt —
+      // only the downscale step failed (or was never yet attempted). Retry
+      // that alone; never resubmit to KIE for this scene again in this
+      // generation. Same backoff gate as the ordinary retry branch below,
+      // just keyed off this row instead.
+      const ready = isReadyToRetry({
+        lastError: 'previous downscale attempt did not succeed',
+        retryCount: existing.attempt_number,
+        updatedAt: new Date(existing.updated_at),
+        baseDelayMs: backoffBaseDelayMs,
+      })
+      if (!ready) return false
+      attemptNumber = existing.attempt_number + 1
+      console.log(`[${stepName}] RESUMED FROM RAW KIE CLIP (attempt ${attemptNumber}) — retrying downscale only, no new KIE charge`)
+    }
   } else if (existing?.status === 'generating' && existing.provider_ref) {
     // submit() already succeeded and was already billed for this attempt —
     // the worker just never got to observe the result (most commonly:
@@ -564,6 +741,7 @@ async function runSceneVideoClipStep(
           visualDescription: scene.visual_description,
           shotNotes: scene.shot_notes,
           isFinalScene,
+          look: plan.look,
         })
 
         console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)
@@ -601,6 +779,38 @@ async function runSceneVideoClipStep(
         console.log(`[${stepName}] cancelled mid-poll — leaving task ${jobRef.providerRef} resumable, not recording a failure`)
         return true
       }
+      if ('timedOut' in outcome && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+        // Resume, don't discard — same reasoning as the image step's own
+        // timeout branch above: our poll gave up, KIE never confirmed
+        // failure, so the clip may still be rendering server-side.
+        // Keeping provider_ref means the next attempt's RESUMED branch
+        // re-polls this EXACT task instead of paying for and re-queuing a
+        // brand new video generation, which is meaningfully more
+        // expensive to duplicate than an image. Still recorded as
+        // failed_retryable and still counted against MAX_ATTEMPTS.kie.
+        console.log(
+          `[${stepName}] poll timed out (attempt ${attemptNumber}) — leaving task ${jobRef.providerRef} resumable, not resubmitting`,
+        )
+        await upsertVisualAsset(client, {
+          contentPipelineId: pipeline.id,
+          generation,
+          assetType: 'scene_video_clip',
+          videoSceneId: scene.id,
+          status: 'generating',
+          providerRef: jobRef.providerRef,
+          attemptNumber: attemptNumber + 1,
+        })
+        await recordStepAttempt(client, {
+          contentPipelineId: pipeline.id,
+          stepName,
+          generation,
+          attemptNumber,
+          status: 'failed_retryable',
+          provider: 'kie',
+          errorMessage: 'KIE.ai poll timed out (task left resumable, not resubmitted)',
+        })
+        return true
+      }
       if (!('fileUrl' in outcome)) {
         const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
         throw new ProviderCallError('kie', null, detail)
@@ -625,13 +835,63 @@ async function runSceneVideoClipStep(
     }
 
     const target = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
-    const scaleJobRef = await scaler.submitScale(rawUrl, target.width, target.height)
+    if (!scaleJobRef) {
+      scaleJobRef = await scaler.submitScale(rawUrl, target.width, target.height)
+      // Persist the scale task id BEFORE polling — same "persist before
+      // poll" fix the KIE clip submission above already relies on, so an
+      // interruption (crash or timeout) can resume this exact downscale
+      // job next attempt instead of discarding it and resubmitting.
+      await upsertVisualAsset(client, {
+        contentPipelineId: pipeline.id,
+        generation,
+        assetType: 'scene_video_clip',
+        videoSceneId: scene.id,
+        status: 'generating',
+        providerRef: scaleJobRef.providerRef,
+        rawFileUrl: rawUrl,
+        attemptNumber,
+      })
+    }
     const scaleOutcome = await pollScaleUntilDone(client, pipeline.id, scaler, scaleJobRef)
     if ('cancelled' in scaleOutcome) {
-      // rawUrl is already persisted (raw_file_url, above) — a future
-      // retry/regenerate resumes straight into redoing only the downscale,
-      // never re-paying KIE, same as the ordinary "downscale failed" path.
-      console.log(`[${stepName}] cancelled mid-poll — raw KIE clip already saved, not recording a failure`)
+      // rawUrl and the scale task id are already persisted above — a future
+      // retry/regenerate resumes straight into this exact downscale job,
+      // never re-paying KIE and never resubmitting to upload-post.com.
+      console.log(`[${stepName}] cancelled mid-poll — raw KIE clip + downscale task already saved, not recording a failure`)
+      return true
+    }
+    if ('timedOut' in scaleOutcome && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.upload_post)) {
+      // Resume, don't discard — same reasoning as the KIE timeout branches
+      // above: our poll gave up, upload-post.com never confirmed failure,
+      // so the downscale may still be running server-side. Still recorded
+      // as failed_retryable and still counted against
+      // MAX_ATTEMPTS.upload_post (not a free retry) — this only stops a
+      // slow response from also costing a wasted duplicate submission
+      // (confirmed live 2026-09-22: scenes 1/3/5's downscale all timed out
+      // repeatedly in the same run this was found in, each timeout
+      // previously discarding the in-flight job and resubmitting fresh).
+      console.log(
+        `[${stepName}] downscale poll timed out (attempt ${attemptNumber}) — leaving task ${scaleJobRef.providerRef} resumable, not resubmitting`,
+      )
+      await upsertVisualAsset(client, {
+        contentPipelineId: pipeline.id,
+        generation,
+        assetType: 'scene_video_clip',
+        videoSceneId: scene.id,
+        status: 'generating',
+        providerRef: scaleJobRef.providerRef,
+        rawFileUrl: rawUrl,
+        attemptNumber: attemptNumber + 1,
+      })
+      await recordStepAttempt(client, {
+        contentPipelineId: pipeline.id,
+        stepName,
+        generation,
+        attemptNumber,
+        status: 'failed_retryable',
+        provider: 'upload_post',
+        errorMessage: 'downscale poll timed out (task left resumable, not resubmitted)',
+      })
       return true
     }
     if (!('fileBuffer' in scaleOutcome)) {
@@ -828,6 +1088,15 @@ export async function runGenerateSceneVisual(
   let lastPersistedCount = pipeline.scenes_visuals_ready_count
   let announcedInProgress = pipeline.current_step === 'generating_scene_visuals'
 
+  // Plan-level look + cast bible (Layer 2), read once and shared by every
+  // scene — see ScenePlanContext. A missing/legacy draft just means both
+  // are undefined and the composers fall back to their defaults.
+  const planData = await getVideoPlanDraftData(client, pipeline.id)
+  const plan: ScenePlanContext = {
+    look: normalizeLook(planData?.look),
+    castBible: normalizeCastBible(planData?.cast_bible),
+  }
+
   const assets = await getVisualAssets(client, pipeline.id, generation)
 
   const tasks = scenes.map(async (scene) => {
@@ -849,6 +1118,7 @@ export async function runGenerateSceneVisual(
           aspectRatio,
           previousScene,
           imageValidator,
+          plan,
         )
       } else {
         ran = await runSceneVideoClipStep(
@@ -862,6 +1132,7 @@ export async function runGenerateSceneVisual(
           scaler,
           scene.scene_number === maxSceneNumber,
           aspectRatio,
+          plan,
         )
       }
     }

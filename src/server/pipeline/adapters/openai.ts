@@ -89,21 +89,44 @@ export class OpenAIScriptGenerator implements ScriptGenerator {
 // exists for — a longer, exhaustive checklist would just make the model
 // nitpick minor stylistic/lighting issues that were never the problem (see
 // generateSceneVisual.ts's own header for why this is deliberately narrow).
+//
+// Revised 2026-09-23 to cut false positives: every rejection costs a paid
+// KIE regeneration, and real data showed the old prompt flagging
+// "unexplained hand on the left side of frame" on scenes whose own
+// description REQUIRES hands (tapping a phone, picking produce, cooking,
+// reading a note). Hands the scene implies are now explicitly allowed, and
+// each issue carries a severity + confidence so only a clear, blocking
+// defect rejects the image (see isRejectingIssue below).
 const IMAGE_VALIDATION_SYSTEM_PROMPT =
-  'You are a strict visual QA checker for AI-generated marketing images. Check ONLY for these high-value ' +
-  'defects: unexpected or extra people, unexplained/disembodied hands or arms, duplicate limbs, a floating ' +
-  'or unexplained object, a missing required subject, a major inconsistency with the described objects, or ' +
-  'an obviously illogical scene. Ignore minor stylistic, lighting, or composition preferences — those are ' +
-  'not defects. Respond with strictly valid JSON: { "pass": boolean, "issues": string[] } — issues must be ' +
-  'empty when pass is true; otherwise one short, specific phrase per real defect found (e.g. "unexplained ' +
-  'hand on the right side of frame"), never a generic verdict.'
+  'You are a visual QA checker for AI-generated marketing images. Each rejection triggers a paid ' +
+  'regeneration, so only report defects a typical viewer would clearly notice. Check ONLY for: an extra ' +
+  'person not implied by the scene, a hand or arm that clearly belongs to no visible or implied person ' +
+  '(disembodied, floating, or coming out of an impossible place), duplicate or malformed limbs on one ' +
+  'person, a floating or impossible object, a required subject missing entirely, or an obviously ' +
+  'illogical scene. NOT defects: hands or arms of a visible person, or hands implied by the described ' +
+  'action (holding, tapping, picking up, cooking, reading, eating, first-person or over-the-shoulder ' +
+  'framing) even when the rest of the body is cropped out of frame; any person the scene describes ' +
+  '(e.g. a vendor, a friend); and any stylistic, lighting, or composition preference. ' +
+  'Respond with strictly valid JSON: { "issues": [ { "text": string, "severity": "blocking" | "minor", ' +
+  '"confidence": "high" | "medium" | "low" } ] } — an empty array when there are no defects. "text" is one ' +
+  'short, specific phrase (e.g. "disembodied hand floating above the counter"), never a generic verdict. ' +
+  'Use "blocking" only for a defect that would make the image unusable in a professional ad; use "high" ' +
+  'confidence only when the defect is unambiguous, not merely possible.'
+
+// Only a blocking, high-confidence issue rejects an image — anything
+// softer is kept for observability (ImageValidationResult.ignoredIssues)
+// but never spends another KIE generation.
+function isRejectingIssue(issue: { severity?: unknown; confidence?: unknown }): boolean {
+  return issue.severity === 'blocking' && issue.confidence === 'high'
+}
 
 /**
  * Vision-capable QA gate (see ImageValidator's own header, adapters/types.ts)
- * — same provider/model family as OpenAIScriptGenerator above (gpt-4o-mini
- * supports image inputs via the same Chat Completions endpoint), so this
- * reuses the existing OpenAI credential/infrastructure rather than adding a
- * second vision provider.
+ * — same provider as OpenAIScriptGenerator above, reusing the existing
+ * OpenAI credential/infrastructure rather than adding a second vision
+ * provider. Uses gpt-4o rather than gpt-4o-mini (changed 2026-09-23): a
+ * false positive here costs a paid KIE image, which is far more than the
+ * difference in OpenAI cost for one vision call per scene.
  */
 export class OpenAIImageValidator implements ImageValidator {
   constructor(
@@ -112,7 +135,9 @@ export class OpenAIImageValidator implements ImageValidator {
   ) {}
 
   async validate(input: ImageValidationInput): Promise<ImageValidationResult> {
-    const sceneText = `Scene: ${input.visualDescription}${input.shotNotes ? ` Shot notes: ${input.shotNotes}` : ''}`
+    const sceneText =
+      'Scene description (the people, objects, and actions it names are expected, not defects): ' +
+      `${input.visualDescription}${input.shotNotes ? ` Shot notes: ${input.shotNotes}` : ''}`
 
     const res = await this.fetchImpl('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -121,7 +146,7 @@ export class OpenAIImageValidator implements ImageValidator {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
         messages: [
           { role: 'system', content: IMAGE_VALIDATION_SYSTEM_PROMPT },
           {
@@ -147,7 +172,8 @@ export class OpenAIImageValidator implements ImageValidator {
     const content = data.choices?.[0]?.message?.content
     const parsed = typeof content === 'string' ? safeJsonParse(content) : null
 
-    if (!parsed || typeof parsed !== 'object' || typeof (parsed as { pass?: unknown }).pass !== 'boolean') {
+    const rawIssues = parsed && typeof parsed === 'object' ? (parsed as { issues?: unknown }).issues : undefined
+    if (!Array.isArray(rawIssues)) {
       // Fail OPEN, not closed — a malformed/unparseable validator response
       // (or a provider hiccup a caller chooses to swallow the same way)
       // must never itself block an otherwise-successful, already-paid-for
@@ -155,10 +181,23 @@ export class OpenAIImageValidator implements ImageValidator {
       // pipeline, never a new single point of failure for it.
       return { pass: true, issues: [] }
     }
-    const p = parsed as { pass: boolean; issues?: unknown }
-    return {
-      pass: p.pass,
-      issues: Array.isArray(p.issues) ? p.issues.filter((i): i is string => typeof i === 'string') : [],
+
+    const issues: string[] = []
+    const ignoredIssues: string[] = []
+    for (const item of rawIssues) {
+      // A bare string (old response shape) carries no severity/confidence,
+      // so it can't meet the rejection bar — logged, never acted on.
+      if (typeof item === 'string') {
+        ignoredIssues.push(item)
+        continue
+      }
+      if (!item || typeof item !== 'object') continue
+      const issue = item as { text?: unknown; severity?: unknown; confidence?: unknown }
+      if (typeof issue.text !== 'string' || !issue.text.trim()) continue
+      if (isRejectingIssue(issue)) issues.push(issue.text)
+      else ignoredIssues.push(`${issue.text} (${String(issue.severity)}, ${String(issue.confidence)} confidence)`)
     }
+
+    return { pass: issues.length === 0, issues, ...(ignoredIssues.length ? { ignoredIssues } : {}) }
   }
 }

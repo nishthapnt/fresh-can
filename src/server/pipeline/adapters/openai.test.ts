@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { OpenAIScriptGenerator } from './openai'
+import { OpenAIScriptGenerator, OpenAIImageValidator } from './openai'
 import { ProviderCallError } from './types'
 
 function mockFetch(response: Partial<Response> & { jsonBody?: unknown; textBody?: string }) {
@@ -88,5 +88,69 @@ describe('OpenAIScriptGenerator', () => {
     await expect(gen.generate({ systemPrompt: 'sys', userPrompt: 'user' })).rejects.toThrow(
       ProviderCallError,
     )
+  })
+})
+
+describe('OpenAIImageValidator', () => {
+  const input = { imageUrl: 'https://example.com/scene.png', visualDescription: 'The student taps their phone.' }
+
+  function validatorReturning(content: string) {
+    const fetchImpl = mockFetch({ jsonBody: { choices: [{ message: { content } }] } })
+    return { validator: new OpenAIImageValidator('test-key', fetchImpl), fetchImpl }
+  }
+
+  it('passes when there are no issues, and sends the scene description with the image to gpt-4o', async () => {
+    const { validator, fetchImpl } = validatorReturning('{"issues":[]}')
+    expect(await validator.validate(input)).toEqual({ pass: true, issues: [] })
+
+    const body = JSON.parse((fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0][1].body as string)
+    expect(body.model).toBe('gpt-4o')
+    const userContent = body.messages[1].content
+    expect(userContent[0].text).toContain('The student taps their phone.')
+    expect(userContent[1]).toEqual({ type: 'image_url', image_url: { url: input.imageUrl } })
+  })
+
+  it('rejects only on a blocking, high-confidence issue', async () => {
+    const { validator } = validatorReturning(
+      JSON.stringify({
+        issues: [
+          { text: 'disembodied hand above the counter', severity: 'blocking', confidence: 'high' },
+          { text: 'possible extra finger', severity: 'blocking', confidence: 'medium' },
+          { text: 'slightly odd shadow', severity: 'minor', confidence: 'high' },
+        ],
+      }),
+    )
+    expect(await validator.validate(input)).toEqual({
+      pass: false,
+      issues: ['disembodied hand above the counter'],
+      ignoredIssues: ['possible extra finger (blocking, medium confidence)', 'slightly odd shadow (minor, high confidence)'],
+    })
+  })
+
+  it('passes when every reported issue is below the rejection bar', async () => {
+    const { validator } = validatorReturning(
+      JSON.stringify({ issues: [{ text: 'hand at left edge', severity: 'blocking', confidence: 'low' }] }),
+    )
+    const result = await validator.validate(input)
+    expect(result.pass).toBe(true)
+    expect(result.issues).toEqual([])
+    expect(result.ignoredIssues).toEqual(['hand at left edge (blocking, low confidence)'])
+  })
+
+  it('never rejects on bare-string issues (old response shape, no severity/confidence)', async () => {
+    const { validator } = validatorReturning('{"pass":false,"issues":["unexplained hand on the left side of frame"]}')
+    const result = await validator.validate(input)
+    expect(result.pass).toBe(true)
+    expect(result.ignoredIssues).toEqual(['unexplained hand on the left side of frame'])
+  })
+
+  it('fails open on an unparseable or malformed response', async () => {
+    expect(await validatorReturning('not json').validator.validate(input)).toEqual({ pass: true, issues: [] })
+    expect(await validatorReturning('{"pass":false}').validator.validate(input)).toEqual({ pass: true, issues: [] })
+  })
+
+  it('throws ProviderCallError on a non-OK response', async () => {
+    const fetchImpl = mockFetch({ ok: false, status: 500, textBody: 'boom' })
+    await expect(new OpenAIImageValidator('test-key', fetchImpl).validate(input)).rejects.toBeInstanceOf(ProviderCallError)
   })
 })

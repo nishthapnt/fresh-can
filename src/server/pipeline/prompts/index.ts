@@ -20,6 +20,7 @@ export {
   composePhotoPrompt,
   composeCharacterRefPrompt,
   composeSceneImagePrompt,
+  composeSceneImageEditPrompt,
   composeSceneVideoPrompt,
   type ImageComposition,
   type UnitPresence,

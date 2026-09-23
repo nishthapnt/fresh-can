@@ -589,13 +589,17 @@ real docs and real code, not assumption:
    defect in scene N propagates into every scene chained after it —
    compounding rather than isolating failures.
 
-**The actual highest-value next step for recurring-people continuity is
-already mostly built**: `cast_bible` (locked physical descriptions per
-named person, Phase 3) exists as data but nothing reads it into the
-scene-image composer yet. It's text, not a second image — works within the
-single-reference-image constraint, needs no sequential generation, carries
-none of the error-propagation risk above. Recommended over frame-chaining
-whenever this is picked back up.
+**Recurring-people continuity is handled with text, not frame-chaining**
+(wired 2026-09-23): `cast_bible` (locked physical descriptions per named
+person, Phase 3) is now spliced into `composeSceneImagePrompt` for exactly
+the people each scene lists in `cast_present`, and the plan-level `look`
+replaces the neutral daylight mood default in every scene image prompt
+(and holds lighting steady in `composeSceneVideoPrompt`). This works within
+the single-reference-image constraint, needs no sequential generation, and
+carries none of the error-propagation risk above. Before this, both were
+generated and stored but read by nothing, so a recurring person was
+re-invented in every `unit_presence: none` scene (pure text-to-image, no
+reference image).
 
 ## Phase 8 — Tests (§13)
 

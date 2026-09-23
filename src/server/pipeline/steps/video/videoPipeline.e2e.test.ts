@@ -32,6 +32,7 @@ import type {
   AVMerger,
   AVMergeResult,
   SceneClipScaler,
+  ImageValidator,
 } from '../../adapters/types'
 import type { VideoStorageUploader } from '../../adapters/storage'
 
@@ -419,6 +420,113 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(sceneImages).toHaveLength(2)
     expect(sceneClips).toHaveLength(2)
     expect(assets!.every((a) => a.status === 'ready')).toBe(true)
+  })
+
+  // Regression test for the prompt-refactor gap: the script's cast_bible
+  // and look were generated and stored but never reached any scene
+  // prompt, so a recurring person was re-invented in every scene and the
+  // planned lighting was overridden by a hardcoded daylight default.
+  it("the script's look and cast_bible reach the scene image and clip prompts — cast only for scenes that list that person", async () => {
+    const { pipeline } = await makeJobAndPipeline('EN')
+    const plannedOutput = {
+      ...SCRIPT_OUTPUT,
+      look: { time_of_day: 'evening', lighting: 'soft, warm', palette: 'earthy tones' },
+      cast_bible: [{ id: 'student', role: 'student', age_range: '18-25', appearance: 'curly dark hair' }],
+      scenes: [
+        SCRIPT_OUTPUT.scenes[0],
+        { ...SCRIPT_OUTPUT.scenes[1], cast_present: ['student'] },
+      ],
+    }
+    const script = { generate: vi.fn(async () => ({ raw: '{}', parsed: plannedOutput })) } satisfies ScriptGenerator
+    await runGenerateScript(client, pipeline, scriptInput, script)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    const image = makeMockImageGenerator()
+    const video = makeMockVideoGenerator()
+    const uploader = makeFakeVideoUploader()
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
+    const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, makeMockScaler())
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, makeMockScaler())
+
+    // Call 0 is the character ref; calls 1-2 are the two scenes (either order).
+    const scenePrompts = image.submit.mock.calls
+      .slice(1)
+      .map((c) => (c as unknown as [{ prompt: string }])[0].prompt)
+    const scene1 = scenePrompts.find((p) => p.startsWith('Scene 1:'))!
+    const scene2 = scenePrompts.find((p) => p.startsWith('Scene 2:'))!
+    for (const prompt of [scene1, scene2]) {
+      expect(prompt).toContain('Visual look shared by every scene of this video: evening; soft, warm lighting')
+      expect(prompt).not.toContain('Natural daylight')
+    }
+    expect(scene2).toContain('the student (18-25, curly dark hair)')
+    expect(scene1).not.toContain('Recurring people')
+
+    const clipPrompts = video.submit.mock.calls.map((c) => (c as unknown as [{ prompt: string }])[0].prompt)
+    expect(clipPrompts).toHaveLength(2)
+    for (const prompt of clipPrompts) expect(prompt).toContain("Keep the frame's soft, warm, evening lighting")
+  })
+
+  // Regression test for the validation-retry cap (MAX_VALIDATION_RETRIES,
+  // generateSceneVisual.ts): a validator that rejects EVERY image used to
+  // be able to spend up to MAX_ATTEMPTS.kie (5) paid KIE images per scene.
+  // Now it's exactly one targeted retry, then the image is accepted.
+  it('a validator that always rejects costs at most one extra KIE image per scene, then the image is accepted', async () => {
+    const { pipeline } = await makeJobAndPipeline('EN')
+    await runGenerateScript(client, pipeline, scriptInput, makeMockScriptGenerator())
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    const image = makeMockImageGenerator()
+    const video = makeMockVideoGenerator()
+    const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
+    const alwaysRejects = {
+      validate: vi.fn(async () => ({ pass: false, issues: ['disembodied hand above the counter'] })),
+    } satisfies ImageValidator
+
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
+    const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+
+    // Four ticks is more than enough: under the old shared budget, this
+    // would still be rejecting and resubmitting on tick 4.
+    for (let tick = 0; tick < 4; tick++) {
+      await runGenerateSceneVisual(
+        client,
+        generating as PipelineRow,
+        'https://example.com/mock-img-1.png',
+        image,
+        video,
+        uploader,
+        scaler,
+        0,
+        undefined,
+        alwaysRejects,
+      )
+    }
+
+    // 1 character ref + 2 scenes x (1 original + 1 validation retry).
+    expect(image.submit).toHaveBeenCalledTimes(5)
+    expect(alwaysRejects.validate).toHaveBeenCalledTimes(4)
+
+    // The retry EDITS the rejected image (kept under its own per-attempt
+    // path) rather than regenerating the scene from scratch.
+    const submitInputs = image.submit.mock.calls.map((c) => (c as unknown as [{ prompt: string; referenceImageUrl?: string }])[0])
+    const editRetries = submitInputs.filter((i) => i.prompt.startsWith('Edit this image'))
+    expect(editRetries).toHaveLength(2)
+    for (const retry of editRetries) {
+      expect(retry.prompt).toContain('disembodied hand above the counter')
+      expect(retry.referenceImageUrl).toMatch(/scene-\d-image-g1-a1\.png/)
+    }
+
+    const { data: assets } = await client.from('content_visual_assets').select('*').eq('content_pipeline_id', pipeline.id)
+    const sceneImages = assets!.filter((a) => a.asset_type === 'scene_image')
+    expect(sceneImages).toHaveLength(2)
+    expect(sceneImages.every((a) => a.status === 'ready')).toBe(true)
+
+    const { data: ready } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    expect(ready.status).toBe('ready')
   })
 
   it('BOTH: two tracks are created, but the shared visuals are still generated exactly once — never duplicated per language', async () => {
@@ -1252,5 +1360,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
       .eq('content_type', 'video')
       .single()
     expect(finalRow.status).toBe('completed')
-  })
+    // Full generate + visuals-regenerate + re-render cycle against the live
+    // DB — measured ~47-53s, over the suite-wide default timeout on its own.
+  }, 120_000)
 })
