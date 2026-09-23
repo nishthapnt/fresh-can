@@ -513,16 +513,25 @@ export async function countFailedStepAttemptsWithPrefix(
   prefix: string,
 ): Promise<number> {
   const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`)
-  const query = scopedQuery(
-    client
-      .from('pipeline_steps')
-      .select('id', { count: 'exact', head: true })
-      .eq('step_name', stepName)
-      .eq('generation', generation)
-      .eq('status', 'failed_retryable')
-      .like('error_message', `${escaped}%`),
-    scope,
-  )
+  // Not routed through scopedQuery(): combining a head:true count-select
+  // with .like() defeats its generic `T extends { eq }` inference and
+  // TypeScript reports "Type instantiation is excessively deep and
+  // possibly infinite" (caught in the Vercel build, not local dev). The
+  // scope branch is inlined instead — same logic, no generic to blow up.
+  let query = client
+    .from('pipeline_steps')
+    .select('id', { count: 'exact', head: true })
+    .eq('step_name', stepName)
+    .eq('generation', generation)
+    .eq('status', 'failed_retryable')
+    .like('error_message', `${escaped}%`)
+  if (scope.contentPipelineId) {
+    query = query.eq('content_pipeline_id', scope.contentPipelineId)
+  } else if (scope.contentLanguageTrackId) {
+    query = query.eq('content_language_track_id', scope.contentLanguageTrackId)
+  } else {
+    throw new Error('StepScope requires contentPipelineId or contentLanguageTrackId')
+  }
   const { count, error } = await query
   if (error) throw error
   return count ?? 0
