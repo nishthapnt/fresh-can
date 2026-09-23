@@ -713,4 +713,27 @@ describe('composeLocalizeScriptSystemPrompt', () => {
       expect(prompt).toContain(field)
     }
   })
+
+  // Regression for real jobs landing at ~58% of their requested duration
+  // (this function's own 2026-09-24 header) — asserts the fixed rate and
+  // the "aim for the full budget" framing that replaced the old upper-
+  // bound-only "fitting comfortably within" wording, which gave the model
+  // no reason to avoid undershooting.
+  it('states the measured ~3.1 words/sec rate, not the old, too-slow 2.5 figure', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
+    expect(prompt).toContain('3.1 words per second')
+    expect(prompt).not.toContain('2.5 words per second')
+  })
+
+  it('instructs writing to fill close to the full target duration, not merely staying within it', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
+    expect(prompt).toContain('writing to fill close to its FULL target duration')
+    expect(prompt).not.toContain('fitting comfortably within')
+  })
+
+  it('explains the asymmetric cost of running long vs. short, so the model prefers erring long', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
+    expect(prompt).toContain('Err on the side of a few words too many rather than too few')
+    expect(prompt).toContain('shortens the whole finished video below what was requested')
+  })
 })

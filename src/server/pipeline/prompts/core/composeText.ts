@@ -752,6 +752,31 @@ export interface LocalizeScriptSystemPromptOptions {
  * carve-out below so a deliberate brand mention survives localization
  * instead of being softened out by a rule aimed at a different problem
  * (generic ad-copy phrasing, not a specific required name).
+ *
+ * 2026-09-24: word-budget guidance rewritten after two real jobs showed
+ * finished videos landing at ~58% of their requested duration (19.7s from
+ * a 36s request; 12.7s from a 24s request) — traced to THIS prompt, not to
+ * ElevenLabs, the render step, or anything duration-related downstream.
+ * Two compounding causes, both measured directly from real
+ * video_scene_audio rows across those 8 scenes: (1) the model was writing
+ * only ~72-74% of the word count its own "2.5 words per second" guidance
+ * implied it should, and (2) that 2.5wps figure was itself wrong — real
+ * ElevenLabs narration for this pipeline measured ~3.1 words/sec, ~25%
+ * faster than assumed, so even a scene that DID hit the old word budget
+ * would still have landed short. Fixed by raising the stated rate to the
+ * measured ~3.1wps and reframing the instruction from an upper bound
+ * ("fitting comfortably within") to a target to reach, with an explicit
+ * asymmetric-cost explanation (a long scene just holds its last frame a
+ * beat longer; a short scene shortens the whole finished video) — the
+ * previous wording gave the model no reason to prefer filling the budget
+ * over safely undershooting it. This function has no code-level word-count
+ * enforcement of its own (no min/max, no truncation) — the entire budget
+ * lives in this prose, which is why getting the stated rate right matters.
+ * Deliberately NOT touched: synthesizeVoice.ts's own separate
+ * WORDS_PER_SECOND=2.5 constant — that one only estimates duration_ms
+ * before AssemblyAI's real transcription overwrites it moments later
+ * (that file's own header), so it never affects a scene's actual rendered
+ * length and fixing it wouldn't have changed either real job's outcome.
  */
 export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: LocalizeScriptSystemPromptOptions): string {
   return (
@@ -759,8 +784,13 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     `You are localizing a video's narration into ${opts.language}. You will be given a list of scenes, each ` +
     'with a "narration_intent" (the SEMANTIC content that scene\'s narration should convey — not literal ' +
     `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
-    'each scene, fitting comfortably within its target duration (roughly 2.5 words per second is a reasonable ' +
-    'speaking pace) — a soft constraint, not an exact word count. Write it as natural spoken narration for a ' +
+    'each scene, writing to fill close to its FULL target duration — real measured narration audio for this ' +
+    'pipeline runs at roughly 3.1 words per second (multiply that rate by target_duration_seconds for the word ' +
+    'count to aim for), noticeably faster than a slow, deliberate voiceover pace. Err on the side of a few words ' +
+    'too many rather than too few: the render step stretches a scene\'s own visual (holding its final frame) to ' +
+    'cover narration that runs a little long, but narration that runs short leaves the rest of the target ' +
+    'duration silent and shortens the whole finished video below what was requested — a real problem, not a ' +
+    'cosmetic one. Write it as natural spoken narration for a ' +
     'real story, never as scripted ad copy or a voiceover that sounds like a commercial. The one exception: if ' +
     `a narration_intent explicitly calls for naming ${brand.name} (or otherwise references the brand by name), the ` +
     `localized ${opts.language} wording MUST include that name literally, spoken naturally — never paraphrase, ` +

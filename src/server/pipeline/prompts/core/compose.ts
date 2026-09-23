@@ -430,7 +430,40 @@ const SCENE_CONTENTS_RULE =
 
 // A production-value quality floor, not a style dictate — the scene's own
 // description still decides mood/style/composition (SCENE_IS_CREATIVE_BRIEF).
-const CINEMATIC_QUALITY = 'Real cinematographic craft: deliberate framing, depth of field, and lighting.'
+// Extended 2026-09-24 (was CINEMATIC_QUALITY, a single clause about framing/
+// DOF/lighting only) into a full photorealistic-rendering floor, shared
+// across every IMAGE composer — the goal being "4K visual QUALITY, not 4K
+// resolution": these are still 720p-equivalent generations
+// (nanoBanana.ts/kie.ts), this only asks the model to render that many
+// pixels as convincingly as premium commercial photography would, never a
+// resolution, model, or pipeline change. Deliberately dense rather than an
+// exhaustive list of every desired attribute (skin/food/fabric/wood/metal/
+// glass each got their own clause in an earlier draft) — a real prior
+// incident (this constant's own history, and SCENE_CONTENTS_RULE's) found
+// that image models weight verbose fixed boilerplate heavily against the
+// one sentence that says what to draw, and a long list of literal "4K"/
+// "8K"/"ultra HD"/"cinematic" buzzwords doesn't raise resolution and can
+// read as generic AI-slop styling instead of an actual quality bar.
+// Compressed to one sentence naming the material categories that most
+// often read as fake (skin, food, fabric) plus the failure modes most
+// likely to make a 720p image look like a 720p image (oversharpening,
+// plastic/CGI texture, oversaturation) rather than restating every
+// requested attribute individually — a ~460-char first draft covering
+// every attribute literally (reflections, HDR, tonal detail, camera optics,
+// etc. each spelled out) measured out at real cost against the production
+// BRAND_PROFILE: this composer's fixed-cost budget is tight enough
+// (limits.ts's PROMPT_LIMITS.sceneImage=2995, ~2420 of which is already
+// fixed brand/safety text on the 'featured' branch) that draft pushed a
+// real ~600-char visual_description into truncation for the first time —
+// exactly the failure mode this file's own "9-12% of each prompt was
+// scene content" incident (above) already fixed once and this constant
+// must never reopen. Kept under 220 chars instead, verified against
+// compose.test.ts's real truncation-cascade regressions (600-char
+// visual_description, long shot_notes/cast) rather than by feel.
+const PHOTOREALISTIC_QUALITY_FLOOR =
+  'Premium photorealistic commercial photography: crisp natural detail, true-to-life skin/food/fabric ' +
+  'texture, natural camera depth of field and lighting — never oversharpened, plastic/CGI-looking, or ' +
+  'oversaturated.'
 
 // Added 2026-09-19 after a real character-ref generation (the ONE shared
 // reference every scene in a pipeline then edits from) showed a duplicate,
@@ -533,7 +566,7 @@ function composeBlogImage(
 
   const parts = [topicLine]
   if (referenceCopyLine) parts.push(referenceCopyLine)
-  parts.push(moodClause(), FOOD_MUST_LOOK_CLEAN)
+  parts.push(moodClause(), PHOTOREALISTIC_QUALITY_FLOOR, FOOD_MUST_LOOK_CLEAN)
   // The dashboard's "Your Scene Idea" field — the creative brief this scene
   // is built around (see SCENE_IS_CREATIVE_BRIEF above the type declaring
   // this field). Absent only for a job created before the field became
@@ -610,6 +643,7 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
     `A clean, well-lit reference photo of the ${brand.name} branded vehicle.`,
     unitBrandingBlock(brand, 'featured'),
     oneWordmarkOnly(brand.unit.wordmarkText),
+    PHOTOREALISTIC_QUALITY_FLOOR,
   ]
 
   let referenceImageUrl: string | undefined
@@ -816,7 +850,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     look,
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
-    CINEMATIC_QUALITY,
+    PHOTOREALISTIC_QUALITY_FLOOR,
     showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
     unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
@@ -887,7 +921,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     look,
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
-    CINEMATIC_QUALITY,
+    PHOTOREALISTIC_QUALITY_FLOOR,
     showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
   ]
 
@@ -1045,6 +1079,19 @@ function lookHoldClause(look: VideoScriptLook | null | undefined): string {
   return ` Keep the frame's ${bits.join(', ')} lighting and color steady for the whole shot — no lighting shifts.`
 }
 
+// A photographic/rendering quality floor for the 720p Seedance deliverable,
+// same posture as composeSceneImagePrompt's own PHOTOREALISTIC_QUALITY_FLOOR
+// (~line 433) — never a camera-movement or composition dictate (that stays owned
+// entirely by the motion-layers paragraph below and each scene's own
+// shot_notes/visualDescription), so it can't make every scene move or look
+// staged the same way. Reusable across every scene regardless of its
+// blocking, camera move, or mood.
+const VIDEO_VISUAL_QUALITY_STYLE =
+  ' Rendered as premium, photorealistic cinematic smartphone footage: natural color science, subtle ' +
+  'refined grading, high dynamic range with clean highlights and shadows, crisp realistic detail and ' +
+  'textures, natural skin and lighting, natural motion blur — polished commercial quality, never ' +
+  'oversaturated, over-sharpened, or CGI-looking.'
+
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
@@ -1058,6 +1105,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
     'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
     'a new person, limb, or object that was not already in that frame.' +
+    VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
@@ -1093,6 +1141,7 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
     `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
     moodClause(),
     SCENE_IS_CREATIVE_BRIEF,
+    PHOTOREALISTIC_QUALITY_FLOOR,
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     job.castDescription ? `The people in this scene: ${job.castDescription}.` : '',
   ]

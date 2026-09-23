@@ -78,6 +78,14 @@ describe('composeHeroPrompt / composeInlinePrompt', () => {
     expect(first.prompt).toBe(second.prompt)
   })
 
+  it('includes the shared photorealistic-quality floor, same as every other image composer', () => {
+    const job = { pipelineId: 'pipeline-quality', topic: 'Community garden', category: 'Community Impact' }
+    const hero = composeHeroPrompt(testBrand, job)
+    const inline = composeInlinePrompt(testBrand, job)
+    expect(hero.prompt).toContain('Premium photorealistic commercial photography')
+    expect(inline.prompt).toContain('Premium photorealistic commercial photography')
+  })
+
   it('folds the outline\'s headline into the scene description when given, for photo style too', () => {
     const job = {
       pipelineId: 'pipeline-headline',
@@ -467,6 +475,11 @@ describe('composePhotoPrompt', () => {
     expect(photo.prompt).toContain('warmer colors, more optimistic tone')
   })
 
+  it('includes the shared photorealistic-quality floor, same as every other image composer', () => {
+    const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic, unitPresence: 'none' })
+    expect(photo.prompt).toContain('Premium photorealistic commercial photography')
+  })
+
   it('image_style "infographic" renders headline/subtitle/CTA instead of the no-text instructions', () => {
     const photo = composePhotoPrompt(testBrand, {
       ...baseJob,
@@ -643,9 +656,28 @@ describe('composeSceneImagePrompt', () => {
     expect(scene.prompt).toContain('middle of a road')
   })
 
-  it('asks for real cinematographic craft as a quality floor, without dictating a specific style', () => {
+  it('asks for premium photorealistic commercial-photography quality as a rendering floor, without dictating a specific style', () => {
     const scene = composeSceneImagePrompt(testBrand, baseJob)
-    expect(scene.prompt).toContain('cinematographic craft')
+    expect(scene.prompt).toContain('Premium photorealistic commercial photography')
+  })
+
+  it('names the rendering failure modes to avoid (oversharpening, plastic/CGI texture, oversaturation) without spamming resolution buzzwords like "4K"/"8K"/"ultra HD"', () => {
+    const scene = composeSceneImagePrompt(testBrand, baseJob)
+    expect(scene.prompt).toContain('never oversharpened, plastic/CGI-looking, or oversaturated')
+    expect(scene.prompt.toLowerCase()).not.toMatch(/\b(4k|8k|ultra ?hd)\b/)
+  })
+
+  it('keeps the quality floor a rendering-fidelity instruction, never a composition dictate — the scene\'s own visual_description still decides framing/subject/style', () => {
+    const visualDescription = 'A tight, graphic close-up on a single tomato, harsh studio lighting, high contrast'
+    const scene = composeSceneImagePrompt(testBrand, { ...baseJob, visualDescription })
+    expect(scene.prompt).toContain(visualDescription)
+    // The quality floor names material/optics qualities only — no framing,
+    // subject, or mood words that could override a scene's own choices.
+    const qualityFloor = 'Premium photorealistic commercial photography'
+    const qualityClauseText = scene.prompt.slice(scene.prompt.indexOf(qualityFloor))
+    for (const styleWord of ['close-up', 'wide shot', 'graphic', 'studio lighting', 'high contrast']) {
+      expect(qualityClauseText.toLowerCase()).not.toContain(styleWord.toLowerCase())
+    }
   })
 
   it('does not frame the scene as "a marketing video" — that framing itself primed a staged/ad look', () => {
@@ -743,7 +775,7 @@ describe('composeSceneImagePrompt', () => {
     // only the free-text fields are ever allowed to shrink.
     expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
     expect(scene.prompt).toContain('ONLY entrance')
-    expect(scene.prompt).toContain('cinematographic craft')
+    expect(scene.prompt).toContain('Premium photorealistic commercial photography')
   })
 
   it('does not truncate a normal, realistic scene at all', () => {
@@ -863,6 +895,21 @@ describe('composeSceneImageEditPrompt', () => {
     expect(edit.prompt).toContain('fix only these defects: extra person behind the counter; floating crate.')
     expect(edit.prompt).toContain('NO NEW TEXT INSTRUCTION')
   })
+
+  // Deliberately excluded — this is a short, surgical "fix only this
+  // defect, keep everything else exactly as it is" edit against the
+  // rejected image itself (this describe block's first test, above); the
+  // image's existing rendering quality is already part of what "keep
+  // everything else exactly as it is" preserves, and re-asserting a broad
+  // quality floor here would only compete with the narrow, targeted fix
+  // for the model's attention.
+  it('does not include the shared photorealistic-quality floor — a targeted fix has no room for a broad style/quality restatement', () => {
+    const edit = composeSceneImageEditPrompt(testBrand, {
+      rejectedImageUrl: 'https://example.com/rejected.png',
+      issues: ['disembodied hand above the counter'],
+    })
+    expect(edit.prompt).not.toContain('Premium photorealistic commercial photography')
+  })
 })
 
 describe('composeSceneVideoPrompt', () => {
@@ -907,6 +954,12 @@ describe('composeSceneVideoPrompt', () => {
     expect(prompt).toContain('never motion with no real cause')
     expect(prompt).toContain('produce, packaged goods, and other solid objects at rest must stay completely still')
     expect(prompt).toContain('unless a visible hand, wind, or other real force is actually moving them')
+  })
+
+  it('adds a photographic quality-floor clause regardless of look/isFinalScene, without dictating any camera movement', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('premium, photorealistic cinematic smartphone footage')
+    expect(prompt).toContain('polished commercial quality, never oversaturated, over-sharpened, or CGI-looking')
   })
 
   it("never exceeds Seedance's real ~2500-char video prompt cap, even with a maximally long visual_description/shot_notes", () => {
@@ -963,6 +1016,11 @@ describe('composeCharacterRefPrompt', () => {
     const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-2' })
     expect(ref.prompt).toContain(`Exactly one "${testBrand.unit.wordmarkText}" wordmark total`)
     expect(ref.prompt).toContain('no second or duplicate wordmark, decal, or graphic')
+  })
+
+  it('includes the shared photorealistic-quality floor, same as every other image composer', () => {
+    const ref = composeCharacterRefPrompt(testBrand, { pipelineId: 'pipeline-char-ref-quality' })
+    expect(ref.prompt).toContain('Premium photorealistic commercial photography')
   })
 
   it('is always treated as unitPresence: featured — the full structural descriptor, not the identity tier', () => {
