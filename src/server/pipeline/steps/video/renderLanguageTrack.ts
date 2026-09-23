@@ -26,6 +26,18 @@ import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/
 const POLL_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 20 * 60 * 1000
 
+// Supabase Storage's real upload ceiling — empirically confirmed 50MB
+// succeeds, 52MB fails ("object exceeded the maximum allowed size"), see
+// avMerger.ts's CAPPED_VIDEO_ENCODE_ARGS for the bitrate math this bounds.
+// Targeting 50MB, not 52MB, since the gap between the two was never itself
+// tested. Whichever pass is the true FINAL render for a track (mux when
+// there are no captions, caption-burn when there are) gets checked against
+// this after its quality-tier (CRF) attempt — CRF has no size ceiling of
+// its own, so this is the only place that actually verifies the real
+// output fits before it's escalated to the deterministic capped fallback
+// or uploaded.
+const SAFE_UPLOAD_BYTES = 50_000_000
+
 // A track genuinely still in flight always ends up recording SOME outcome
 // (success, provider failure, or pollUntilDone's own timeout) within at
 // most two back-to-back POLL_TIMEOUT_MS windows — concat pass, then caption
@@ -378,6 +390,13 @@ export async function runRenderLanguageTrack(
     // whether it's specifically the caption pass (re-encoding the WHOLE
     // merged video, not just per-scene clips) that risks the ceiling.
     let captionElapsedMs: number | null = null
+    // Which tier actually produced finalBuffer — 'quality' (CRF, the
+    // default/first attempt on whichever pass is the true final render)
+    // unless the size guard below had to escalate to the deterministic
+    // capped fallback. Recorded into output_snapshot for observability.
+    let encodeTier: 'quality' | 'capped' = 'quality'
+    let cappedElapsedMs: number | null = null
+
     if (assContent) {
       const [muxTempUrl, assFileUrl] = await Promise.all([
         uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-mux-tmp.mp4`, muxOutcome.fileBuffer, 'video/mp4'),
@@ -399,6 +418,67 @@ export async function runRenderLanguageTrack(
       }
       finalBuffer = captionOutcome.fileBuffer
       captionElapsedMs = captionOutcome.elapsedMs
+
+      // Caption-burn's output IS the final render for a captioned track —
+      // this is the only point that needs the size guard, not the
+      // intermediate mux buffer above (that one's just an input to this
+      // pass, never uploaded on its own). See SAFE_UPLOAD_BYTES's header.
+      if (finalBuffer.length > SAFE_UPLOAD_BYTES) {
+        console.log(
+          `[render:caption] quality-tier output ${finalBuffer.length} bytes exceeds SAFE_UPLOAD_BYTES ` +
+            `(${SAFE_UPLOAD_BYTES}) — escalating to the capped fallback`,
+        )
+        const cappedJobRef = await avMerger.submitCaptionBurnCapped(muxTempUrl, assFileUrl)
+        const cappedOutcome = await pollUntilDone(avMerger, cappedJobRef, 'caption', client, track.id)
+        if ('cancelled' in cappedOutcome) {
+          console.log(`[render:caption] cancelled during capped fallback — stopping render, not recording a failure`)
+          return { ran: true }
+        }
+        if (!('fileBuffer' in cappedOutcome)) {
+          const detail = 'failed' in cappedOutcome ? cappedOutcome.detail : 'FFmpeg capped caption pass poll timed out'
+          throw new ProviderCallError('upload-post', null, `${detail} (after ${(cappedOutcome.elapsedMs / 1000).toFixed(1)}s)`)
+        }
+        if (cappedOutcome.fileBuffer.length > SAFE_UPLOAD_BYTES) {
+          // Should be unreachable given CAPPED_VIDEO_ENCODE_ARGS's own
+          // worst-case math — a hard failure here means that math's
+          // assumption broke, not a normal retryable condition, so this
+          // deliberately isn't a silent upload of an oversized file.
+          throw new Error(
+            `render: capped caption-burn fallback still produced ${cappedOutcome.fileBuffer.length} bytes, over ` +
+              `SAFE_UPLOAD_BYTES (${SAFE_UPLOAD_BYTES})`,
+          )
+        }
+        finalBuffer = cappedOutcome.fileBuffer
+        captionElapsedMs = cappedOutcome.elapsedMs
+        cappedElapsedMs = cappedOutcome.elapsedMs
+        encodeTier = 'capped'
+      }
+    } else if (muxOutcome.fileBuffer.length > SAFE_UPLOAD_BYTES) {
+      // No captions — mux's own output IS the final render, so it's the
+      // one that needs the size guard here instead.
+      console.log(
+        `[render:mux] quality-tier output ${muxOutcome.fileBuffer.length} bytes exceeds SAFE_UPLOAD_BYTES ` +
+          `(${SAFE_UPLOAD_BYTES}) — escalating to the capped fallback`,
+      )
+      const cappedJobRef = await avMerger.submitMuxCapped(videoTempUrl, audioTempUrl, totalDurationSeconds)
+      const cappedOutcome = await pollUntilDone(avMerger, cappedJobRef, 'mux', client, track.id)
+      if ('cancelled' in cappedOutcome) {
+        console.log(`[render:mux] cancelled during capped fallback — stopping render, not recording a failure`)
+        return { ran: true }
+      }
+      if (!('fileBuffer' in cappedOutcome)) {
+        const detail = 'failed' in cappedOutcome ? cappedOutcome.detail : 'FFmpeg capped mux pass poll timed out'
+        throw new ProviderCallError('upload-post', null, `${detail} (after ${(cappedOutcome.elapsedMs / 1000).toFixed(1)}s)`)
+      }
+      if (cappedOutcome.fileBuffer.length > SAFE_UPLOAD_BYTES) {
+        throw new Error(
+          `render: capped mux fallback still produced ${cappedOutcome.fileBuffer.length} bytes, over ` +
+            `SAFE_UPLOAD_BYTES (${SAFE_UPLOAD_BYTES})`,
+        )
+      }
+      finalBuffer = cappedOutcome.fileBuffer
+      cappedElapsedMs = cappedOutcome.elapsedMs
+      encodeTier = 'capped'
     }
 
     // Storage path convention: freshcan-videos/{job_id}/{language}.mp4
@@ -426,7 +506,7 @@ export async function runRenderLanguageTrack(
         `audio-concat ${(audioOutcome.elapsedMs / 1000).toFixed(1)}s, ` +
         `mux ${(muxOutcome.elapsedMs / 1000).toFixed(1)}s` +
         (captionElapsedMs !== null ? `, caption ${(captionElapsedMs / 1000).toFixed(1)}s` : ', no captions') +
-        `, ${scenes.length} scenes, ${finalBuffer.length} bytes`,
+        `, encodeTier=${encodeTier}, ${scenes.length} scenes, ${finalBuffer.length} bytes`,
     )
 
     await recordStepAttempt(client, {
@@ -441,7 +521,10 @@ export async function runRenderLanguageTrack(
       // queryable per-attempt in pipeline_steps.output_snapshot, so a
       // pattern (e.g. concat consistently taking 7-8min against the ~9min
       // wall) is visible across many real renders without needing to
-      // capture worker stdout at the time.
+      // capture worker stdout at the time. encodeTier/cappedElapsedMs are
+      // the SAFE_UPLOAD_BYTES size guard's own observability — lets a real
+      // rollout confirm how often the quality-first CRF pass actually
+      // needs to escalate, without cross-referencing worker stdout.
       outputSnapshot: {
         fileUrl: permanentUrl,
         sceneCount: scenes.length,
@@ -450,6 +533,8 @@ export async function runRenderLanguageTrack(
         audioConcatElapsedMs: audioOutcome.elapsedMs,
         muxElapsedMs: muxOutcome.elapsedMs,
         captionElapsedMs,
+        encodeTier,
+        cappedElapsedMs,
       },
     })
 

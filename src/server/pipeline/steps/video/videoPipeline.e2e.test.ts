@@ -198,14 +198,23 @@ function makeMockAVMerger() {
   const submitVideoConcat = vi.fn(async () => ({ providerRef: `video-concat-${++counter}` }))
   const submitAudioConcat = vi.fn(async () => ({ providerRef: `audio-concat-${++counter}` }))
   const submitMux = vi.fn(async () => ({ providerRef: `mux-${++counter}` }))
+  // Capped fallbacks are never hit by these fixtures — the fake buffers
+  // below are tiny, always well under SAFE_UPLOAD_BYTES — but the mock
+  // must still satisfy AVMerger's shape. Distinct fake bytes from their
+  // quality-tier siblings so a fallback-path test can tell which tier
+  // actually produced the uploaded buffer.
+  const submitMuxCapped = vi.fn(async () => ({ providerRef: `mux-capped-${++counter}` }))
   const submitCaptionBurn = vi.fn(async () => ({ providerRef: `caption-${++counter}` }))
+  const submitCaptionBurnCapped = vi.fn(async () => ({ providerRef: `caption-capped-${++counter}` }))
   const submitSceneDurationMatch = vi.fn(async () => ({ providerRef: `duration-match-${++counter}` }))
   const poll = vi.fn(async (): Promise<AVMergeResult> => ({ status: 'ready', fileBuffer: Buffer.from(`fake-video-${counter}`) }))
   return {
     submitVideoConcat,
     submitAudioConcat,
     submitMux,
+    submitMuxCapped,
     submitCaptionBurn,
+    submitCaptionBurnCapped,
     submitSceneDurationMatch,
     poll,
   } satisfies AVMerger
@@ -1233,6 +1242,11 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     // rejects any ';' in full_command, so concat/mux/caption burn-in are all
     // separate jobs.
     expect(avMerger.submitCaptionBurn).toHaveBeenCalledTimes(1)
+    // The fake buffers here are tiny, well under SAFE_UPLOAD_BYTES — the
+    // size guard's capped fallback must never fire when the quality-tier
+    // output already fits, so no extra remote job gets submitted.
+    expect(avMerger.submitMuxCapped).not.toHaveBeenCalled()
+    expect(avMerger.submitCaptionBurnCapped).not.toHaveBeenCalled()
 
     const { data: row } = await client
       .from('generated_content')
@@ -1245,6 +1259,98 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(row.file_url).toContain('freshcan-videos')
     expect(row.output_data.total_scenes).toBe(2)
   })
+
+  it('M4: a captioned render whose quality-tier caption-burn output exceeds SAFE_UPLOAD_BYTES escalates to the capped fallback and uploads the smaller buffer', async () => {
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+
+    const image = makeMockImageGenerator()
+    const video = makeMockVideoGenerator()
+    const uploader = makeFakeVideoUploader()
+    const scaler = makeMockScaler()
+    await runGenerateCharacterRef(client, approved, 'a reference prompt', image, uploader)
+    const { data: generating } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    await runGenerateSceneVisual(client, generating as PipelineRow, 'https://example.com/mock-img-1.png', image, video, uploader, scaler)
+    const { data: visualsReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+
+    const { data: tracks } = await client.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id)
+    let track = tracks![0] as TrackRow
+    await runLocalizeScript(client, track, approved.id, scriptGen)
+    track = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+
+    const voice = makeMockVoiceSynthesizer()
+    await runSynthesizeVoice(client, track, approved.id, jobId, voice, uploader)
+    track = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+
+    const transcription = makeMockTranscriptionService()
+    await runTranscribeAudio(client, track, approved.id, transcription)
+    track = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
+    expect(track.status).toBe('awaiting_shared')
+
+    // Custom AVMerger: identical shape/behavior to makeMockAVMerger's small
+    // fake buffers, EXCEPT the quality-tier caption-burn attempt (not its
+    // capped sibling), which deliberately comes back over SAFE_UPLOAD_BYTES
+    // to force the size guard's escalation branch — the capped fallback
+    // then returns a normal small buffer, which must be the one that
+    // actually ends up permanently uploaded, not the oversized one.
+    let counter = 0
+    const OVERSIZED_BYTES = 50_000_001
+    const submitVideoConcat = vi.fn(async () => ({ providerRef: `video-concat-${++counter}` }))
+    const submitAudioConcat = vi.fn(async () => ({ providerRef: `audio-concat-${++counter}` }))
+    const submitMux = vi.fn(async () => ({ providerRef: `mux-${++counter}` }))
+    const submitMuxCapped = vi.fn(async () => ({ providerRef: `mux-capped-${++counter}` }))
+    const submitCaptionBurn = vi.fn(async () => ({ providerRef: `caption-${++counter}` }))
+    const submitCaptionBurnCapped = vi.fn(async () => ({ providerRef: `caption-capped-${++counter}` }))
+    const submitSceneDurationMatch = vi.fn(async () => ({ providerRef: `duration-match-${++counter}` }))
+    const poll = vi.fn(async (jobRef: { providerRef: string }): Promise<AVMergeResult> => {
+      if (jobRef.providerRef.startsWith('caption-') && !jobRef.providerRef.startsWith('caption-capped-')) {
+        return { status: 'ready', fileBuffer: Buffer.alloc(OVERSIZED_BYTES, 'x') }
+      }
+      return { status: 'ready', fileBuffer: Buffer.from(`fake-video-${jobRef.providerRef}`) }
+    })
+    const avMerger = {
+      submitVideoConcat,
+      submitAudioConcat,
+      submitMux,
+      submitMuxCapped,
+      submitCaptionBurn,
+      submitCaptionBurnCapped,
+      submitSceneDurationMatch,
+      poll,
+    } satisfies AVMerger
+
+    await runRenderLanguageTrack(client, track, visualsReady as PipelineRow, avMerger, uploader)
+
+    const { data: finalTrack } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+    expect(finalTrack.status).toBe('ready')
+    expect(submitCaptionBurn).toHaveBeenCalledTimes(1)
+    expect(submitCaptionBurnCapped).toHaveBeenCalledTimes(1)
+
+    // The permanent upload must have received the CAPPED (small) buffer,
+    // never the oversized quality-tier one — this is the "avoid unnecessary
+    // recompression, upload the quality tier whenever it already fits"
+    // guard working in reverse: it escalated because it genuinely didn't fit.
+    const uploadCalls = (uploader.uploadBuffer as ReturnType<typeof vi.fn>).mock.calls as [string, Buffer, string][]
+    const finalUploadCall = uploadCalls.find(([path]) => path === `${jobId}/EN.mp4`)
+    expect(finalUploadCall).toBeDefined()
+    const [, uploadedBuffer] = finalUploadCall!
+    expect(uploadedBuffer.length).toBeLessThan(OVERSIZED_BYTES)
+
+    const { data: step } = await client
+      .from('pipeline_steps')
+      .select('*')
+      .eq('content_language_track_id', track.id)
+      .eq('step_name', 'render')
+      .eq('status', 'succeeded')
+      .order('attempt_number', { ascending: false })
+      .limit(1)
+      .single()
+    expect(step.output_snapshot.encodeTier).toBe('capped')
+  }, 30000)
 
   it('M4: render does not run until the pipeline\'s shared visuals are ready (generation fencing)', async () => {
     const { pipeline } = await makeJobAndPipeline('EN')

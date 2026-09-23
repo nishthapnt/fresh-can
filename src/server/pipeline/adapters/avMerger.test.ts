@@ -3,8 +3,10 @@ import {
   buildVideoConcatCommand,
   buildAudioConcatCommand,
   buildMuxCommand,
+  buildMuxCommandCapped,
   buildCaptionAssFile,
   buildCaptionBurnCommand,
+  buildCaptionBurnCommandCapped,
   buildScaleCommand,
   buildSceneDurationMatchCommand,
   normalizeCaptionCues,
@@ -43,9 +45,9 @@ describe('buildVideoConcatCommand', () => {
 
   it('caps bitrate instead of using CRF — CRF has no size ceiling, and a real 9-scene/90s render at CRF23 exceeded Supabase Storage\'s upload size limit even after per-clip downscaling', () => {
     const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
-    expect(fullCommand).toContain('-b:v 3500k')
-    expect(fullCommand).toContain('-maxrate 3500k')
-    expect(fullCommand).toContain('-bufsize 7000k')
+    expect(fullCommand).toContain('-b:v 3800k')
+    expect(fullCommand).toContain('-maxrate 3800k')
+    expect(fullCommand).toContain('-bufsize 7600k')
     expect(fullCommand).not.toContain('-crf')
   })
 })
@@ -105,6 +107,47 @@ describe('buildMuxCommand', () => {
     expect(fullCommand).not.toContain(';')
     expect(fullCommand).not.toContain('-filter_complex')
   })
+
+  it('defaults to CRF 23, quality-first, with no bitrate cap — the normal path whenever there are no captions', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
+    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).not.toContain('-b:v')
+    expect(fullCommand).not.toContain('-maxrate')
+    expect(fullCommand).not.toContain('-bufsize')
+  })
+
+  it('accepts a crf override', () => {
+    const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10, 30)
+    expect(fullCommand).toContain('-crf 30')
+  })
+})
+
+describe('buildMuxCommandCapped', () => {
+  it('takes the same two inputs as buildMuxCommand, with the same fade behavior', () => {
+    const { files, fullCommand, outputExtension } = buildMuxCommandCapped(
+      'https://example.com/video.mp4',
+      'https://example.com/audio.mp4',
+      10,
+    )
+    expect(files).toEqual(['https://example.com/video.mp4', 'https://example.com/audio.mp4'])
+    expect(fullCommand).toContain('fade=t=out:st=9.40:d=0.60')
+    expect(fullCommand).toContain('afade=t=out:st=9.40:d=0.60')
+    expect(outputExtension).toBe('mp4')
+  })
+
+  it('caps bitrate instead of using CRF — the deterministic, guaranteed-fit fallback for when a quality-tier mux attempt exceeds SAFE_UPLOAD_BYTES', () => {
+    const { fullCommand } = buildMuxCommandCapped('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
+    expect(fullCommand).toContain('-b:v 3800k')
+    expect(fullCommand).toContain('-maxrate 3800k')
+    expect(fullCommand).toContain('-bufsize 7600k')
+    expect(fullCommand).not.toContain('-crf')
+  })
+
+  it('never contains a semicolon or filter_complex', () => {
+    const { fullCommand } = buildMuxCommandCapped('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
+    expect(fullCommand).not.toContain(';')
+    expect(fullCommand).not.toContain('-filter_complex')
+  })
 })
 
 describe('buildCaptionAssFile', () => {
@@ -151,11 +194,11 @@ describe('buildCaptionAssFile', () => {
   it('pins PlayResX/PlayResY to the real delivery resolution for the given aspect ratio', () => {
     const words = [{ text: 'hello', start: 0, end: 400 }]
     const ass916 = buildCaptionAssFile(words, '9:16')!
-    expect(ass916).toContain('PlayResX: 1080')
-    expect(ass916).toContain('PlayResY: 1920')
+    expect(ass916).toContain('PlayResX: 720')
+    expect(ass916).toContain('PlayResY: 1280')
     const ass169 = buildCaptionAssFile(words, '16:9')!
-    expect(ass169).toContain('PlayResX: 1920')
-    expect(ass169).toContain('PlayResY: 1080')
+    expect(ass169).toContain('PlayResX: 1280')
+    expect(ass169).toContain('PlayResY: 720')
   })
 
   it('wraps into MORE, shorter lines on the narrower 9:16 frame than on the wider 16:9 frame, for the same words', () => {
@@ -205,12 +248,43 @@ describe('buildCaptionBurnCommand', () => {
     expect(fullCommand).not.toContain('-filter_complex')
   })
 
-  it('caps bitrate instead of using CRF — this pass re-encodes the final render, so an uncapped CRF here could re-inflate an already size-bounded video-concat pass', () => {
+  it('defaults to CRF 23, quality-first, with no bitrate cap — the normal path whenever captions are present', () => {
     const { fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass')
-    expect(fullCommand).toContain('-b:v 3500k')
-    expect(fullCommand).toContain('-maxrate 3500k')
-    expect(fullCommand).toContain('-bufsize 7000k')
+    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).not.toContain('-b:v')
+    expect(fullCommand).not.toContain('-maxrate')
+    expect(fullCommand).not.toContain('-bufsize')
+  })
+
+  it('accepts a crf override', () => {
+    const { fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass', 30)
+    expect(fullCommand).toContain('-crf 30')
+  })
+})
+
+describe('buildCaptionBurnCommandCapped', () => {
+  it('takes the same two inputs as buildCaptionBurnCommand, burning via the subtitles filter with audio passed through', () => {
+    const { files, fullCommand } = buildCaptionBurnCommandCapped(
+      'https://example.com/merged.mp4',
+      'https://example.com/captions.ass',
+    )
+    expect(files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
+    expect(fullCommand).toContain('subtitles={input1}')
+    expect(fullCommand).toContain('-c:a copy')
+  })
+
+  it('caps bitrate instead of using CRF — the deterministic, guaranteed-fit fallback for when a quality-tier caption-burn attempt exceeds SAFE_UPLOAD_BYTES', () => {
+    const { fullCommand } = buildCaptionBurnCommandCapped('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(fullCommand).toContain('-b:v 3800k')
+    expect(fullCommand).toContain('-maxrate 3800k')
+    expect(fullCommand).toContain('-bufsize 7600k')
     expect(fullCommand).not.toContain('-crf')
+  })
+
+  it('never contains a semicolon or filter_complex', () => {
+    const { fullCommand } = buildCaptionBurnCommandCapped('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(fullCommand).not.toContain(';')
+    expect(fullCommand).not.toContain('-filter_complex')
   })
 })
 
@@ -374,6 +448,22 @@ describe('UploadPostAVMerger', () => {
     expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
     expect(body.full_command).not.toContain(';')
     expect(body.full_command).toContain('fade=t=out:st=9.40:d=0.60')
+    expect(body.full_command).toContain('-crf 23')
+  })
+
+  it('submitMuxCapped() sends the deterministic bitrate-capped fallback command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-1mc' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitMuxCapped('https://example.com/v.mp4', 'https://example.com/a.mp4', 10)
+    expect(ref.providerRef).toBe('job-1mc')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
+    expect(body.full_command).toContain('-b:v 3800k')
+    expect(body.full_command).not.toContain('-crf')
   })
 
   it('submitScale() sends Apikey auth and the built scale command for the given clip/dimensions', async () => {
@@ -430,6 +520,22 @@ describe('UploadPostAVMerger', () => {
     const body = JSON.parse(capturedBody!)
     expect(body.files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
     expect(body.full_command).not.toContain(';')
+    expect(body.full_command).toContain('-crf 23')
+  })
+
+  it('submitCaptionBurnCapped() sends the deterministic bitrate-capped fallback command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-2c' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitCaptionBurnCapped('https://example.com/merged.mp4', 'https://example.com/captions.ass')
+    expect(ref.providerRef).toBe('job-2c')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
+    expect(body.full_command).toContain('-b:v 3800k')
+    expect(body.full_command).not.toContain('-crf')
   })
 
   it('poll() returns pending for PENDING/PROCESSING', async () => {
