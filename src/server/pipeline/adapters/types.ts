@@ -59,26 +59,33 @@ export interface ScriptGenerator {
 export interface ImageGenerationInput {
   prompt: string
   /**
-   * A real photo of the branded subject (e.g. the Fresh-CAN truck) for
-   * Flux Kontext's image-editing mode — the model edits/extends from this
-   * instead of hallucinating the truck's appearance from a text description
-   * alone. Two implementations, two wire shapes: KieImageGenerator's
+   * A real photo of the branded subject (e.g. the Fresh-CAN truck) for the
+   * model's image-editing mode — it edits/extends from this instead of
+   * hallucinating the truck's appearance from a text description alone.
+   * Three implementations, three wire shapes: KieImageGenerator's
    * dedicated flux/kontext/generate endpoint takes a single-URL
    * `inputImage`; KieSceneImageGenerator's unified Market endpoint
-   * (`model: 'flux1-kontext'`) takes `image_urls: [url]`, an array — each
-   * adapter maps this same field to its own provider's shape.
+   * (`model: 'flux1-kontext'`) takes `image_urls: [url]`, an array;
+   * NanoBananaImageGenerator (nano-banana-2, the permanent choice for all
+   * three content types as of 2026-09-23) takes `image_input: [url]`,
+   * also an array — each adapter maps this same field to its own
+   * provider's shape.
    */
   referenceImageUrl?: string
   /**
-   * Passed straight through to Flux Kontext's own aspect-ratio param
-   * (`aspectRatio` on KieImageGenerator's endpoint, `aspect_ratio` on
-   * KieSceneImageGenerator's). Video-only (content_jobs.aspect_ratio,
-   * supabase/migrations/20260912120000) — blog/image_post callers never set
-   * this and get the adapter's '1:1' default, unchanged from before this
-   * field existed. The scene video-clip model (KieVideoGenerator) has no
-   * aspect-ratio param of its own — it inherits the shape of whatever
-   * reference image it animates, so setting this on character-ref/
-   * scene-image generation is sufficient to get matching video clips too.
+   * Passed straight through to the underlying model's own aspect-ratio
+   * param (`aspectRatio` on KieImageGenerator's endpoint, `aspect_ratio`
+   * on KieSceneImageGenerator's AND NanoBananaImageGenerator's — the
+   * latter's real param name, live-verified 2026-09-23 after discovering
+   * its previous `image_size` key was silently ignored, see
+   * nanoBanana.ts's own header). Video-only (content_jobs.aspect_ratio,
+   * supabase/migrations/20260912120000) — blog/image_post callers never
+   * set this and get NanoBananaImageGenerator's own '4:5' default,
+   * unchanged from before this field existed. The scene video-clip model
+   * (KieVideoGenerator) has no aspect-ratio param of its own — it
+   * inherits the shape of whatever reference image it animates, so
+   * setting this on character-ref/scene-image generation is sufficient to
+   * get matching video clips too.
    */
   aspectRatio?: '9:16' | '1:1' | '16:9'
 }

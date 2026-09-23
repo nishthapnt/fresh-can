@@ -437,9 +437,23 @@ what's defined) found the conflict was real, but not ambiguous:
 
 | Path | Adapter | Real limit | Source |
 |---|---|---|---|
-| Video scene images + character-ref | `KieImageGenerator` (Flux Kontext dedicated endpoint) | **3000 chars** | Confirmed live error text: "The prompt word cannot exceed 3000 characters." |
+| Video scene images + character-ref | `KieImageGenerator` (Flux Kontext dedicated endpoint) through 2026-09-22 | **3000 chars** | Confirmed live error text: "The prompt word cannot exceed 3000 characters." |
 | Scene video clips | `KieVideoGenerator` (Seedance 1.5 Pro) | **2500 chars** | Documented at docs.kie.ai/market/bytedance/seedance-1-5-pro (`input.prompt: 3-2500`). |
 | Blog hero/inline + image_post photo | `NanoBananaImageGenerator` (nano-banana-2) | unconfirmed | No documented limit found; currently unbounded, never failed in production. Owner-confirmed to leave unbounded rather than budget against a limit that may not apply to this model. |
+
+**Update, 2026-09-23:** `NanoBananaImageGenerator` (nano-banana-2) is now
+the PERMANENT image model for all three content types — video's scene
+images/character-ref moved off `KieImageGenerator` onto it too (matching
+blog/image_post, which had already been on it as a temporary measure).
+`PROMPT_LIMITS.sceneImage`'s 2995-char budget above is kept as a
+conservative ceiling regardless of the model change, not loosened just
+because nano-banana-2 has no documented limit of its own. Separately, a
+real bug was found and fixed in the same pass: this adapter had been
+sending `image_size: '4:5'` (a param name the API silently ignores) since
+its introduction, instead of the real, live-verified `aspect_ratio` key —
+meaning every blog/image_post image generated before this fix was
+secretly a plain square, not 4:5 as the code always intended. See
+`adapters/nanoBanana.ts`'s own header for the full verification.
 
 Neither confirmed number is 3,500 — the owner confirmed the real numbers
 (3000/2500) should be used instead. `prompts/core/limits.ts`'s

@@ -37,6 +37,40 @@ describe('NanoBananaImageGenerator (KIE nano-banana-2)', () => {
     expect(parsed.input.image_input).toEqual(['https://example.com/ref.jpg'])
   })
 
+  it("submit() sends aspect_ratio (not image_size), defaulting to '4:5' when aspectRatio is unset", async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'abc123' } }),
+        text: async () => '',
+      }
+    }) as unknown as typeof fetch
+    const gen = new NanoBananaImageGenerator('test-key', fetchImpl)
+    await gen.submit({ prompt: 'a hero image' })
+    const parsed = JSON.parse(capturedBody!)
+    expect(parsed.input.aspect_ratio).toBe('4:5')
+    expect(parsed.input).not.toHaveProperty('image_size')
+  })
+
+  it("submit() sends aspect_ratio: '9:16' when video passes its own aspectRatio", async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'abc123' } }),
+        text: async () => '',
+      }
+    }) as unknown as typeof fetch
+    const gen = new NanoBananaImageGenerator('test-key', fetchImpl)
+    await gen.submit({ prompt: 'a scene image', aspectRatio: '9:16' })
+    expect(JSON.parse(capturedBody!).input.aspect_ratio).toBe('9:16')
+  })
+
   it('submit() omits image_input when no referenceImageUrl is given', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {

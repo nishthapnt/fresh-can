@@ -44,8 +44,9 @@ export function hasExceededMaxAttempts(retryCount: number, maxAttempts: number):
 // per-stage caps (12 for character-ref/image, 60 for transcription/video,
 // 200 for FFmpeg render) were themselves undocumented magic numbers with no
 // stated rationale, not a baseline worth inheriting as-is. `kie` is shared
-// by both KieImageGenerator (scene images) and KieVideoGenerator (scene
-// clips) since they're the same provider/account, not per-asset-type.
+// by both NanoBananaImageGenerator (scene images, character-ref) and
+// KieVideoGenerator (scene clips) since they're the same provider/account,
+// not per-asset-type.
 // Tune elevenlabs/assemblyai against real failure rates once M3/M4 are
 // live-tested.
 //

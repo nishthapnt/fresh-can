@@ -202,9 +202,11 @@ export const blogGenerate = inngest.createFunction(
   async ({ event, step }) => {
     const { pipelineId, jobId } = event.data as { pipelineId: string; jobId: string }
     const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
-    // TEMPORARY (matches the old worker's own comment, 2026-09-17/18): forced
-    // to nanoBananaGenerator for both hero/inline to cut per-image test cost.
-    // Revert to KieImageGenerator for 'photo'-style once testing is done.
+    // PERMANENT as of 2026-09-23: nano-banana-2 (NanoBananaImageGenerator)
+    // is the permanent image model for both hero/inline, not a temporary
+    // test-cost measure — matches image_post and video, which made the
+    // same call the same day (see nanoBanana.ts's own header for the
+    // full history and the aspectRatio bug fixed alongside this).
     //
     // KIE_FAKE_MODE (test-only, default off — see env.ts/adapters/kieFake.ts):
     // previously video-only; extended here (2026-09-18) so a local smoke

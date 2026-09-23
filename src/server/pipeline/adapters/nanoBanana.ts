@@ -10,14 +10,32 @@ import { kieSubmitLimiter } from '../lib/kieRateLimiter'
 /**
  * KIE.ai `nano-banana-2` — a different underlying model than Flux Kontext,
  * reached through a different KIE endpoint shape (jobs/createTask +
- * jobs/recordInfo, not flux/kontext/*). Used specifically for
+ * jobs/recordInfo, not flux/kontext/*). Originally adopted for
  * image_style: 'infographic' — confirmed live (2026-09-10) that this model
- * renders headline/subtitle/CTA-bar text onto an image correctly,
- * where Flux Kontext reliably garbles the same kind of text (see
+ * renders headline/subtitle/CTA-bar text onto an image correctly, where
+ * Flux Kontext reliably garbles the same kind of text (see
  * prompts/brand/fresh-can.ts's incident notes on the infographic style
- * that was tried and removed). Implements the same ImageGenerator
- * interface as KieImageGenerator so callers don't need to know which
- * underlying model they're talking to.
+ * that was tried and removed) — then made the PERMANENT image generator
+ * for all three content types (2026-09-23): blog hero/inline, image_post
+ * 'photo' and 'infographic' styles, and video's character-ref/scene
+ * images all route through this class now. adapters/kie.ts's
+ * KieImageGenerator (Flux Kontext) is no longer wired into any pipeline as
+ * a result — kept for potential future reuse, not dead code to delete.
+ * Implements the same ImageGenerator interface as KieImageGenerator so
+ * callers don't need to know which underlying model they're talking to.
+ *
+ * aspectRatio bug fixed 2026-09-23: this class was sending
+ * `image_size: '4:5'` (hardcoded, ignoring `input.aspectRatio` entirely).
+ * Live-verified against the real API that `image_size` is silently
+ * ignored — every image came back a plain 2048x2048 square regardless of
+ * its value — while `aspect_ratio` is the real, respected param name
+ * (verified live for '4:5', '9:16', and '1:1'). This means every blog
+ * hero/inline and image_post photo generated before this fix was
+ * secretly square, not 4:5 as the code always intended. Now fixed to send
+ * `aspect_ratio: input.aspectRatio ?? '4:5'` — '4:5' stays the default for
+ * blog/image_post (unchanged intent, now actually enforced), video always
+ * passes its own aspectRatio explicitly (see ImageGenerationInput's own
+ * doc comment in adapters/types.ts).
  */
 export class NanoBananaImageGenerator implements ImageGenerator {
   constructor(
@@ -38,7 +56,11 @@ export class NanoBananaImageGenerator implements ImageGenerator {
         model: 'nano-banana-2',
         input: {
           prompt: input.prompt,
-          image_size: '4:5',
+          // 'aspect_ratio' (not 'image_size' — see this class's own header
+          // for the live-verified fix). '4:5' remains the default for
+          // callers that never set aspectRatio (blog/image_post); video
+          // always passes its own '9:16'/'1:1'/'16:9'.
+          aspect_ratio: input.aspectRatio ?? '4:5',
           ...(input.referenceImageUrl ? { image_input: [input.referenceImageUrl] } : {}),
         },
       }),

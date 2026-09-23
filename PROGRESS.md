@@ -1691,3 +1691,25 @@
 **⭐ Next steps**
 - Real dashboard run: check that the student looks the same across scenes, the lighting matches the plan, and edit-mode retries actually fix the flagged defect.
 - Credit plan step 5 (keep the best candidate) is still open.
+
+---
+
+### 2026-09-23 (cont'd) — Production incident: sharp/Turbopack crash, then video permanently moved onto nano-banana-2
+**Incident (found while testing the logo-compositing fix on production):**
+- Every `/api/inngest` invocation was crashing in production with `ERR_DLOPEN_FAILED: libvips-cpp.so...` — confirmed via `vercel logs` for both `freshcan-video-generate` and `freshcan-image-generate`. Two real jobs sat at `content_pipelines.status='created'` with zero `pipeline_steps` rows.
+- Two stacked root causes, both fixed and deployed:
+  1. `sharp`'s install script (needed to build/fetch the linux-x64 libvips binary) was blocked by npm's new `allowScripts` gate. Fixed by approving it for `sharp`/`esbuild`/`protobufjs`/`unrs-resolver` (`package.json`'s new `allowScripts` field).
+  2. That alone wasn't enough — a genuine Turbopack bug in Next.js 16.2.9 (confirmed against `vercel/next.js#97973`/`lovell/sharp#4567`) traces sharp's JS but not its native `.so` file. Fixed by upgrading to Next.js 16.3.6 (the version that special-cased native-addon tracing).
+- Verified live: a real video job ran all 14 steps to `status: 'ready'` after the fix, confirming both `sharp` (the logo watermark) and the rest of the pipeline work in production again.
+- Found and fixed a background test-hygiene issue while investigating: this Supabase project already has hundreds of pre-existing `"... DELETE ME"` e2e test rows (`content_jobs`/`content_pipelines`/etc.) — the e2e suite runs against the real, shared production database. Not cleaned up as part of this session; flagged, not actioned.
+
+**Model change: video's image generation moved to nano-banana-2, permanently, everywhere**
+- `video.ts`'s `characterRefGenerator()`/`sceneImageGenerator()` switched from `KieImageGenerator` (Flux Kontext) to `NanoBananaImageGenerator` (nano-banana-2) — matching blog/image_post, which were already on it.
+- The blog/image_post `TEMPORARY ... revert to KieImageGenerator once testing is done` comments (`inngest/functions/blog.ts`/`image.ts`, dating to 2026-09-17/18) are removed — nano-banana-2 is now the documented permanent choice for all three content types, not a cost-saving test measure. `KieImageGenerator` itself is unchanged and still tested, just no longer wired into any pipeline.
+- **Real bug found and fixed along the way**, live-verified against the KIE API directly: `NanoBananaImageGenerator` had been sending `image_size: '4:5'` — a parameter the API silently ignores. Every image came back a plain 2048x2048 square regardless of that value. The real, respected parameter is `aspect_ratio` (verified for `'4:5'`, `'9:16'`, `'1:1'`). This means every blog hero/inline image and image_post photo generated since this adapter was introduced has secretly been square, not 4:5 as intended — this was NOT caught until video's aspect-ratio requirement (`'9:16'`, previously silently ignored too) forced a closer look. Fixed to send `aspect_ratio: input.aspectRatio ?? '4:5'`.
+- Updated `nanoBanana.ts`'s, `kie.ts`'s (`KieImageGenerator`'s now-stale "shared across..." header), `types.ts`'s (`ImageGenerationInput` doc), `limits.ts`'s, `backoff.ts`'s, and `docs/PROMPT_ARCHITECTURE.md`'s comments/table for accuracy. `PROMPT_LIMITS.sceneImage` (2995 chars) is kept as-is — a conservative ceiling, not loosened just because nano-banana-2 has no documented cap.
+- Tests: 2 new `nanoBanana.test.ts` cases cover the `aspect_ratio` fix (default `'4:5'`, video's `'9:16'` passthrough). Full suite passing (see test run).
+
+**⭐ Next steps**
+- Watch the next real blog/image_post run to confirm hero/inline/photo images are now actually 4:5, not square as before.
+- Consider whether the pre-existing `DELETE ME` e2e test-row pileup in the production DB is worth a cleanup pass.

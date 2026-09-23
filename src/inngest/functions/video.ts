@@ -58,7 +58,8 @@ import { runSynthesizeVoice } from '../../server/pipeline/steps/video/synthesize
 import { runTranscribeAudio } from '../../server/pipeline/steps/video/transcribeAudio'
 import { runRenderLanguageTrack } from '../../server/pipeline/steps/video/renderLanguageTrack'
 import { OpenAIScriptGenerator, OpenAIImageValidator } from '../../server/pipeline/adapters/openai'
-import { KieImageGenerator, KieVideoGenerator } from '../../server/pipeline/adapters/kie'
+import { KieVideoGenerator } from '../../server/pipeline/adapters/kie'
+import { NanoBananaImageGenerator } from '../../server/pipeline/adapters/nanoBanana'
 import { FakeKieImageGenerator, FakeKieVideoGenerator } from '../../server/pipeline/adapters/kieFake'
 import type { ImageGenerator, VideoGenerator } from '../../server/pipeline/adapters/types'
 import { SupabaseVideoStorageUploader } from '../../server/pipeline/adapters/storage'
@@ -93,25 +94,22 @@ const MAX_VISUALS_WAIT_ITERATIONS = 120
 
 const client = createServiceClient()
 
+// PERMANENT as of 2026-09-23: character-ref and scene-image generation
+// both moved from KieImageGenerator (Flux Kontext) to NanoBananaImageGenerator
+// (nano-banana-2), unifying video onto the same image model blog/image_post
+// already use permanently — see nanoBanana.ts's own header for the full
+// history (infographic-text origin, why it's now the permanent choice
+// everywhere, and the aspectRatio bug found and fixed as part of this
+// move). Unlike KieImageGenerator's confirmed 3000-char cap
+// (limits.ts's PROMPT_LIMITS.sceneImage/characterRef), nano-banana-2 has
+// no documented prompt-length limit — the existing budgets are kept as a
+// conservative ceiling regardless, not loosened just because the new
+// model may not enforce one.
 function characterRefGenerator(): ImageGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new KieImageGenerator(env.KIE_API_KEY)
+  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(env.KIE_API_KEY)
 }
-// Switched 2026-09-19 from KieSceneImageGenerator (KIE's cheaper, capped
-// Market endpoint — see that class's own header) to the same dedicated,
-// uncapped KieImageGenerator characterRefGenerator() above already uses.
-// Real jobs were hitting "kie call failed (status 200): The text length
-// cannot exceed the maximum limit" on EVERY scene, including short ones
-// (~100 chars of visual_description), even after composeSceneImagePrompt
-// was tightened — the Market endpoint's real cap turned out to be lower
-// than the already-tightened fixed overhead alone, so no further wording
-// squeeze could fix this without cutting real constraints. This costs
-// more per scene image (~55 credits vs. ~5 on the Market endpoint), same
-// tradeoff characterRefGenerator() already accepted. Scene VIDEO clips
-// (sceneVideoGenerator below) stay on the cheap Hailuo model for now —
-// composeSceneVideoPrompt is short enough that it's never actually hit
-// this error, so there's no equivalent bug to fix there yet.
 function sceneImageGenerator(): ImageGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new KieImageGenerator(env.KIE_API_KEY)
+  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(env.KIE_API_KEY)
 }
 function sceneVideoGenerator(): VideoGenerator {
   return env.KIE_FAKE_MODE ? new FakeKieVideoGenerator() : new KieVideoGenerator(env.KIE_API_KEY)

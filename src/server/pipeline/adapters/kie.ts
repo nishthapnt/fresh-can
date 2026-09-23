@@ -18,12 +18,11 @@ import { kieSubmitLimiter } from '../lib/kieRateLimiter'
  * (`/v1/images`) that 404'd against the live API — see git history for that
  * version if you need to compare.
  *
- * Shared across video's character_ref, and blog/image_post's 'photo'-style
- * visuals (worker/src/index.ts's imageGeneratorFor) — never repoint this
- * class at a cheaper model to save credits on ONE of those callers without
- * checking the others. video's per-scene images use the cheaper, narrower
- * KieSceneImageGenerator below instead of touching this class, specifically
- * to keep that blast radius contained (see its own header for why).
+ * NOT currently wired into any pipeline (as of 2026-09-23): blog,
+ * image_post, and video's character-ref/scene-images all permanently
+ * moved to NanoBananaImageGenerator (adapters/nanoBanana.ts) that day —
+ * see that class's own header for the full history. Kept here, tested,
+ * for potential future reuse rather than deleted.
  */
 export class KieImageGenerator implements ImageGenerator {
   constructor(
