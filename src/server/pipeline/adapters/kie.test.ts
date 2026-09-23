@@ -129,7 +129,7 @@ describe('KieImageGenerator (Flux Kontext — docs.kie.ai)', () => {
 })
 
 describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/market)', () => {
-  it('submit() sends model=bytedance/seedance-1.5-pro with the scene image in input_urls, resolution=1080p, and generate_audio=false', async () => {
+  it('submit() sends model=bytedance/seedance-1.5-pro with the scene image in input_urls, resolution=720p, and generate_audio=false', async () => {
     let capturedBody: string | undefined
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       capturedBody = init?.body as string
@@ -144,7 +144,7 @@ describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/mar
     const ref = await gen.submit({
       prompt: 'the truck pulls up to the curb',
       referenceImageUrl: 'https://example.com/scene-1.png',
-      durationSeconds: '5',
+      durationSeconds: 5,
       aspectRatio: '9:16',
     })
     expect(ref.providerRef).toBe('task_seedance_1')
@@ -154,21 +154,42 @@ describe('KieVideoGenerator (Seedance 1.5 Pro image-to-video — docs.kie.ai/mar
         prompt: 'the truck pulls up to the curb',
         input_urls: ['https://example.com/scene-1.png'],
         aspect_ratio: '9:16',
-        resolution: '1080p',
+        resolution: '720p',
         generate_audio: false,
         duration: 5,
       },
     })
   })
 
-  it('submit() throws ProviderCallError when data.taskId is missing', async () => {
+  it('submit() sends an arbitrary whole-second duration through as-is (no 5/10 bucketing) — regression for the 2026-09-24 fix to a visible frozen-frame hold at scene cuts, see sceneClipDuration.ts', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, msg: 'success', data: { taskId: 'task_seedance_2' } }),
+        text: async () => '',
+      }
+    }) as unknown as typeof fetch
+    const gen = new KieVideoGenerator('test-key', fetchImpl)
+    await gen.submit({
+      prompt: 'the family walks up to the unit',
+      referenceImageUrl: 'https://example.com/scene-2.png',
+      durationSeconds: 7,
+      aspectRatio: '9:16',
+    })
+    expect(JSON.parse(capturedBody!).input.duration).toBe(7)
+  })
+
+  it('submit() throws ProviderCallError when data.taskId is missing (video)', async () => {
     const fetchImpl = mockFetch({ jsonBody: { code: 200, msg: 'success', data: {} } })
     const gen = new KieVideoGenerator('test-key', fetchImpl)
     await expect(
       gen.submit({
         prompt: 'x',
         referenceImageUrl: 'https://example.com/a.png',
-        durationSeconds: '5',
+        durationSeconds: 5,
         aspectRatio: '9:16',
       }),
     ).rejects.toThrow(ProviderCallError)

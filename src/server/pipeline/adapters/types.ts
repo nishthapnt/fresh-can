@@ -204,13 +204,15 @@ export interface VideoGenerationInput {
    *  character/likeness consistent (it was already locked by Flux Kontext's
    *  character-ref editing at the image stage, not re-derived here). */
   referenceImageUrl: string
-  /** '5' or '10' seconds — a Kling-2.6-era constraint (that model only
-   *  accepted those two values) lib/sceneClipDuration.ts's pickClipDurationSeconds
-   *  still buckets into, even now that KieVideoGenerator targets a
-   *  different model (see kie.ts) that would accept an arbitrary duration;
-   *  keeping the bucketing means swapping the underlying model doesn't also
-   *  require touching the scene-duration-picking logic. */
-  durationSeconds: '5' | '10'
+  /** Whole seconds, clamped to Seedance 1.5 Pro's documented 4-12s accepted
+   *  range — lib/sceneClipDuration.ts's pickClipDurationSeconds. Was a
+   *  Kling-2.6-era '5'|'10' bucket (that model only accepted those two
+   *  values) kept as-is through the 2026-09-21 Seedance swap on purpose, so
+   *  the model swap didn't also require touching this logic; widened to the
+   *  scene's own real target on 2026-09-24 once that bucketing was
+   *  confirmed live to cause a visible frozen-frame hold at scene cuts —
+   *  see pickClipDurationSeconds's own header for the full incident. */
+  durationSeconds: number
   /** content_jobs.aspect_ratio, the same value already sent to Flux
    *  Kontext for character-ref/scene-image generation. Kling never needed
    *  this (it inherited the shape of whatever frame it animated), but
@@ -284,7 +286,16 @@ export type AVMergeResult =
  *  reunited by a fade-to-black/silence remux (submitMux). See
  *  renderLanguageTrack.ts for the full orchestration (including the temp
  *  re-uploads needed between passes, since this provider's `files` field
- *  takes fetchable URLs, not raw bytes). */
+ *  takes fetchable URLs, not raw bytes).
+ *
+ *  submitMux and submitCaptionBurn each have a `Capped` sibling
+ *  (submitMuxCapped/submitCaptionBurnCapped, 2026-09-23) — the quality-
+ *  first CRF default has no size ceiling, so renderLanguageTrack.ts's own
+ *  size guard escalates to the deterministic fixed-bitrate `Capped`
+ *  variant only when a quality attempt's output exceeds
+ *  SAFE_UPLOAD_BYTES. Whichever of submitMux/submitCaptionBurn is the true
+ *  FINAL pass for a given track (no captions → mux; captions → caption-
+ *  burn) is the one that ever needs this escalation. */
 export interface AVMerger {
   submitVideoConcat(input: AVMergeInput): Promise<AVMergeJobRef>
   submitAudioConcat(input: AVMergeInput): Promise<AVMergeJobRef>
@@ -294,8 +305,19 @@ export interface AVMerger {
    *  narration length (sum of every scene's real audio duration) — see
    *  avMerger.ts's buildMuxCommand for why it's needed (fades the last
    *  ~0.6s to black/silence, the deterministic half of the "abrupt
-   *  ending" fix). */
-  submitMux(videoUrl: string, audioUrl: string, totalDurationSeconds: number): Promise<AVMergeJobRef>
+   *  ending" fix). `crf` (default 23, quality-first, 2026-09-23) — no
+   *  bitrate cap, encoder picks bitrate per scene complexity; this is the
+   *  final render whenever there are no captions, so its file size is
+   *  never verified until after the fact — see submitMuxCapped and
+   *  renderLanguageTrack.ts's own size guard. */
+  submitMux(videoUrl: string, audioUrl: string, totalDurationSeconds: number, crf?: number): Promise<AVMergeJobRef>
+  /** Deterministic, guaranteed-fit fallback for submitMux — only ever
+   *  called by renderLanguageTrack.ts's size guard, after a quality-tier
+   *  submitMux came back over SAFE_UPLOAD_BYTES. CRF gives no size
+   *  ceiling at all, so this fixed-bitrate variant is what guarantees the
+   *  retry actually fits — see avMerger.ts's CAPPED_VIDEO_ENCODE_ARGS for
+   *  the exact math. */
+  submitMuxCapped(videoUrl: string, audioUrl: string, totalDurationSeconds: number): Promise<AVMergeJobRef>
   /** Only ever called when there are caption cues to burn in — a render
    *  with no captions stops after the mux pass (its output IS the final
    *  render). mergedVideoUrl is the mux pass's output; assFileUrl is the
@@ -304,8 +326,14 @@ export interface AVMerger {
    *  lives in an uploaded FILE here, not inline in the command string —
    *  2026-09-21, a real render was rejected by upload-post.com's command
    *  filter over an ordinary narration word). Both URLs re-hosted by the
-   *  caller so this provider can fetch them as plain input files. */
-  submitCaptionBurn(mergedVideoUrl: string, assFileUrl: string): Promise<AVMergeJobRef>
+   *  caller so this provider can fetch them as plain input files. `crf`
+   *  (default 23, quality-first) — same parameter/reasoning as submitMux;
+   *  this is the true final render whenever captions are present. */
+  submitCaptionBurn(mergedVideoUrl: string, assFileUrl: string, crf?: number): Promise<AVMergeJobRef>
+  /** Deterministic, guaranteed-fit fallback for submitCaptionBurn — see
+   *  submitMuxCapped's doc; identical reasoning, called only after a
+   *  quality-tier submitCaptionBurn came back over SAFE_UPLOAD_BYTES. */
+  submitCaptionBurnCapped(mergedVideoUrl: string, assFileUrl: string): Promise<AVMergeJobRef>
   /** Matches ONE scene's shared video clip to the CALLING track's real
    *  narration length (hold last frame / trim — see avMerger.ts's
    *  buildSceneDurationMatchCommand) before that scene's clip is fed into

@@ -222,9 +222,10 @@ export class KieSceneImageGenerator implements ImageGenerator {
  * replaces: `input_urls` (plural array, same as Kling's `image_urls`) not
  * `image_url`; `generate_audio: false` not `sound: false`; `duration` is a
  * plain number (Seedance accepts 4-12s) rather than the '5'|'10' string
- * Kling required — `input.durationSeconds` is still bucketed to '5'/'10' by
- * lib/sceneClipDuration.ts (kept as-is per that function's own header) and
- * just gets Number()-coerced here. Unlike Kling, Seedance's `aspect_ratio`
+ * Kling required — `input.durationSeconds` is a number already
+ * (lib/sceneClipDuration.ts's pickClipDurationSeconds, widened 2026-09-24
+ * off the old '5'|'10' bucket — see that function's own header), sent
+ * through as-is. Unlike Kling, Seedance's `aspect_ratio`
  * is a required input field rather than something it infers from the
  * reference frame's own shape — threaded through from the same
  * content_jobs.aspect_ratio value already used for the character-ref/
@@ -240,21 +241,26 @@ export class KieSceneImageGenerator implements ImageGenerator {
  * and sceneClipDuration.ts's header for what pickClipDurationSeconds is
  * (and is no longer) used for.
  *
- * `resolution: '1080p'` (2026-09-22) — this pipeline's actual delivery
- * resolution (ASPECT_RATIO_RESOLUTIONS in videoResolution.ts). Was `720p`
- * from 2026-09-21 as a cost lever: Seedance bills by resolution x duration
- * (tokens = height x width x 24fps x duration / 1024, $1.2/million tokens
- * with audio off — derived from fal.ai's published rate for the same
- * underlying model, NOT independently confirmed against kie.ai's own
- * dashboard), so 720p ran ~47% of Kling's per-clip cost while 1080p is
- * roughly break-even at 5s and ~6% MORE than Kling at 10s. Moved back to
- * 1080p because 720p forced SceneClipScaler to UPSCALE every clip to
- * delivery resolution (visibly softer), and made that upscale pass a hard
- * dependency on upload-post.com's FFmpeg queue, whose wait-to-start was
- * confirmed live 2026-09-22 at ~15min for a 5-scene job (processing itself
- * took seconds) — far past SCALE_POLL_TIMEOUT_MS. Native 1080p output
- * already matches the delivery target (or lands within a few pixels of it),
- * so the scale pass only ever needs a no-op/near-no-op correction.
+ * `resolution: '720p'` (2026-09-23) — production is now required to deliver
+ * at 720p, so ASPECT_RATIO_RESOLUTIONS (videoResolution.ts) was lowered to
+ * 720p-equivalent dimensions in lockstep with this value. Seedance bills by
+ * resolution x duration (tokens = height x width x 24fps x duration / 1024,
+ * $1.2/million tokens with audio off — derived from fal.ai's published rate
+ * for the same underlying model, NOT independently confirmed against
+ * kie.ai's own dashboard), so 720p runs ~47% of Kling's per-clip cost vs.
+ * 1080p's roughly break-even-at-5s/~6%-MORE-at-10s.
+ *
+ * This exact swap was tried and reverted on 2026-09-22: back then the
+ * delivery target (ASPECT_RATIO_RESOLUTIONS) stayed at 1080p, so 720p native
+ * output forced SceneClipScaler to UPSCALE every clip (visibly softer),
+ * making the scale pass a hard dependency on upload-post.com's FFmpeg queue
+ * — whose wait-to-start was confirmed live that day at ~15min for a 5-scene
+ * job (processing itself took seconds), far past SCALE_POLL_TIMEOUT_MS. That
+ * failure mode is specific to a resolution MISMATCH between this value and
+ * the delivery target, not to 720p itself — as long as both stay at 720p
+ * together, native output already matches the delivery target, so the scale
+ * pass stays a no-op/near-no-op correction exactly as 1080p's did. If either
+ * value changes, change the other to match.
  *
  * Reverted 2026-09-19 back from a 2026-09-17 TEST-CHEAP MODE swap to Hailuo
  * 02 Standard (`hailuo/02-image-to-video-standard`, 512P, `image_url`
@@ -291,12 +297,12 @@ export class KieVideoGenerator implements VideoGenerator {
           aspect_ratio: input.aspectRatio,
           // Matches delivery resolution so no upscale is needed downstream —
           // see this class's header for the per-resolution cost math.
-          resolution: '1080p',
+          resolution: '720p',
           // Narration audio is composited separately at render time
           // (avMerger.ts) — this call never carries the language-specific
           // narration, so no ambient/audio track is requested here either.
           generate_audio: false,
-          duration: Number(input.durationSeconds),
+          duration: input.durationSeconds,
         },
       }),
     })
