@@ -297,7 +297,22 @@ export type AVMergeResult =
  *  FINAL pass for a given track (no captions → mux; captions → caption-
  *  burn) is the one that ever needs this escalation. */
 export interface AVMerger {
-  submitVideoConcat(input: AVMergeInput): Promise<AVMergeJobRef>
+  /** `crf` (default 23, quality-first, 2026-09-24 — previously a fixed
+   *  3800kbps cap regardless of actual render length): concat is the
+   *  heaviest re-encode in the whole render (a full decode of every scene
+   *  clip) and the FIRST one, so bitrate-capping it unconditionally threw
+   *  away detail no later pass (duration-match aside, which runs before
+   *  this) can ever recover — even though a real render is almost always
+   *  well under the 10-scene/100s worst case the old fixed cap was sized
+   *  for. This output is video-only (no audio stream, `a=0`), so its own
+   *  size still needs verifying before it's re-hosted for the mux pass —
+   *  see submitVideoConcatCapped and renderLanguageTrack.ts's own size
+   *  guard, same pattern submitMux/submitCaptionBurn already use. */
+  submitVideoConcat(input: AVMergeInput, crf?: number): Promise<AVMergeJobRef>
+  /** Deterministic, guaranteed-fit fallback for submitVideoConcat — only
+   *  ever called by renderLanguageTrack.ts's size guard, after a
+   *  quality-tier submitVideoConcat came back over SAFE_UPLOAD_BYTES. */
+  submitVideoConcatCapped(input: AVMergeInput): Promise<AVMergeJobRef>
   submitAudioConcat(input: AVMergeInput): Promise<AVMergeJobRef>
   /** videoUrl/audioUrl are submitVideoConcat's/submitAudioConcat's own
    *  outputs, re-hosted by the caller so this provider can fetch them as

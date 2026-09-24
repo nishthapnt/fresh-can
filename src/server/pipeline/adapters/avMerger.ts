@@ -164,7 +164,38 @@ function msToAssTime(ms: number): string {
  * not-frame-aligned video+audio pairs), but the split-then-mux workaround
  * is a solid, empirically-verified fix regardless of the exact mechanism.
  */
-export function buildVideoConcatCommand(scenes: AVMergeInput['scenes']): {
+// Shared bitrate-cap args for the deterministic, guaranteed-fit FALLBACK
+// encode (buildVideoConcatCommandCapped/buildMuxCommandCapped/
+// buildCaptionBurnCommandCapped), used only when a CRF-quality attempt's
+// output exceeds SAFE_UPLOAD_BYTES (renderLanguageTrack.ts). CRF targets a
+// QUALITY level, not a file size — it gives no ceiling on output size at
+// all, so once a quality attempt comes back oversized, a fixed bitrate is
+// what guarantees the retry actually fits. Math: worst case is 10 scenes x
+// 10s = 100s; Supabase Storage's real upload ceiling is empirically
+// confirmed at 50MB succeeds, 52MB fails ("object exceeded the maximum
+// allowed size"), so 50MB is the target (not 52MB — the gap between the two
+// was never itself tested). Reserving 2.5MB of that for the AAC audio track
+// (`-c:a aac`/`-c:a copy` with no `-b:a` set uses ffmpeg's native-encoder
+// default, ~128kbps for stereo; 2.5MB budgets ~192kbps over 100s, 1.5x that
+// default as margin since the exact default isn't independently confirmed
+// against upload-post.com's actual ffmpeg build) leaves 47.5MB / 100s =
+// 3800kbps for video. Reused as-is for buildVideoConcatCommandCapped even
+// though that pass's own output has no audio track to reserve budget for —
+// the resulting extra headroom is harmless margin, not a case needing its
+// own separately-tuned constant. Kept in one place so every capped builder
+// can never drift apart from each other or from this math.
+const CAPPED_VIDEO_ENCODE_ARGS = '-b:v 3800k -maxrate 3800k -bufsize 7600k'
+
+/**
+ * `crf` (default 23, quality-first, 2026-09-24 — see AVMerger.submitVideoConcat's
+ * own doc comment, types.ts, for why this replaced an unconditional fixed
+ * bitrate cap here). Unconstrained CRF, no bitrate cap, letting the encoder
+ * pick bitrate per scene complexity — same posture as buildMuxCommand/
+ * buildCaptionBurnCommand's own CRF-first passes. See
+ * buildVideoConcatCommandCapped below for the deterministic fallback used
+ * only when this comes back oversized.
+ */
+export function buildVideoConcatCommand(scenes: AVMergeInput['scenes'], crf = 23): {
   files: string[]
   fullCommand: string
   outputExtension: string
@@ -209,35 +240,52 @@ export function buildVideoConcatCommand(scenes: AVMergeInput['scenes']): {
   // count/duration ever grows well past what's been tested so far (4-7
   // scenes).
   //
-  // -b:v/-maxrate/-bufsize (3800k), not -crf: CRF targets a QUALITY level,
-  // not a file size — it gives no ceiling on output size at all. A real
-  // 8-scene render's un-downscaled clips (native ~2MP, no bitrate cap
-  // anywhere) summed to 140.6MB and failed to re-upload past Supabase
-  // Storage's global upload size limit; buildScaleCommand's per-clip
-  // downscale (see that function's header) fixed THAT case, but a real
-  // 9-scene/90s script at CRF 23 — still within the 4-10 scene range
-  // composeVideoScriptSystemPrompt allows — hit the exact same failure
-  // again post-downscale (confirmed live 2026-09-13/14), because CRF's
-  // output size scales with content complexity as much as duration, not
-  // just pixel count. Bounding by DURATION instead: worst case is 10 scenes
-  // x 10s = 100s. Empirically confirmed against real Supabase Storage
-  // responses: 50MB uploads succeed, 52MB fails with an "object exceeded
-  // the maximum allowed size" error — so 50MB is the target ceiling, not
-  // 52MB, since the gap between the two hasn't itself been tested.
-  //
-  // 3800kbps (2026-09-23, raised from 3500kbps when SceneClipScaler's
-  // downscale target dropped from 1080p to 720p — see videoResolution.ts):
-  // reserves 2.5MB of the 50MB ceiling for the AAC audio track this gets
-  // muxed with afterward (`-c:a aac` with no `-b:a` set uses ffmpeg's
-  // native-encoder default, ~128kbps for stereo; 2.5MB budgets for ~192kbps
-  // over the 100s worst case, 1.5x that default as margin since the exact
-  // default isn't independently confirmed against upload-post.com's actual
-  // ffmpeg build). The remaining 47.5MB / 100s = 3800kbps. Was 3500kbps
-  // (43.75MB of video budget) when this cap had to cover 1080p output;
-  // 720p needs fewer bits for the same perceptual quality, so the extra
-  // 300kbps is real quality headroom, not just unused slack — total
-  // worst-case output still targets the same validated 50MB ceiling.
-  const fullCommand = `ffmpeg -y ${inputArgs} -filter_complex "${filterComplex}" -map "[vout]" -c:v libx264 -preset medium -b:v 3800k -maxrate 3800k -bufsize 7600k {output}`
+  // -crf (default 23), not a fixed bitrate cap (2026-09-24, changed from an
+  // unconditional -b:v/-maxrate/-bufsize 3800k): this pass decodes+
+  // re-encodes every real scene clip at full quality — the heaviest single
+  // re-encode in the whole render, and the FIRST one, so bitrate-capping it
+  // unconditionally threw away detail no later CRF-based pass (mux,
+  // caption-burn) could ever recover, even on an ordinary 4-7 scene render
+  // (20-50s) nowhere near the 10-scene/100s worst case the old fixed cap
+  // was actually sized for. CRF targets a QUALITY level, not a file size —
+  // it gives no ceiling on output size at all, so this output's own size
+  // must still be checked before it's re-hosted as an input to the mux
+  // pass (a real 8-scene render's un-downscaled clips, back when NO
+  // bitrate cap or downscale existed anywhere in this pipeline, summed to
+  // 140.6MB and failed to re-upload past Supabase Storage's global upload
+  // size limit) — buildVideoConcatCommandCapped below is the deterministic,
+  // guaranteed-fit fallback for exactly that case, submitted only when this
+  // CRF attempt's real output comes back over SAFE_UPLOAD_BYTES
+  // (renderLanguageTrack.ts), the same quality-first-then-verify-size
+  // pattern buildMuxCommand/buildCaptionBurnCommand already established.
+  const fullCommand = `ffmpeg -y ${inputArgs} -filter_complex "${filterComplex}" -map "[vout]" -c:v libx264 -preset medium -crf ${crf} {output}`
+
+  return { files, fullCommand, outputExtension: 'mp4' }
+}
+
+/**
+ * Deterministic, guaranteed-fit fallback for buildVideoConcatCommand — see
+ * CAPPED_VIDEO_ENCODE_ARGS's header for the size math (this pass's own
+ * output carries no audio, so the 2.5MB reserved for an AAC track in that
+ * math is unused headroom here, not a shortfall). Only ever submitted by
+ * renderLanguageTrack.ts when a CRF-quality concat attempt's output exceeds
+ * SAFE_UPLOAD_BYTES; never the default/first attempt.
+ */
+export function buildVideoConcatCommandCapped(scenes: AVMergeInput['scenes']): {
+  files: string[]
+  fullCommand: string
+  outputExtension: string
+} {
+  const sceneCount = scenes.length
+  if (sceneCount === 0) {
+    throw new Error('buildVideoConcatCommandCapped: at least one scene is required')
+  }
+
+  const files = scenes.map((scene) => scene.clipUrl)
+  const concatInputs = scenes.map((_, i) => `[${i}:v]`).join('')
+  const filterComplex = `${concatInputs}concat=n=${sceneCount}:v=1:a=0[vout]`
+  const inputArgs = files.map((_, i) => `-i {input${i}}`).join(' ')
+  const fullCommand = `ffmpeg -y ${inputArgs} -filter_complex "${filterComplex}" -map "[vout]" -c:v libx264 -preset medium ${CAPPED_VIDEO_ENCODE_ARGS} {output}`
 
   return { files, fullCommand, outputExtension: 'mp4' }
 }
@@ -276,25 +324,6 @@ export function buildAudioConcatCommand(scenes: AVMergeInput['scenes']): {
 // unconditionally. Short enough (well under a second) to not read as its
 // own deliberate "outro" moment — just enough to soften the literal edge.
 const FADE_OUT_SECONDS = 0.6
-
-// Shared bitrate-cap args for the deterministic, guaranteed-fit FALLBACK
-// encode (buildMuxCommandCapped/buildCaptionBurnCommandCapped), used only
-// when a CRF-quality attempt's output exceeds SAFE_UPLOAD_BYTES
-// (renderLanguageTrack.ts). CRF targets a QUALITY level, not a file size —
-// it gives no ceiling on output size at all, so once a quality attempt
-// comes back oversized, a fixed bitrate is what guarantees the retry
-// actually fits. Math: worst case is 10 scenes x 10s = 100s; Supabase
-// Storage's real upload ceiling is empirically confirmed at 50MB succeeds,
-// 52MB fails ("object exceeded the maximum allowed size"), so 50MB is the
-// target (not 52MB — the gap between the two was never itself tested).
-// Reserving 2.5MB of that for the AAC audio track (`-c:a aac`/`-c:a copy`
-// with no `-b:a` set uses ffmpeg's native-encoder default, ~128kbps for
-// stereo; 2.5MB budgets ~192kbps over 100s, 1.5x that default as margin
-// since the exact default isn't independently confirmed against
-// upload-post.com's actual ffmpeg build) leaves 47.5MB / 100s = 3800kbps
-// for video. Kept in one place so the two capped builders below can never
-// drift apart from each other or from this math.
-const CAPPED_VIDEO_ENCODE_ARGS = '-b:v 3800k -maxrate 3800k -bufsize 7600k'
 
 function muxFadeArgs(totalDurationSeconds: number): string {
   const fadeStart = Math.max(0, totalDurationSeconds - FADE_OUT_SECONDS)
@@ -631,8 +660,15 @@ export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
     private readonly baseUrl: string = 'https://api.upload-post.com',
   ) {}
 
-  async submitVideoConcat(input: AVMergeInput): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildVideoConcatCommand(input.scenes))
+  async submitVideoConcat(input: AVMergeInput, crf?: number): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildVideoConcatCommand(input.scenes, crf))
+  }
+
+  /** See buildVideoConcatCommandCapped's header — only ever called by
+   *  renderLanguageTrack.ts's size guard, after a quality-tier
+   *  submitVideoConcat came back over SAFE_UPLOAD_BYTES. */
+  async submitVideoConcatCapped(input: AVMergeInput): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildVideoConcatCommandCapped(input.scenes))
   }
 
   async submitAudioConcat(input: AVMergeInput): Promise<AVMergeJobRef> {

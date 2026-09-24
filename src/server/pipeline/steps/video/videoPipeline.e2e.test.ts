@@ -203,6 +203,7 @@ function makeMockAVMerger() {
   // must still satisfy AVMerger's shape. Distinct fake bytes from their
   // quality-tier siblings so a fallback-path test can tell which tier
   // actually produced the uploaded buffer.
+  const submitVideoConcatCapped = vi.fn(async () => ({ providerRef: `video-concat-capped-${++counter}` }))
   const submitMuxCapped = vi.fn(async () => ({ providerRef: `mux-capped-${++counter}` }))
   const submitCaptionBurn = vi.fn(async () => ({ providerRef: `caption-${++counter}` }))
   const submitCaptionBurnCapped = vi.fn(async () => ({ providerRef: `caption-capped-${++counter}` }))
@@ -210,6 +211,7 @@ function makeMockAVMerger() {
   const poll = vi.fn(async (): Promise<AVMergeResult> => ({ status: 'ready', fileBuffer: Buffer.from(`fake-video-${counter}`) }))
   return {
     submitVideoConcat,
+    submitVideoConcatCapped,
     submitAudioConcat,
     submitMux,
     submitMuxCapped,
@@ -1300,6 +1302,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     let counter = 0
     const OVERSIZED_BYTES = 50_000_001
     const submitVideoConcat = vi.fn(async () => ({ providerRef: `video-concat-${++counter}` }))
+    const submitVideoConcatCapped = vi.fn(async () => ({ providerRef: `video-concat-capped-${++counter}` }))
     const submitAudioConcat = vi.fn(async () => ({ providerRef: `audio-concat-${++counter}` }))
     const submitMux = vi.fn(async () => ({ providerRef: `mux-${++counter}` }))
     const submitMuxCapped = vi.fn(async () => ({ providerRef: `mux-capped-${++counter}` }))
@@ -1314,6 +1317,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     })
     const avMerger = {
       submitVideoConcat,
+      submitVideoConcatCapped,
       submitAudioConcat,
       submitMux,
       submitMuxCapped,

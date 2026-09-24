@@ -348,6 +348,46 @@ export async function runRenderLanguageTrack(
       throw new ProviderCallError('upload-post', null, `${detail} (after ${(audioOutcome.elapsedMs / 1000).toFixed(1)}s)`)
     }
 
+    // The video-concat pass's own output is re-hosted below as an input to
+    // the mux pass, so — same reasoning as the mux/caption-burn size guards
+    // further down — its CRF-quality-tier size must be verified before
+    // that upload, not assumed to fit just because it's "only" an
+    // intermediate file: Supabase Storage's size ceiling applies to any
+    // object, and this is exactly the re-host that failed in the real
+    // 140.6MB incident buildVideoConcatCommand's own header describes (see
+    // avMerger.ts). Escalating here, before mux ever runs, means mux always
+    // reads a stream that's already guaranteed to fit — mux/caption-burn's
+    // own guards below exist for THEIR passes' encode, not to compensate
+    // for an oversized input.
+    let videoConcatBuffer = videoOutcome.fileBuffer
+    if (videoConcatBuffer.length > SAFE_UPLOAD_BYTES) {
+      console.log(
+        `[render:video-concat] quality-tier output ${videoConcatBuffer.length} bytes exceeds SAFE_UPLOAD_BYTES ` +
+          `(${SAFE_UPLOAD_BYTES}) — escalating to the capped fallback`,
+      )
+      const cappedJobRef = await avMerger.submitVideoConcatCapped({ scenes: scenePairs })
+      const cappedOutcome = await pollUntilDone(avMerger, cappedJobRef, 'video-concat', client, track.id)
+      if ('cancelled' in cappedOutcome) {
+        console.log(`[render:video-concat] cancelled during capped fallback — stopping render, not recording a failure`)
+        return { ran: true }
+      }
+      if (!('fileBuffer' in cappedOutcome)) {
+        const detail = 'failed' in cappedOutcome ? cappedOutcome.detail : 'FFmpeg capped video-concat pass poll timed out'
+        throw new ProviderCallError('upload-post', null, `${detail} (after ${(cappedOutcome.elapsedMs / 1000).toFixed(1)}s)`)
+      }
+      if (cappedOutcome.fileBuffer.length > SAFE_UPLOAD_BYTES) {
+        // Should be unreachable given CAPPED_VIDEO_ENCODE_ARGS's own
+        // worst-case math — a hard failure here means that math's
+        // assumption broke, not a normal retryable condition, so this
+        // deliberately isn't a silent upload of an oversized file.
+        throw new Error(
+          `render: capped video-concat fallback still produced ${cappedOutcome.fileBuffer.length} bytes, over ` +
+            `SAFE_UPLOAD_BYTES (${SAFE_UPLOAD_BYTES})`,
+        )
+      }
+      videoConcatBuffer = cappedOutcome.fileBuffer
+    }
+
     // Pass 2: mux the two independently-concatenated streams back into one
     // file. upload-post.com's `files` field takes fetchable URLs, not raw
     // bytes, so both pass-1 outputs are re-hosted at temp paths first
@@ -358,7 +398,7 @@ export async function runRenderLanguageTrack(
     // — see avMerger.ts's buildMuxCommand.
     const totalDurationSeconds = sceneRenderInputs.reduce((sum, s) => sum + s.audioDurationSeconds, 0)
     const [videoTempUrl, audioTempUrl] = await Promise.all([
-      uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-video-tmp.mp4`, videoOutcome.fileBuffer, 'video/mp4'),
+      uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-video-tmp.mp4`, videoConcatBuffer, 'video/mp4'),
       uploader.uploadBuffer(`${pipeline.job_id}/${track.language}-audio-tmp.mp4`, audioOutcome.fileBuffer, 'video/mp4'),
     ])
     const muxJobRef = await avMerger.submitMux(videoTempUrl, audioTempUrl, totalDurationSeconds)
@@ -530,6 +570,7 @@ export async function runRenderLanguageTrack(
         sceneCount: scenes.length,
         outputBytes: finalBuffer.length,
         videoConcatElapsedMs: videoOutcome.elapsedMs,
+        videoConcatEncodeTier: videoConcatBuffer === videoOutcome.fileBuffer ? 'quality' : 'capped',
         audioConcatElapsedMs: audioOutcome.elapsedMs,
         muxElapsedMs: muxOutcome.elapsedMs,
         captionElapsedMs,

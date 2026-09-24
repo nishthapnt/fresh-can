@@ -248,7 +248,6 @@ export function composeReferenceCopySystemPrompt(brand: BrandProfile, opts: Refe
 export interface CopySystemPromptOptions {
   language: string
   category: string
-  regenInstructions?: string | null
   /** The dashboard's "Your Scene Idea" field (content_jobs.scene_notes) —
    *  same required-creative-brief treatment as
    *  composeOutlineSystemPrompt's, still typed optional/nullable for a
@@ -304,8 +303,7 @@ export function composeCopySystemPrompt(brand: BrandProfile, opts: CopySystemPro
       ? `\n\nThe copy must stay true to the user's own creative idea for this post: "${opts.sceneNotes}". The ` +
         'brand mission and voice guidance above is a fixed constraint on tone and accuracy, never the angle — ' +
         'follow the outline\'s sections above, which were already built around this same idea.'
-      : '') +
-    (opts.regenInstructions ? `\n\nThe user asked for this rewrite: ${opts.regenInstructions}` : '')
+      : '')
   )
 }
 
@@ -656,11 +654,15 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'shifting — specific enough to generate an image from. Ground it in this scene\'s own story beat and ' +
     'purpose from your planning above: what specifically happens, in what environment, and how it connects to ' +
     'the scene immediately before it — never a generic or purposeless shot),\n' +
-    '      "shot_notes": string (real cinematographic direction for this exact shot — angle, camera movement, ' +
-    'depth of field, framing, e.g. "low-angle slow tracking shot, shallow depth of field" or "static wide shot, ' +
-    'soft window light" — only "" for a scene where a plain static shot is genuinely the deliberate choice, ' +
-    'never left empty by default. Choose composition and camera movement that serve THIS scene\'s specific ' +
-    'purpose in the story, not decoration for its own sake),\n' +
+    '      "shot_notes": string (real cinematographic direction for this exact shot — angle, framing, depth of ' +
+    'field, and, whenever the shot moves, the movement\'s physical specifics: starting camera position, ' +
+    'direction, and approximate speed, and where it ends up. Be as physically concrete as an actual camera ' +
+    'operator\'s notes, never a vague mood word alone — e.g. "slow lateral tracking shot moving left to right ' +
+    'at a constant distance from the subject, settling on a medium close-up" or "static low-angle wide shot, ' +
+    'shallow depth of field, soft window light" — never just "cinematic camera movement" or "dynamic shot" ' +
+    'with no physical detail behind it. Only "" for a scene where a plain static shot is genuinely the ' +
+    'deliberate choice, never left empty by default. Choose composition and camera movement that serve THIS ' +
+    'scene\'s specific purpose in the story, not decoration for its own sake),\n' +
     '      "narration_intent": string (the SEMANTIC content this scene\'s narration should convey — describe ' +
     'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
     'independently localized into actual EN or FR wording by a later step),\n' +

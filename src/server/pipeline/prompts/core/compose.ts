@@ -87,7 +87,6 @@ interface PhotoJob extends StyleInputs {
    *  brief the photo is built around (see SCENE_IS_CREATIVE_BRIEF), not one
    *  of several interchangeable descriptors. */
   scene: string
-  regenInstructions?: string | null
   /** From planImage.ts's ImagePostPlan (PROMPT_REFACTOR_BRIEF.md §4.3).
    *  Defaults to 'none' if omitted (a legacy caller predating Phase 4). */
   unitPresence?: UnitPresence
@@ -615,9 +614,6 @@ export function composeInlinePrompt(brand: BrandProfile, job: BlogImageJob): Ima
 
 interface CharacterRefJob {
   pipelineId: string
-  /** Set by POST /video/regenerate { scope: "visuals" } — never present on
-   *  a first-time generation. */
-  regenInstructions?: string | null
 }
 
 /**
@@ -678,21 +674,6 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   // class, for the edge case of a brand with an empty exterior pool. Every
   // other composer already routes through noTextVariantFor; this one hadn't.
   parts.push(referenceImageUrl ? brand.noNewTextInstruction : noTextVariantFor(brand, 'featured'))
-
-  // Budget enforcement (Phase 5, PROMPT_REFACTOR_BRIEF.md §7) — this
-  // composer shares KieImageGenerator's endpoint (and its real 3000-char
-  // cap, limits.ts's PROMPT_LIMITS.sceneImage) with composeSceneImagePrompt,
-  // but had no cascade at all before Phase 5. regenInstructions (user-typed,
-  // from the Regenerate dialog) is the only variable-length field here, so
-  // this is a single truncation, not the multi-clause cascade the scene
-  // composers need.
-  const fixedLen = parts.join(' ').length
-  let regenInstructions = job.regenInstructions ?? ''
-  const overflow = fixedLen + (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) - PROMPT_LIMITS.sceneImage
-  if (overflow > 0 && regenInstructions) {
-    regenInstructions = truncateToFit(regenInstructions, regenInstructions.length - overflow)
-  }
-  if (regenInstructions) parts.push(`${regenInstructions}.`)
 
   const prompt = parts.join(' ')
   assertNoContradiction(prompt, brand)
@@ -1079,6 +1060,26 @@ function lookHoldClause(look: VideoScriptLook | null | undefined): string {
   return ` Keep the frame's ${bits.join(', ')} lighting and color steady for the whole shot — no lighting shifts.`
 }
 
+// Frame-to-frame stability guard, added 2026-09-24 alongside the video-concat
+// bitrate fix (avMerger.ts's buildVideoConcatCommand) — the other half of
+// closing the same "generated 720p footage looks soft/artifacted" gap, on
+// the generation side rather than the encode side. The reference-frame-
+// authority sentence just above already covers identity/object consistency
+// (no new/changed person, limb, or object); this adds the two failure modes
+// that sentence doesn't reach — texture/lighting FLICKERING between frames
+// of the same object (not a new object, just an unstable rendering of the
+// same one) and warped/unnatural motion blur — without restating anything
+// already said. One short, positive-framed clause, not a checklist of
+// negatives, same posture as SCENE_CONTENTS_RULE/PHOTOREALISTIC_QUALITY_FLOOR
+// (compose.ts's own history: a long list of "no X, no Y" reads as generic
+// AI-slop styling and eats budget other passes have shown really does get
+// weighted against the one sentence that says what to draw/animate).
+// Camera stability itself is already covered by the motion-layers
+// paragraph's "smooth, real-camera motion" — not repeated here.
+const TEMPORAL_CONSISTENCY_CLAUSE =
+  ' Keep textures, packaging details, and lighting stable and flicker-free across every frame, with natural, ' +
+  'non-warped motion blur.'
+
 // A photographic/rendering quality floor for the 720p Seedance deliverable,
 // same posture as composeSceneImagePrompt's own PHOTOREALISTIC_QUALITY_FLOOR
 // (~line 433) — never a camera-movement or composition dictate (that stays owned
@@ -1105,6 +1106,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
     'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
     'a new person, limb, or object that was not already in that frame.' +
+    TEMPORAL_CONSISTENCY_CLAUSE +
     VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
@@ -1135,10 +1137,9 @@ export function composePhotoPrompt(brand: BrandProfile, job: PhotoJob): ImageCom
   const presence = job.unitPresence ?? 'none'
   const showSubject = presence !== 'none'
   const containsFood = job.containsFood ?? true
-  const guidance = job.regenInstructions ? ` ${job.regenInstructions}.` : ''
 
   const parts = [
-    `A photo for a social media grocery-access post depicting ${job.scene}.${guidance}`,
+    `A photo for a social media grocery-access post depicting ${job.scene}.`,
     moodClause(),
     SCENE_IS_CREATIVE_BRIEF,
     PHOTOREALISTIC_QUALITY_FLOOR,

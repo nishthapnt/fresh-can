@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildVideoConcatCommand,
+  buildVideoConcatCommandCapped,
   buildAudioConcatCommand,
   buildMuxCommand,
   buildMuxCommandCapped,
@@ -43,12 +44,45 @@ describe('buildVideoConcatCommand', () => {
     expect(fullCommand).not.toContain(';')
   })
 
-  it('caps bitrate instead of using CRF — CRF has no size ceiling, and a real 9-scene/90s render at CRF23 exceeded Supabase Storage\'s upload size limit even after per-clip downscaling', () => {
+  it('uses quality-first CRF, not a fixed bitrate cap — this pass\'s own output is size-guarded by renderLanguageTrack.ts (escalating to buildVideoConcatCommandCapped if oversized) rather than throttled unconditionally on every render', () => {
     const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
+    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).not.toContain('-b:v')
+    expect(fullCommand).not.toContain('-maxrate')
+    expect(fullCommand).not.toContain('-bufsize')
+  })
+
+  it('accepts a crf override', () => {
+    const { fullCommand } = buildVideoConcatCommand(THREE_SCENES, 30)
+    expect(fullCommand).toContain('-crf 30')
+  })
+})
+
+describe('buildVideoConcatCommandCapped', () => {
+  it('throws when there are no scenes', () => {
+    expect(() => buildVideoConcatCommandCapped([])).toThrow()
+  })
+
+  it('builds the same video-only concat filter as buildVideoConcatCommand', () => {
+    const { files, fullCommand, outputExtension } = buildVideoConcatCommandCapped(THREE_SCENES)
+    expect(files).toEqual(['https://example.com/s1.mp4', 'https://example.com/s2.mp4', 'https://example.com/s3.mp4'])
+    expect(fullCommand).toContain('-i {input0} -i {input1} -i {input2}')
+    expect(fullCommand).toContain('[0:v][1:v][2:v]concat=n=3:v=1:a=0[vout]')
+    expect(fullCommand).toContain('-map "[vout]"')
+    expect(outputExtension).toBe('mp4')
+  })
+
+  it('caps bitrate instead of using CRF — the deterministic, guaranteed-fit fallback for when a quality-tier video-concat attempt exceeds SAFE_UPLOAD_BYTES', () => {
+    const { fullCommand } = buildVideoConcatCommandCapped(THREE_SCENES)
     expect(fullCommand).toContain('-b:v 3800k')
     expect(fullCommand).toContain('-maxrate 3800k')
     expect(fullCommand).toContain('-bufsize 7600k')
     expect(fullCommand).not.toContain('-crf')
+  })
+
+  it('never contains a semicolon (upload-post.com rejects any ";")', () => {
+    const { fullCommand } = buildVideoConcatCommandCapped(THREE_SCENES)
+    expect(fullCommand).not.toContain(';')
   })
 })
 
@@ -419,6 +453,21 @@ describe('UploadPostAVMerger', () => {
     expect(body).toMatchObject({ output_extension: 'mp4' })
     expect(body.files).toEqual(['https://example.com/s1.mp4'])
     expect(body.full_command).not.toContain(';')
+  })
+
+  it('submitVideoConcatCapped() sends the deterministic bitrate-capped fallback command', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-1vc' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    const ref = await merger.submitVideoConcatCapped(ONE_SCENE)
+    expect(ref.providerRef).toBe('job-1vc')
+    const body = JSON.parse(capturedBody!)
+    expect(body.files).toEqual(['https://example.com/s1.mp4'])
+    expect(body.full_command).toContain('-b:v 3800k')
+    expect(body.full_command).not.toContain('-crf')
   })
 
   it('submitAudioConcat() sends the audio-only concat command', async () => {

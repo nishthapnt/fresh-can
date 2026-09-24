@@ -261,15 +261,6 @@ describe('composeCopySystemPrompt', () => {
     expect(prompt).toContain('1 in 5 test subjects prefer this fixture')
   })
 
-  it('splices in regen instructions when present', () => {
-    const prompt = composeCopySystemPrompt(testBrand, {
-      language: 'EN',
-      category: 'Test Category',
-      regenInstructions: 'make it punchier',
-    })
-    expect(prompt).toContain('make it punchier')
-  })
-
   it('gives concrete length targets for introduction/paragraphs/conclusion', () => {
     const prompt = composeCopySystemPrompt(testBrand, { language: 'EN', category: 'Test Category' })
     expect(prompt).toContain('2-4 sentences each')
@@ -478,6 +469,13 @@ describe('composeVideoScriptSystemPrompt', () => {
   it('requires shot_notes to carry real camera direction, not default to empty', () => {
     const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
     expect(prompt).toContain('never left empty by default')
+  })
+
+  it('asks camera movement in shot_notes to be physically specific (start position, direction, speed, end state), not a vague mood word', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
+    expect(prompt).toContain('starting camera position, direction, and approximate speed, and where it ends up')
+    expect(prompt).toContain('slow lateral tracking shot moving left to right at a constant distance from the subject')
+    expect(prompt).toContain('never just "cinematic camera movement" or "dynamic shot" with no physical detail behind it')
   })
 
   it('asks visual_description to include ambient environmental motion, not just the subject', () => {

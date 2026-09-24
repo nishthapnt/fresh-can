@@ -466,15 +466,6 @@ describe('composePhotoPrompt', () => {
     expect(photo.referenceImageUrl).toBeUndefined()
   })
 
-  it('splices in regen instructions', () => {
-    const photo = composePhotoPrompt(testBrand, {
-      ...baseJob,
-      scene: baseJob.topic,
-      regenInstructions: 'warmer colors, more optimistic tone',
-    })
-    expect(photo.prompt).toContain('warmer colors, more optimistic tone')
-  })
-
   it('includes the shared photorealistic-quality floor, same as every other image composer', () => {
     const photo = composePhotoPrompt(testBrand, { ...baseJob, scene: baseJob.topic, unitPresence: 'none' })
     expect(photo.prompt).toContain('Premium photorealistic commercial photography')
@@ -956,6 +947,12 @@ describe('composeSceneVideoPrompt', () => {
     expect(prompt).toContain('unless a visible hand, wind, or other real force is actually moving them')
   })
 
+  it('guards against frame-to-frame flicker and warped motion blur, regardless of look/isFinalScene', () => {
+    const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
+    expect(prompt).toContain('textures, packaging details, and lighting stable and flicker-free across every frame')
+    expect(prompt).toContain('natural, non-warped motion blur')
+  })
+
   it('adds a photographic quality-floor clause regardless of look/isFinalScene, without dictating any camera movement', () => {
     const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
     expect(prompt).toContain('premium, photorealistic cinematic smartphone footage')
@@ -1037,26 +1034,6 @@ describe('composeCharacterRefPrompt', () => {
     expect(ref.prompt).toContain("the unit's own real wordmark, exactly as described above")
   })
 
-  it('never exceeds the real ~3000-char KieImageGenerator cap even with a maximally long regenInstructions — Phase 5: this composer had no budget enforcement at all before', () => {
-    const longText = 'make it warmer and more inviting, with softer light and a cleaner background '.repeat(30)
-    const ref = composeCharacterRefPrompt(BRAND_PROFILE, {
-      pipelineId: 'pipeline-char-ref-length',
-      regenInstructions: longText,
-    })
-    expect(ref.prompt.length).toBeLessThanOrEqual(3000)
-    // The fixed structural/brand text must survive fully intact — only
-    // regenInstructions (the one variable field here) is ever truncated.
-    expect(ref.prompt).toContain('ONLY entrance')
-    expect(ref.prompt).toContain('Exactly one "Fresh CAN" wordmark total')
-  })
-
-  it('does not truncate ordinary regenInstructions at all', () => {
-    const ref = composeCharacterRefPrompt(BRAND_PROFILE, {
-      pipelineId: 'pipeline-char-ref-normal',
-      regenInstructions: 'warmer lighting, slightly wider angle',
-    })
-    expect(ref.prompt).toContain('warmer lighting, slightly wider angle')
-  })
 })
 
 // Phase 1 (PROMPT_REFACTOR_BRIEF.md): containerDescriptor was restructured
