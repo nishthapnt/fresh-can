@@ -55,7 +55,7 @@ interface NewContentStore extends FormFields, GenState {
   toggleType:         (type: ContentType) => void
   startGeneration:    (jobId: string) => void
   clearAfterApproval: (jobId?: string) => void
-  clearOnCancel:      () => void
+  clearOnCancel:      (jobId?: string) => void
 }
 
 const FORM_DEFAULTS: FormFields = {
@@ -176,7 +176,11 @@ export const useNewContentStore = create<NewContentStore>((set, get) => ({
     set({ ...FORM_DEFAULTS, ...GEN_DEFAULTS })
   },
 
-  clearOnCancel: () => {
+  // jobId: only clear if this job matches — same guard as clearAfterApproval,
+  // so cancelling a stale/old job never wipes a newer pending session.
+  clearOnCancel: (jobId) => {
+    const { pendingJobId } = get()
+    if (jobId && pendingJobId && pendingJobId !== jobId) return
     clearSession()
     set({ ...FORM_DEFAULTS, ...GEN_DEFAULTS })
   },

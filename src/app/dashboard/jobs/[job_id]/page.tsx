@@ -5,7 +5,6 @@ import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import TopBar from '@/components/layout/TopBar'
 import StatusBadge from '@/components/StatusBadge'
@@ -400,188 +399,11 @@ const TYPE_APPROVE_LABEL: Record<ContentType, string> = {
   blog:       'Approve Blog Post',
 }
 
-// ─── RegenerateDialog ──────────────────────────────────────────────────────────
-
-// Blog: 'visual' | 'copy'. Video: 'script' | 'visuals'. image_post has only
-// one thing to regenerate, so it never uses the scope selector at all.
-type RegenerateScope = 'visual' | 'copy' | 'script' | 'visuals'
-
-function RegenerateDialog({
-  open,
-  contentType,
-  onClose,
-  onConfirm,
-  loading,
-}: {
-  open: boolean
-  contentType: ContentType | null
-  onClose: () => void
-  onConfirm: (instructions: string, scope: RegenerateScope) => void
-  loading: boolean
-}) {
-  const [instructions, setInstructions] = useState('')
-  // Blog and video both have two independent regenerate scopes (never
-  // conflated into one action — a picture tweak must never force a text/
-  // script rewrite, or vice versa, ARCHITECTURE.MD §10.1). image_post keeps
-  // a single action since it has only one thing to regenerate.
-  const [scope, setScope] = useState<RegenerateScope>('copy')
-
-  useEffect(() => {
-    if (open) {
-      setInstructions('')
-      setScope(contentType === 'video' ? 'visuals' : 'copy')
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, contentType])
-
-  if (!contentType) return null
-
-  const placeholders: Record<ContentType, string> = {
-    video: scope === 'script'
-      ? 'e.g., Focus on winter food access challenges, add a call-to-action scene…'
-      : 'e.g., Show the truck at sunset, warmer lighting, a busier street…',
-    image_post: 'e.g., Use warmer colors, show community gathering, more optimistic tone…',
-    blog:       scope === 'copy'
-      ? 'e.g., Add a section on local farms, make the intro more compelling…'
-      : 'e.g., Warmer tones, more people in frame, a different setting…',
-  }
-
-  const targetLabel = contentType === 'blog'
-    ? (scope === 'copy' ? 'the text' : 'the images')
-    : contentType === 'video'
-    ? (scope === 'script' ? 'the script' : 'the visuals')
-    : TYPE_LABELS[contentType].toLowerCase()
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-lg">
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">
-              Regenerate {TYPE_LABELS[contentType]}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Add extra instructions to refine the output. The current draft will be replaced.
-            </p>
-          </div>
-
-          {contentType === 'blog' && (
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-gray-700">What do you want to regenerate?</p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={scope === 'copy' ? 'default' : 'outline'}
-                  className={scope === 'copy' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
-                  onClick={() => setScope('copy')}
-                  disabled={loading}
-                >
-                  Text
-                </Button>
-                <Button
-                  type="button"
-                  variant={scope === 'visual' ? 'default' : 'outline'}
-                  className={scope === 'visual' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
-                  onClick={() => setScope('visual')}
-                  disabled={loading}
-                >
-                  Images
-                </Button>
-              </div>
-              <p className="mt-1.5 text-xs text-gray-400">
-                {scope === 'copy'
-                  ? "Rewrites this draft's text. The hero/inline images stay exactly as they are."
-                  : "Regenerates the hero/inline images. This draft's text stays exactly as it is."}
-              </p>
-            </div>
-          )}
-
-          {contentType === 'video' && (
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-gray-700">What do you want to regenerate?</p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={scope === 'script' ? 'default' : 'outline'}
-                  className={scope === 'script' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
-                  onClick={() => setScope('script')}
-                  disabled={loading}
-                >
-                  Script
-                </Button>
-                <Button
-                  type="button"
-                  variant={scope === 'visuals' ? 'default' : 'outline'}
-                  className={scope === 'visuals' ? 'flex-1 bg-gray-900 hover:bg-gray-800' : 'flex-1'}
-                  onClick={() => setScope('visuals')}
-                  disabled={loading}
-                >
-                  Visuals
-                </Button>
-              </div>
-              <p className="mt-1.5 text-xs text-gray-400">
-                {scope === 'script'
-                  ? 'Rewrites the script and scene plan. Every language track restarts from scratch (audio/captions included).'
-                  : 'Regenerates the character reference and scene visuals only. The script and scene plan stay exactly as they are — but every language track still re-records its audio/captions against the new visuals.'}
-              </p>
-            </div>
-          )}
-
-          <div>
-            <p className="mb-1.5 text-xs font-medium text-gray-700">
-              Additional instructions{' '}
-              <span className="font-normal text-gray-400">(optional)</span>
-            </p>
-            <Textarea
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-              rows={4}
-              placeholder={placeholders[contentType]}
-              className="resize-none text-sm"
-              disabled={loading}
-            />
-          </div>
-
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs text-amber-700">
-              ⚠️ This will generate new {targetLabel} for this job. You will see a waiting state
-              while it processes.
-            </p>
-          </div>
-
-          <div className="flex gap-2 pt-1">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={onClose}
-              disabled={loading}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="flex-1 bg-gray-900 hover:bg-gray-800"
-              onClick={() => onConfirm(instructions, scope)}
-              disabled={loading}
-            >
-              {loading ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Regenerating…</>
-              ) : (
-                <><RefreshCw className="mr-2 h-4 w-4" />Regenerate</>
-              )}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // ─── WaitingCard ──────────────────────────────────────────────────────────────
 
 function WaitingCard({
   type,
   topic,
-  isRegenerating,
   timedOut = false,
   onRefresh,
   onRetryWithInput,
@@ -593,7 +415,6 @@ function WaitingCard({
 }: {
   type: ContentType
   topic: string
-  isRegenerating: boolean
   timedOut?: boolean
   onRefresh?: () => void
   onRetryWithInput?: () => void
@@ -709,12 +530,7 @@ function WaitingCard({
     image_post: { title: 'AI is creating your image concept…',  sub: 'Generating the photo and caption' },
     blog:       { title: 'AI is writing your blog post…',       sub: 'Generating the outline, copy, and images' },
   }
-  const regenMessages: Record<ContentType, { title: string; sub: string }> = {
-    video:      { title: 'Regenerating video script…',   sub: 'Writing a new script and scene plan' },
-    image_post: { title: 'Regenerating image concept…', sub: 'Reworking the photo' },
-    blog:       { title: 'Regenerating blog post…',     sub: 'Reworking the content' },
-  }
-  const { title, sub } = isRegenerating ? regenMessages[type] : messages[type]
+  const { title, sub } = messages[type]
 
   return (
     <Card className="border bg-white shadow-sm">
@@ -730,7 +546,7 @@ function WaitingCard({
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {isRegenerating ? 'Waiting for regenerated draft…' : 'Waiting for draft…'}
+          Waiting for draft…
         </div>
         {startedAt && (
           <div className="w-full max-w-xs">
@@ -852,7 +668,6 @@ function VideoTabContent({
   onCancel,
   cancelling,
   cancelError,
-  onOpenRegenerate,
   onScriptSaved,
 }: {
   job: ContentJob
@@ -863,7 +678,6 @@ function VideoTabContent({
   onCancel: () => void
   cancelling: boolean
   cancelError: string | null
-  onOpenRegenerate: () => void
   onScriptSaved: () => void | Promise<void>
 }) {
   const { pipeline, draft, scenes, tracks } = videoStatus
@@ -873,10 +687,6 @@ function VideoTabContent({
   // script+scene-plan review, no language toggle and no per-track cards yet.
   const isPreApproval = pipeline.status === 'created' || pipeline.status === 'drafting' || pipeline.status === 'draft_ready'
   const isStoppable = pipeline.status !== 'ready' && pipeline.status !== 'failed'
-  // POST /video/regenerate { scope: "visuals" } only accepts 'ready'/'failed'
-  // server-side (redoing visuals mid-flight doesn't make sense) — matches
-  // isStoppable's negation exactly, by construction.
-  const canRegeneratePostApproval = !isPreApproval && !isStoppable
 
   // ── Per-scene narration editing (draft_ready only) ──────────────────────
   // narration_intent.text is the ONLY thing localize_script/synthesize_voice
@@ -1096,12 +906,6 @@ function VideoTabContent({
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {canRegeneratePostApproval && (
-                  <Button variant="outline" size="sm" onClick={onOpenRegenerate}>
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                    Regenerate
-                  </Button>
-                )}
                 <MiniStatusBadge status={pipeline.status} />
               </div>
             </CardContent>
@@ -1228,6 +1032,12 @@ function BlogTabContent({
   onClearApproveError,
   rawData,
   imageStyle,
+  isEditable,
+  dirty,
+  onSave,
+  saving,
+  saveError,
+  onClearSaveError,
 }: {
   editState: BlogEditState
   onChange: (updates: Partial<BlogEditState>) => void
@@ -1235,6 +1045,12 @@ function BlogTabContent({
   onClearApproveError: () => void
   rawData?: Record<string, unknown>
   imageStyle?: 'photo' | 'infographic'
+  isEditable: boolean
+  dirty: boolean
+  onSave: () => void
+  saving: boolean
+  saveError: string | null
+  onClearSaveError: () => void
 }) {
   // 'infographic' images are 4:5 portrait with headline text along the top
   // edge and a CTA bar along the bottom edge (see worker's compose.ts) — a
@@ -1278,6 +1094,16 @@ function BlogTabContent({
             </div>
           </div>
           <button onClick={onClearApproveError} className="shrink-0 text-xs text-red-500 hover:text-red-700">✕</button>
+        </div>
+      )}
+
+      {saveError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <p className="text-xs text-red-700">{saveError}</p>
+          </div>
+          <button onClick={onClearSaveError} className="shrink-0 text-xs text-red-500 hover:text-red-700">✕</button>
         </div>
       )}
 
@@ -1626,6 +1452,23 @@ function BlogTabContent({
           </button>
         </div>
       )}
+
+      {/* Save — decoupled from Approve below (this button/handler is the only
+         thing that persists an edit before the user clicks Approve; see
+         POST /api/jobs/[jobId]/blog/draft's own header). Only shown while
+         the draft is still editable (not yet approved). Placed at the
+         bottom, after every editable field, rather than above them. */}
+      {isEditable && (
+        <div className="flex items-center gap-3 border-t border-gray-200 pt-4">
+          <Button variant="outline" size="sm" onClick={onSave} disabled={saving || !dirty}>
+            {saving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+            Save
+          </Button>
+          <p className="text-xs text-gray-400">
+            {dirty ? 'You have unsaved edits.' : 'Save your edits before approving — the draft locks once approved.'}
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -1691,7 +1534,7 @@ export default function JobDetailPage() {
   const router = useRouter()
 
   const { addJob, updateJob } = useContentJobStore()
-  const { clearAfterApproval } = useNewContentStore()
+  const { clearAfterApproval, clearOnCancel } = useNewContentStore()
 
   const [loading, setLoading]     = useState(true)
   const [job, setJob]             = useState<ContentJob | null>(null)
@@ -1738,11 +1581,6 @@ export default function JobDetailPage() {
     }
   }, [allDrafts])
 
-  // Regenerate
-  const [regenDialog, setRegenDialog]   = useState<{ open: boolean; type: ContentType | null }>({ open: false, type: null })
-  const [regenLoading, setRegenLoading] = useState<ContentType | null>(null)
-  const [regenError, setRegenError]     = useState<string | null>(null)
-
   // Approval
   const [approvedTypes, setApprovedTypes] = useState<Set<ContentType>>(new Set())
   const [approving, setApproving]         = useState<ContentType | null>(null)
@@ -1785,7 +1623,12 @@ export default function JobDetailPage() {
     }
     await loadVideoStatus()
     setVideoCancelling(false)
-  }, [job_id, loadVideoStatus])
+    // Without this, the New Content page's pending-generation banner
+    // (src/stores/newContentStore.ts) stayed stuck on "in progress" forever
+    // — cancelling here never touched that page's session state, only this
+    // job's own pipeline/track rows.
+    clearOnCancel(job_id)
+  }, [job_id, loadVideoStatus, clearOnCancel])
 
   // Blog/image_post have no equivalent of videoStatus today (see that
   // state's own doc comment) — this is the minimal slice of it (just the
@@ -1812,6 +1655,55 @@ export default function JobDetailPage() {
   const [blogCancelling, setBlogCancelling] = useState(false)
   const [blogCancelError, setBlogCancelError] = useState<string | null>(null)
 
+  const [blogSaving, setBlogSaving] = useState(false)
+  const [blogSaveError, setBlogSaveError] = useState<string | null>(null)
+
+  // Decoupled from Approve (POST /api/jobs/[jobId]/blog/draft) — an edit
+  // made pre-approval now persists on its own instead of only living in
+  // blogEdit's React state until Approve is clicked (that bundled path,
+  // inside handleContentApprove below, is unchanged and still works).
+  // Plain function, not useCallback — this component isn't memoized, so
+  // there's no stability requirement, and the compiler's own inferred deps
+  // for this closure disagreed with any manual array tried here, which just
+  // skips optimizing the whole component instead (see reloadDrafts above
+  // for the same class of pre-existing issue).
+  const handleBlogSave = async () => {
+    const draft = getDraft('blog')
+    if (!draft || !blogEdit) return
+    setBlogSaving(true)
+    setBlogSaveError(null)
+    try {
+      const res = await fetch(`/api/jobs/${job_id}/blog/draft`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ language: getEffectiveLanguage('blog'), draft_data: blogEditToDraftData(blogEdit) }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `Save failed (status ${res.status})`)
+      }
+      const { draft: updated } = await res.json()
+      setAllDrafts((prev) => {
+        const next = new Map(prev)
+        next.set(draftKey('blog', updated.language), updated as ContentDraft)
+        return next
+      })
+      // Re-derive blogEdit from what actually got persisted, not just leave
+      // it as the pre-save value — blogEditToDraftData regenerates html_final
+      // (and could touch other fields) on every save, so the stored
+      // draft_data is never byte-identical to the edit state that produced
+      // it. Without this, blogDirty's blogEditFromDraft(draft.draft_data)
+      // vs. blogEdit comparison stays true forever after the very first
+      // save, showing "You have unsaved edits" even immediately after a
+      // successful one.
+      setBlogEdit(blogEditFromDraft((updated as ContentDraft).draft_data))
+    } catch (err) {
+      setBlogSaveError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setBlogSaving(false)
+    }
+  }
+
   const handleBlogCancel = useCallback(async () => {
     if (!window.confirm('Stop generating this blog post? Progress so far is kept, but nothing further will be generated.')) return
     setBlogCancelling(true)
@@ -1825,7 +1717,8 @@ export default function JobDetailPage() {
     }
     await loadBlogStatus()
     setBlogCancelling(false)
-  }, [job_id, loadBlogStatus])
+    clearOnCancel(job_id)
+  }, [job_id, loadBlogStatus, clearOnCancel])
 
   const [imageCancelling, setImageCancelling] = useState(false)
   const [imageCancelError, setImageCancelError] = useState<string | null>(null)
@@ -1843,7 +1736,8 @@ export default function JobDetailPage() {
     }
     await loadImageStatus()
     setImageCancelling(false)
-  }, [job_id, loadImageStatus])
+    clearOnCancel(job_id)
+  }, [job_id, loadImageStatus, clearOnCancel])
 
   // Timeout for long-running generation
   const [timedOut, setTimedOut] = useState(false)
@@ -1852,7 +1746,6 @@ export default function JobDetailPage() {
   const [blogWaitStart, setBlogWaitStart] = useState<number | null>(null)
 
   const needsPolling = useMemo(() => {
-    if (regenLoading !== null) return true
     if (job && (job.status === 'pending' || job.status === 'draft_ready')) {
       const types: ContentType[] = job.content_types ?? []
       // image_post is polled separately via generated_content — exclude here
@@ -1863,7 +1756,7 @@ export default function JobDetailPage() {
       return true
     }
     return false
-  }, [regenLoading, job, allDrafts, getDraft])
+  }, [job, allDrafts, getDraft])
 
   // ── Reload drafts from DB ────────────────────────────────────────────────────
   // Called by realtime handler AND by the polling interval.
@@ -1909,14 +1802,6 @@ export default function JobDetailPage() {
 
     const bd = draftMap.get(draftKey('blog', selectedLanguage.get('blog') ?? defaultLang))
     if (bd) setBlogEdit((prev) => prev ?? blogEditFromDraft(bd.draft_data))
-
-    // Clear regenLoading if the specific type being regenerated now has content
-    setRegenLoading((prev) => {
-      if (prev === null) return null
-      const d = draftMap.get(draftKey(prev, selectedLanguage.get(prev) ?? defaultLang))
-      const isReady = d && (d.status === 'draft_ready' || d.status === 'approved' || (d.status === 'pending' && freshJob?.status === 'draft_ready'))
-      return isReady ? null : prev
-    })
   }, [job_id, job?.language, selectedLanguage])
 
   // ── Initial load ──────────────────────────────────────────────────────────────
@@ -2052,7 +1937,6 @@ export default function JobDetailPage() {
       if (!active) return
       if (Date.now() - startedAt > timeoutMs) {
         setTimedOut(true)
-        setRegenLoading(null)
         return
       }
 
@@ -2138,8 +2022,6 @@ export default function JobDetailPage() {
       if (row.content_type === 'blog' && lang === currentLang) {
         setBlogEdit(blogEditFromDraft(row.draft_data))
       }
-      // Clear regen loading for this type when new draft arrives
-      setRegenLoading((prev) => (prev === row.content_type ? null : prev))
       // Bump job status to draft_ready on first draft
       if (row.status === 'draft_ready') {
         setJob((prev) => prev ? { ...prev, status: 'draft_ready' } : prev)
@@ -2297,105 +2179,6 @@ export default function JobDetailPage() {
     return () => { supabase.removeChannel(channel) }
   }, [job_id, router, reloadDrafts])
 
-  // ── Regenerate handler ────────────────────────────────────────────────────────
-
-  const handleRegenerate = async (
-    type: ContentType,
-    instructions: string,
-    scope: RegenerateScope = 'visual',
-  ) => {
-    setRegenLoading(type)
-    setRegenError(null)
-
-    // Video's regenerate is entirely self-contained here — its state
-    // (videoStatus) has nothing to do with allDrafts/blogEdit, which the
-    // shared tail below manipulates for blog/image_post specifically.
-    if (type === 'video') {
-      const res = await fetch(`/api/jobs/${job_id}/video/regenerate`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ scope, instructions }),
-      })
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
-        setRegenError(b.error ?? 'Failed to trigger regeneration')
-        setRegenLoading(null)
-        return
-      }
-      setRegenDialog({ open: false, type: null })
-      // Both scopes fully reset every track (see the route's own doc
-      // comment on why "visuals" doesn't preserve audio/captions) — video
-      // is no longer approved in any real sense, so drop it from
-      // approvedTypes the same way blog/image_post's own full-reset path
-      // does below.
-      setApprovedTypes((prev) => { const s = new Set(prev); s.delete('video'); return s })
-      await loadVideoStatus()
-      setRegenLoading(null)
-      return
-    }
-
-    const lang = getEffectiveLanguage(type)
-    let res: Response
-
-    if (type === 'blog') {
-      res = await fetch(`/api/jobs/${job_id}/blog/regenerate`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(scope === 'copy' ? { scope: 'copy', lang, instructions } : { scope: 'visual' }),
-      })
-    } else {
-      // image_post — video already returned above.
-      res = await fetch(`/api/jobs/${job_id}/image/regenerate`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ scope: 'visual', instructions }),
-      })
-    }
-
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}))
-      setRegenError(b.error ?? 'Failed to trigger regeneration')
-      setRegenLoading(null)
-      return
-    }
-
-    setRegenDialog({ open: false, type: null })
-
-    // Visual-only regen (blog images, or image_post's only regen type)
-    // shares an asset across languages and never touches content_drafts /
-    // generated_content directly — the pipeline flips the track to 'stale'
-    // in the background, and there's no automatic "it's done" signal to
-    // wait for on this page (finalize only re-runs once the shared asset is
-    // ready AND the track is re-approved). The CURRENT draft/photo is still
-    // valid and stays visible; re-approving once the new asset is ready is
-    // what actually pulls it in (tracks/[lang]/approve reconciles against
-    // whatever's current).
-    const isSharedAssetOnlyRegen = (type === 'blog' && scope === 'visual') || type === 'image_post'
-    if (isSharedAssetOnlyRegen) {
-      setRegenLoading(null)
-      window.alert(
-        `Regenerating the ${type === 'blog' ? 'images' : 'photo'}. This runs in the background — ` +
-        `click Approve again once it's ready to publish the update.`,
-      )
-      return
-    }
-
-    // Full replacement (blog copy, or a video script regenerate): the
-    // current draft is being fully redone — show the waiting state until a
-    // new one lands via the existing content_drafts realtime subscription.
-    setAllDrafts((prev) => {
-      const next = new Map(prev)
-      const key = draftKey(type, lang)
-      const existing = next.get(key)
-      if (existing) next.set(key, { ...existing, status: 'pending', is_approved: false })
-      return next
-    })
-    setApprovedTypes((prev) => { const s = new Set(prev); s.delete(type); return s })
-    setJob((prev) => prev ? { ...prev, status: 'pending' } : prev)
-    if (type === 'blog') setBlogEdit(null)
-    // regenLoading clears when realtime UPDATE arrives with status 'draft_ready'
-  }
-
   // ── Video approve handler ────────────────────────────────────────────────────
   // Locks the master script and creates one content_language_tracks row per
   // requested language, all in a single call to the new backend
@@ -2447,12 +2230,10 @@ export default function JobDetailPage() {
     setApproveErrors((prev) => { const m = new Map(prev); m.delete(type); return m })
 
     // image_post: result already in generated_content — flip each language's
-    // track to 'ready' (mirrors blog's per-language approve; without this,
-    // content_language_tracks never advances past draft_ready/stale, which
-    // matters for the regenerate→re-approve reconciliation flow), then mark
-    // the job approved and redirect. Generation for a BOTH job isn't
-    // considered ready until both languages exist (see the polling fix
-    // above), so both are safe to approve here.
+    // track to 'ready' (mirrors blog's per-language approve), then mark the
+    // job approved and redirect. Generation for a BOTH job isn't considered
+    // ready until both languages exist (see the polling fix above), so both
+    // are safe to approve here.
     if (type === 'image_post') {
       const imageLanguages = job.language === 'BOTH' ? ['EN', 'FR'] : [job.language]
       for (const lang of imageLanguages) {
@@ -2557,19 +2338,16 @@ export default function JobDetailPage() {
 
   const renderTabContent = (type: ContentType) => {
     const draft = getDraft(type)
-    const isRegenPending = regenLoading === type
 
     // ── image_post: uses generated_content, not content_drafts ──────────────
     if (type === 'image_post') {
-      if (isRegenPending || !imageResult) {
+      if (!imageResult) {
         return (
           <WaitingCard
             type="image_post"
             topic={job?.topic ?? ''}
-            isRegenerating={isRegenPending}
             timedOut={false}
             onRefresh={() => loadData()}
-            onRetryWithInput={() => setRegenDialog({ open: true, type })}
             terminalError={imagePipelineStatus?.status === 'failed' ? imagePipelineStatus.last_error : null}
             onCancel={handleImageCancel}
             cancelling={imageCancelling}
@@ -2597,10 +2375,8 @@ export default function JobDetailPage() {
           <WaitingCard
             type="video"
             topic={job?.topic ?? ''}
-            isRegenerating={false}
             timedOut={timedOut}
             onRefresh={() => { setTimedOut(false); loadVideoStatus() }}
-            onRetryWithInput={() => setRegenDialog({ open: true, type })}
           />
         )
       }
@@ -2616,7 +2392,6 @@ export default function JobDetailPage() {
           onCancel={handleVideoCancel}
           cancelling={videoCancelling}
           cancelError={videoCancelError}
-          onOpenRegenerate={() => setRegenDialog({ open: true, type: 'video' })}
           onScriptSaved={loadVideoStatus}
         />
       )
@@ -2624,19 +2399,16 @@ export default function JobDetailPage() {
 
     // ── blog: wait until content_drafts row exists and is not pending ────────
     const isPendingStatus = draft?.status === 'pending' && job?.status === 'pending'
-    if (!draft || isRegenPending || isPendingStatus) {
+    if (!draft || isPendingStatus) {
       return (
         <WaitingCard
           type={type}
           topic={job?.topic ?? ''}
-          isRegenerating={isRegenPending}
           timedOut={timedOut}
           onRefresh={() => {
             setTimedOut(false)
-            setRegenLoading(null)
             loadData()
           }}
-          onRetryWithInput={() => setRegenDialog({ open: true, type })}
           startedAt={type === 'blog' ? blogWaitStart : null}
           terminalError={blogPipelineStatus?.status === 'failed' ? blogPipelineStatus.last_error : null}
           onCancel={handleBlogCancel}
@@ -2646,9 +2418,17 @@ export default function JobDetailPage() {
       )
     }
 
+    // Dirty-check via blogEditFromDraft on both sides (not a raw draft_data
+    // diff) — blogEditToDraftData/blogEditFromDraft round-trip isn't
+    // byte-identical to the stored shape (html_final is regenerated, some
+    // legacy fields are dropped), so comparing raw JSON would show "dirty"
+    // even with zero real edits.
+    const currentBlogEdit = blogEdit ?? blogEditFromDraft(draft.draft_data)
+    const blogDirty = JSON.stringify(currentBlogEdit) !== JSON.stringify(blogEditFromDraft(draft.draft_data))
+
     return (
       <BlogTabContent
-        editState={blogEdit ?? blogEditFromDraft(draft.draft_data)}
+        editState={currentBlogEdit}
         onChange={(updates) => setBlogEdit((prev) => ({ ...(prev ?? blogEditFromDraft(draft.draft_data)), ...updates }))}
         approveError={approveErrors.get('blog') ?? null}
         onClearApproveError={() =>
@@ -2656,6 +2436,12 @@ export default function JobDetailPage() {
         }
         rawData={draft.draft_data}
         imageStyle={job?.image_style}
+        isEditable={!draft.is_approved}
+        dirty={blogDirty}
+        onSave={handleBlogSave}
+        saving={blogSaving}
+        saveError={blogSaveError}
+        onClearSaveError={() => setBlogSaveError(null)}
       />
     )
   }
@@ -2755,7 +2541,6 @@ export default function JobDetailPage() {
   const showActionBar  =
     activeTabReady &&
     !videoGenerating &&
-    regenLoading !== activeTab &&
     approving !== activeTab
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2773,20 +2558,6 @@ export default function JobDetailPage() {
         ]}
         actions={<StatusBadge status={job.status} />}
       />
-
-      {/* Regen global error */}
-      {regenError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
-            <div>
-              <p className="text-sm font-semibold text-red-800">Regeneration failed</p>
-              <p className="mt-0.5 text-xs text-red-700">{regenError}</p>
-            </div>
-          </div>
-          <button onClick={() => setRegenError(null)} className="shrink-0 text-xs text-red-500 hover:text-red-700">✕</button>
-        </div>
-      )}
 
       {/* Video generating banner — only when video is actually one of the content types */}
       {isGenerating && (job.content_types as ContentType[]).includes('video') && (
@@ -2817,7 +2588,7 @@ export default function JobDetailPage() {
               const isPending =
                 type === 'image_post' ? imagePolling :
                 type === 'video' ? (!videoStatus || videoStatus.pipeline.status === 'created' || videoStatus.pipeline.status === 'drafting') :
-                (regenLoading === type || (d?.status === 'pending' && job?.status === 'pending'))
+                (d?.status === 'pending' && job?.status === 'pending')
               const isDraftReady =
                 type === 'image_post' ? imgReady :
                 type === 'video' ? videoStatus?.pipeline.status === 'draft_ready' :
@@ -2849,7 +2620,7 @@ export default function JobDetailPage() {
                   languages={getAvailableLanguages(type)}
                   selected={getEffectiveLanguage(type)}
                   onSelect={(lang) => handleLanguageSwitch(type, lang)}
-                  disabled={approving === type || regenLoading === type}
+                  disabled={approving === type}
                 />
               )}
               {renderTabContent(type)}
@@ -2863,7 +2634,7 @@ export default function JobDetailPage() {
               languages={getAvailableLanguages(contentTypes[0])}
               selected={getEffectiveLanguage(contentTypes[0])}
               onSelect={(lang) => handleLanguageSwitch(contentTypes[0], lang)}
-              disabled={approving === contentTypes[0] || regenLoading === contentTypes[0]}
+              disabled={approving === contentTypes[0]}
             />
           )}
           {renderTabContent(contentTypes[0])}
@@ -2889,20 +2660,6 @@ export default function JobDetailPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Video's own Regenerate entry point for the post-approval
-                 (ready/failed) window lives inside VideoTabContent itself —
-                 this sticky bar only ever shows while activeTabReady, which
-                 for video means draft_ready (pre-approval), where only
-                 scope: "script" is actually valid server-side. */}
-              <Button
-                variant="outline"
-                onClick={() => setRegenDialog({ open: true, type: activeTab })}
-                disabled={approving === activeTab}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Regenerate
-              </Button>
-
               <Button
                 onClick={() =>
                   activeTab === 'video'
@@ -2935,17 +2692,6 @@ export default function JobDetailPage() {
           </div>
         </div>
       )}
-
-      {/* Regenerate dialog */}
-      <RegenerateDialog
-        open={regenDialog.open}
-        contentType={regenDialog.type}
-        onClose={() => setRegenDialog({ open: false, type: null })}
-        onConfirm={(instructions, scope) => {
-          if (regenDialog.type) handleRegenerate(regenDialog.type, instructions, scope)
-        }}
-        loading={regenLoading !== null && regenDialog.open}
-      />
 
     </div>
   )

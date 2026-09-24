@@ -24,11 +24,27 @@ import {
   FileText,
   Sparkles,
   Volume2,
+  XCircle,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useNewContentStore } from '@/stores/newContentStore'
 import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle, AspectRatio } from '@/stores/newContentStore'
 import { VIDEO_VOICES } from '@/lib/videoVoices'
+import { getJobGenerationState, type JobGenerationState } from '@/lib/jobGenerationState'
+
+// Maps a content_type to its cancel route's URL segment (image_post's route
+// lives under /image, not /image_post).
+const CANCEL_ROUTE_FOR: Record<ContentType, string> = { video: 'video', image_post: 'image', blog: 'blog' }
+
+// Best-effort: stops every requested content type's pipeline server-side.
+// Used any time the pending-job banner is dismissed, so "Start New"/"Cancel"
+// actually stop generation instead of only forgetting about it locally
+// (which left the backend pipeline running unattended).
+async function cancelAllPipelines(jobId: string, types: ContentType[]) {
+  await Promise.allSettled(
+    types.map((t) => fetch(`/api/jobs/${jobId}/${CANCEL_ROUTE_FOR[t]}/cancel`, { method: 'POST' })),
+  )
+}
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -240,6 +256,45 @@ export default function NewContentPage() {
   useEffect(() => {
     restoreSession()
   }, [restoreSession])
+
+  // Mirrors ActiveGenerationBanner's own poll (src/components/ActiveGenerationBanner.tsx)
+  // — without this, a job that failed or was cancelled elsewhere (e.g. from
+  // its own detail page, on a device/tab where this sessionStorage-backed
+  // banner never got cleared) spins "in progress" forever instead of
+  // surfacing that nothing further is coming.
+  const [pendingGenState, setPendingGenState] = useState<JobGenerationState>('pending')
+  const [cancellingPending, setCancellingPending] = useState(false)
+
+  useEffect(() => {
+    if (status !== 'pending' || !pendingJobId) return
+    let active = true
+
+    const recheck = () => {
+      getJobGenerationState(pendingJobId).then((s) => { if (active) setPendingGenState(s) })
+    }
+    recheck()
+
+    const channel = supabase
+      .channel(`new-page-pending-${pendingJobId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'content_drafts', filter: `job_id=eq.${pendingJobId}` },
+        recheck,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'generated_content', filter: `job_id=eq.${pendingJobId}` },
+        recheck,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'content_pipelines', filter: `job_id=eq.${pendingJobId}` },
+        recheck,
+      )
+      .subscribe()
+
+    return () => { active = false; supabase.removeChannel(channel) }
+  }, [status, pendingJobId])
 
   const isSubmitting = phase !== 'idle'
   const videoOn = content_types.includes('video')
@@ -515,12 +570,15 @@ export default function NewContentPage() {
     router.push(`/dashboard/jobs/${pendingImageJob.jobId}`)
   }
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     if (status === 'pending') {
       const ok = window.confirm('Content is being generated. Cancel and lose all progress?')
       if (!ok) return
+      if (pendingJobId && pendingGenState === 'pending') {
+        await cancelAllPipelines(pendingJobId, content_types)
+      }
     }
-    clearOnCancel()
+    clearOnCancel(pendingJobId ?? undefined)
     router.push('/dashboard')
   }
 
@@ -597,30 +655,57 @@ export default function NewContentPage() {
 
       {/* ── Pending-job banner (shown when returning mid-generation) ── */}
       {status === 'pending' && pendingJobId && (
-        <div className="mb-5 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100">
-            <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+        <div
+          className={`mb-5 flex items-center gap-3 rounded-xl border px-4 py-3 ${
+            pendingGenState === 'failed' ? 'border-gray-200 bg-gray-50' : 'border-amber-200 bg-amber-50'
+          }`}
+        >
+          <div
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+              pendingGenState === 'failed' ? 'bg-gray-100' : 'bg-amber-100'
+            }`}
+          >
+            {pendingGenState === 'failed' ? (
+              <XCircle className="h-4 w-4 text-gray-500" />
+            ) : (
+              <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-amber-900">Content generation in progress</p>
-            <p className="truncate text-xs text-amber-700">{topic}</p>
+            <p className={`text-sm font-semibold ${pendingGenState === 'failed' ? 'text-gray-700' : 'text-amber-900'}`}>
+              {pendingGenState === 'failed' ? 'Generation stopped' : 'Content generation in progress'}
+            </p>
+            <p className={`truncate text-xs ${pendingGenState === 'failed' ? 'text-gray-500' : 'text-amber-700'}`}>{topic}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Link
-              href={`/dashboard/jobs/${pendingJobId}`}
-              className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-50"
-            >
-              View Job →
-            </Link>
+            {pendingGenState !== 'failed' && (
+              <Link
+                href={`/dashboard/jobs/${pendingJobId}`}
+                className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-50"
+              >
+                View Job →
+              </Link>
+            )}
             <button
               type="button"
-              onClick={() => {
-                const ok = window.confirm('Cancel this generation and start a new request?')
-                if (ok) clearOnCancel()
+              disabled={cancellingPending}
+              onClick={async () => {
+                const ok = window.confirm(
+                  pendingGenState === 'failed'
+                    ? 'Start a new request?'
+                    : 'Cancel this generation and start a new request?',
+                )
+                if (!ok) return
+                if (pendingGenState === 'pending') {
+                  setCancellingPending(true)
+                  await cancelAllPipelines(pendingJobId, content_types)
+                  setCancellingPending(false)
+                }
+                clearOnCancel(pendingJobId)
               }}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
             >
-              Start New
+              {cancellingPending ? 'Cancelling…' : 'Start New'}
             </button>
           </div>
         </div>

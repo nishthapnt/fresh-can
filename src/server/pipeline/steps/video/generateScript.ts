@@ -384,12 +384,7 @@ export async function runGenerateScript(
         }),
         userPrompt:
           `Topic: ${input.topic}\nCategory: ${input.category}\n` +
-          `Audience: ${input.targetAudience}\nScript type: ${input.scriptType}` +
-          // Set by POST /video/regenerate { scope: "script" } — the only
-          // regeneration scope that reruns this step, so this is always a
-          // genuine user request to redo the script/scene plan differently,
-          // never stale guidance from an unrelated earlier regen.
-          (working.regen_instructions ? `\nThe user asked for this rewrite: ${working.regen_instructions}` : ''),
+          `Audience: ${input.targetAudience}\nScript type: ${input.scriptType}`,
         stepName: 'generate_script',
       })
 

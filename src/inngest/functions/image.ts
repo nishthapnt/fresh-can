@@ -265,7 +265,6 @@ export const imageGenerate = inngest.createFunction(
         topic: job.topic,
         category: job.category,
         scene: photoScene(job),
-        regenInstructions: pipeline.regen_instructions,
         imageStyle,
         unitPresence: imagePostPlan.unitPresence,
         setting: imagePostPlan.setting,

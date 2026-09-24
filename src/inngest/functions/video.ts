@@ -320,10 +320,7 @@ export const videoApprove = inngest.createFunction(
 
     const job = await step.run('fetch-job', () => fetchVideoJobFields(jobId))
     const aspectRatio = job.aspect_ratio ?? '9:16'
-    const characterRefPrompt = composeCharacterRefPrompt(BRAND_PROFILE, {
-      pipelineId,
-      regenInstructions: pipeline.regen_instructions,
-    })
+    const characterRefPrompt = composeCharacterRefPrompt(BRAND_PROFILE, { pipelineId })
 
     const characterRef = await runCharacterRefUntilSettled(
       step,

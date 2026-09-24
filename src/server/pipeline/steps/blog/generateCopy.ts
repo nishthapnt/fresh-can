@@ -147,7 +147,6 @@ export async function runGenerateCopy(
         language: track.language,
         category: input.category,
         sceneNotes: input.sceneNotes,
-        regenInstructions: track.regen_instructions,
       }),
       userPrompt: `Topic: ${input.topic}\nCategory: ${input.category}\nOutline: ${JSON.stringify(outline)}`,
       stepName: 'generate_copy',

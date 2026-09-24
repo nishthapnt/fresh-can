@@ -14,7 +14,9 @@ export interface PipelineRow {
   current_step: string | null
   retry_count: number
   last_error: string | null
-  /** Optional guidance from the Regenerate dialog for the shared visual (image_post's photo). */
+  /** No longer user-writable (the Regenerate feature was removed) — kept
+   *  only as generateSceneVisual.ts's internal validation-retry scratch
+   *  channel (VALIDATION_RETRY_PREFIX), independent of any user input. */
   regen_instructions?: string | null
   /** video-only fan-in counters (supabase/migrations/20260912000000) — null/0
    *  and unused for blog/image_post. See generateSceneVisual.ts. */
@@ -33,8 +35,6 @@ export interface TrackRow {
   master_generation_used: number
   retry_count: number
   last_error: string | null
-  /** Optional guidance from the Regenerate dialog for this track's copy (blog only). */
-  regen_instructions?: string | null
   created_at: string
   updated_at: string
 }
