@@ -14,6 +14,8 @@
 - [ ] Enable RLS on `content_jobs`/`generated_content` (defined but not actually enforced — anon key has effectively unrestricted read/write on both today)
 - [ ] Deploy to Vercel (or chosen host)
 - [ ] Build real blog social posting support — blog never writes a `generated_content` row (no image/video), so posting it always failed deep in the pipeline; `SocialApprovalCard` now guards against this with a clear "not supported yet" message (Session 7, 2026-09-19) instead of a silent failure, but the actual feature (e.g. attach the blog's hero image, or a link-only post where the platform allows one) is still unbuilt
+- [x] Make video's script editable before approval, and make sure the edit is actually used in generation — added `POST /api/jobs/[jobId]/video/script` (Session 21, 2026-09-24). Edits per-scene `video_scenes.narration_intent.text` (the field `localize_script`/`synthesize_voice` actually read), not the old `content_drafts.draft_data.script` summary blob nothing downstream ever consumed. Gated to `pipeline.status === 'draft_ready'`; `VideoTabContent`'s scene cards are now editable `Textarea`s with a "Save script" button.
+- [x] Cap each scene's editable narration to a word budget derived from its own `target_duration_ms` (Session 22, 2026-09-24), so a manual edit can't outrun the video duration the user picked. Shared `src/lib/videoNarrationBudget.ts` (same ~3.1 wps rate `composeLocalizeScriptSystemPrompt` targets, +15% tolerance) powers both the live client-side word counter (`VideoTabContent`) and the server-side hard rejection (`updateScript.ts`'s `applyScriptEdits`, called from `POST /video/script`).
 
 ---
 

@@ -3,6 +3,7 @@
 // live in the brand file and get spliced into every prompt, rather than
 // each step file writing brand-blind, topic-only prompts from scratch.
 import type { BrandProfile, CreativeBrief, ImageStyle } from '../types'
+import { NARRATION_WORDS_PER_SECOND } from '../../../../lib/videoNarrationBudget'
 
 /**
  * Renders a CreativeBrief (Layer 1, PROMPT_REFACTOR_BRIEF.md §4.2) as
@@ -785,8 +786,9 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     'with a "narration_intent" (the SEMANTIC content that scene\'s narration should convey — not literal ' +
     `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
     'each scene, writing to fill close to its FULL target duration — real measured narration audio for this ' +
-    'pipeline runs at roughly 3.1 words per second (multiply that rate by target_duration_seconds for the word ' +
-    'count to aim for), noticeably faster than a slow, deliberate voiceover pace. Err on the side of a few words ' +
+    `pipeline runs at roughly ${NARRATION_WORDS_PER_SECOND} words per second (multiply that rate by ` +
+    'target_duration_seconds for the word count to aim for), noticeably faster than a slow, deliberate ' +
+    'voiceover pace. Err on the side of a few words ' +
     'too many rather than too few: the render step stretches a scene\'s own visual (holding its final frame) to ' +
     'cover narration that runs a little long, but narration that runs short leaves the rest of the target ' +
     'duration silent and shortens the whole finished video below what was requested — a real problem, not a ' +

@@ -7,7 +7,7 @@
 | Field | Value |
 |-------|-------|
 | **Project** | Fresh-CAN Content Automation Dashboard |
-| **Last Updated** | 2026-09-22 |
+| **Last Updated** | 2026-09-24 |
 | **Phase** | ✅ Blog + Image + Video Pipeline Migration Complete (all four content types on Inngest, `worker/` fully retired) — 🔄 Prompt architecture refactor in progress (Phase 1/9 done, see Session 12 and `PROMPT_REFACTOR_BRIEF.md`) |
 | **Progress** | ██████████ 95% |
 | **Blockers** | None. `npm run dev` at the repo root is the only thing to start — no separate worker process. |
@@ -1713,3 +1713,34 @@
 **⭐ Next steps**
 - Watch the next real blog/image_post run to confirm hero/inline/photo images are now actually 4:5, not square as before.
 - Consider whether the pre-existing `DELETE ME` e2e test-row pileup in the production DB is worth a cleanup pass.
+
+---
+
+### 2026-09-24 — Made video's script editable, and wired to what generation actually reads
+**Problem found:** the pre-approval video tab already had a "Script" summary card and a `DraftEditor.tsx` branch with editable script/visual_description/duration fields, but neither was wired to anything real — `VideoTabContent` (what's actually rendered for video) showed scenes read-only with an explicit "Editing isn't available yet" note, and even `DraftEditor`'s save path only patched `content_drafts.draft_data.script`, a summary blob `localize_script`/`synthesize_voice` never read. The actual narration source those two steps consume is per-scene `video_scenes.narration_intent.text`.
+
+**✅ Completed**
+- New `POST /api/jobs/[jobId]/video/script` (`src/app/api/jobs/[jobId]/video/script/route.ts`). Requires `pipeline.status === 'draft_ready'` (409 otherwise — matches the single-approval-gate design, nothing has consumed the scene plan yet at this point). Accepts `{ scenes: [{ id, narration }] }`, merges each edit into its scene's existing `narration_intent` (preserving `beat`/`cast_present`/`unit_presence`/etc. — only `text` changes), and upserts via the existing `upsertVideoScenes`. Also recomputes `content_drafts.draft_data.script` (joined scene narration, in order) so the summary card stays consistent.
+- Merge/validation logic extracted as pure functions (`applyScriptEdits`, `buildScriptSummary`) in `src/server/pipeline/steps/video/updateScript.ts`, unit-tested (`updateScript.test.ts`, 12 cases) — no Inngest/DB step involved, just the same shape `generateScript.ts` already owns.
+- `VideoTabContent` (`page.tsx`) scene cards are now editable `Textarea`s for narration, with a "Save script" button, gated to `pipeline.status === 'draft_ready'`. Local edit state re-seeds only on `pipeline.current_generation` change, not on every 6s status poll (the existing poll effect refetches `videoStatus` continuously while `draft_ready`, which would otherwise stomp in-progress edits).
+- No changes needed to `generateScript.ts`/`localizeScript.ts`/`synthesizeVoice.ts`/`generateSceneVisual.ts` — they already re-fetch `video_scenes` fresh via `getVideoScenes` at execution time, so an edit saved before Approve is picked up automatically.
+- Tests: 449/449 non-e2e passing, clean `tsc --noEmit`, no new lint errors (existing `set-state-in-effect` warnings in `page.tsx` are pre-existing, unrelated to this change).
+
+**⭐ Next steps**
+- Manual verification: create a video job, edit a scene's narration pre-approval, approve, and confirm (via logs or `KIE_FAKE_MODE`) the edited text reaches ElevenLabs.
+- Visual description/shot notes remain read-only by design (out of scope — narration is the "script"); revisit if the user also wants those editable.
+- Consider whether post-approval script edits (before a track's `render` step runs) are worth supporting later — deliberately not built now to keep the change scoped to the pre-approval gate.
+
+---
+
+### 2026-09-24 (cont'd) — Capped edited narration to a per-scene word budget tied to the chosen video duration
+**Problem:** the new script-editing feature (above) let a user type a narration edit of any length, with nothing stopping it from being far too long for that scene's `target_duration_ms` — which would force `localize_script`'s per-language rewrite to either badly compress the content or ignore the duration target, undermining the narration-undershoot fix from earlier today (`4a5ca87`).
+
+**✅ Completed**
+- Extracted the shared pacing constant into `src/lib/videoNarrationBudget.ts` (`NARRATION_WORDS_PER_SECOND = 3.1`, `maxNarrationWords()`, `narrationWordCount()`) — deliberately under `src/lib/`, not `server/pipeline/`, so the client dashboard page can import it directly without pulling in the rest of the prompt-composition module tree. `composeText.ts`'s `composeLocalizeScriptSystemPrompt` now reads the rate from here instead of a hardcoded `3.1` in its prose, so the prompt and the enforcement can never silently diverge again the way the old `2.5` vs `3.1` mismatch did.
+- `updateScript.ts`'s `applyScriptEdits` now hard-rejects (400) any scene edit whose word count exceeds `maxNarrationWords(scene.target_duration_ms)` — a 15% tolerance above the raw rate, matching the render step's own existing slack for narration that runs "a little long."
+- `VideoTabContent` (`page.tsx`) shows a live `N/max words` counter per scene, turning amber near the limit and red over it, with an inline "trim to N words" message; "Save script" disables whenever any edited scene is over budget. This is a UX mirror of the same server-side check, not a second independent limit.
+- Tests: `updateScript.test.ts` covers at-budget/over-budget/boundary cases, plus a test asserting the prompt string and the budget function read the identical constant. Full suite 453/453, clean `tsc --noEmit`, no new lint errors.
+
+**⭐ Next steps**
+- Same as above — manual end-to-end verification is still outstanding for the whole script-editing feature, budget included.

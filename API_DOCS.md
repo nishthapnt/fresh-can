@@ -125,6 +125,38 @@ Status: 404 / 500 / 502
 
 ---
 
+### Jobs — Video
+
+#### `POST /api/jobs/[jobId]/video/script`
+**Auth:** Requires session (gated by `src/proxy.ts`)
+**Description:** Edits per-scene narration text before approval. Writes `video_scenes.narration_intent.text` (preserving every other field already on that scene's `narration_intent`) — the field `localize_script`/`synthesize_voice` actually read, not the `content_drafts.draft_data.script` summary blob. Also recomputes that summary blob from the edited scenes so the pre-approval "Script" card stays consistent. Only allowed while the video pipeline's status is `draft_ready`; once approved, the scene plan is locked and edits are rejected.
+
+Each scene's narration is capped at a word budget derived from its own `target_duration_ms` (`src/lib/videoNarrationBudget.ts`'s `maxNarrationWords` — the same ~3.1 words/sec rate `localize_script`'s per-language rewrite targets, plus ~15% tolerance for the render step's own slack). An edit that would exceed a scene's budget is rejected with a 400, naming the scene and its limit.
+
+**Request Body:**
+```json
+{ "scenes": [{ "id": "uuid", "narration": "string" }] }
+```
+
+**Response (success):**
+```json
+{
+  "scenes": [ /* full current scene list, with edits applied */ ],
+  "draft": { "id": "uuid", "draft_data": { "script": "string", "...": "..." } }
+}
+```
+
+**Response (error):**
+```json
+{ "error": "Script can only be edited while the pipeline is draft_ready (current: approved)" }
+```
+```json
+{ "error": "Scene 2's narration is too long for its 8s budget (35 words, max 29)" }
+```
+Status: 400 (invalid/unknown scene id, empty narration, over word budget) / 404 (no pipeline or no scenes) / 409 (not `draft_ready`) / 500
+
+---
+
 ## n8n Outbound Webhooks (called by this app, not routes)
 
 These are fired from the frontend — documented here for reference.
@@ -185,3 +217,4 @@ These are fired from the frontend — documented here for reference.
 | 2026-07-17 | Created | POST /api/auth/login |
 | 2026-07-17 | Created | POST /api/auth/logout |
 | 2026-09-14 | Created (replaces n8n `image_questions` webhook) | POST /api/jobs/[jobId]/image/questions |
+| 2026-09-24 | Created | POST /api/jobs/[jobId]/video/script |

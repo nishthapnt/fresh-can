@@ -11,6 +11,7 @@ import TopBar from '@/components/layout/TopBar'
 import StatusBadge from '@/components/StatusBadge'
 import type { ScriptPart } from '@/components/dashboard/ScriptPartCard'
 import { supabase } from '@/lib/supabase'
+import { maxNarrationWords, narrationWordCount } from '@/lib/videoNarrationBudget'
 import { useContentJobStore } from '@/stores/contentJobStore'
 import { useNewContentStore } from '@/stores/newContentStore'
 import {
@@ -26,6 +27,7 @@ import {
   Sparkles,
   Hash,
   StopCircle,
+  Save,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -763,6 +765,16 @@ function statusBadgeVariant(status: string): 'gray' | 'amber' | 'blue' | 'green'
   return 'blue' // drafting/approved/generating/awaiting_shared/rendering
 }
 
+// Scenes' narration_intent is `unknown` (jsonb) client-side (VideoSceneRow's
+// own doc comment) — every scene generate_script writes always has a `text`
+// field (generateScript.ts's runGenerateScript), so this only ever falls
+// back to '' for a shape that shouldn't exist in practice.
+function sceneNarrationText(narrationIntent: unknown): string {
+  if (!narrationIntent || typeof narrationIntent !== 'object') return ''
+  const text = (narrationIntent as Record<string, unknown>).text
+  return typeof text === 'string' ? text : ''
+}
+
 function MiniStatusBadge({ status }: { status: string }) {
   const variant = statusBadgeVariant(status)
   const classes: Record<typeof variant, string> = {
@@ -841,6 +853,7 @@ function VideoTabContent({
   cancelling,
   cancelError,
   onOpenRegenerate,
+  onScriptSaved,
 }: {
   job: ContentJob
   videoStatus: VideoStatusResponse
@@ -851,6 +864,7 @@ function VideoTabContent({
   cancelling: boolean
   cancelError: string | null
   onOpenRegenerate: () => void
+  onScriptSaved: () => void | Promise<void>
 }) {
   const { pipeline, draft, scenes, tracks } = videoStatus
   const draftData = draft?.draft_data
@@ -863,6 +877,64 @@ function VideoTabContent({
   // server-side (redoing visuals mid-flight doesn't make sense) — matches
   // isStoppable's negation exactly, by construction.
   const canRegeneratePostApproval = !isPreApproval && !isStoppable
+
+  // ── Per-scene narration editing (draft_ready only) ──────────────────────
+  // narration_intent.text is the ONLY thing localize_script/synthesize_voice
+  // read (see updateScript.ts's own header) — editing it here is what makes
+  // "editing the script" actually affect generation, unlike the old
+  // draft_data.script summary blob which nothing downstream ever read.
+  const isEditable = pipeline.status === 'draft_ready'
+  const [editedNarration, setEditedNarration] = useState<Record<string, string>>({})
+  const [savingScript, setSavingScript] = useState(false)
+  const [scriptSaveError, setScriptSaveError] = useState<string | null>(null)
+
+  // Re-seeds only when the scene PLAN itself changes (a script regenerate
+  // bumps current_generation) — not on every 6s status poll (page.tsx's own
+  // poll effect refetches videoStatus, and therefore `scenes`, continuously
+  // while draft_ready), which would otherwise stomp in-progress edits.
+  useEffect(() => {
+    setEditedNarration(Object.fromEntries(scenes.map((s) => [s.id, sceneNarrationText(s.narration_intent)])))
+    setScriptSaveError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline.current_generation])
+
+  const dirtySceneIds = scenes
+    .filter((s) => editedNarration[s.id] !== undefined && editedNarration[s.id] !== sceneNarrationText(s.narration_intent))
+    .map((s) => s.id)
+
+  // Mirrors the exact budget updateScript.ts's applyScriptEdits enforces
+  // server-side (same lib/videoNarrationBudget functions) — this is a live
+  // UX guardrail, not a second, possibly-diverging limit; the server call
+  // below is still the authoritative gate.
+  const overBudgetSceneIds = new Set(
+    scenes
+      .filter((s) => narrationWordCount(editedNarration[s.id] ?? '') > maxNarrationWords(s.target_duration_ms))
+      .map((s) => s.id),
+  )
+
+  const handleSaveScript = async () => {
+    if (dirtySceneIds.length === 0 || overBudgetSceneIds.size > 0) return
+    setSavingScript(true)
+    setScriptSaveError(null)
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/video/script`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          scenes: dirtySceneIds.map((id) => ({ id, narration: editedNarration[id] })),
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `Save failed (status ${res.status})`)
+      }
+      await onScriptSaved()
+    } catch (err) {
+      setScriptSaveError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSavingScript(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -930,23 +1002,80 @@ function VideoTabContent({
               </CardContent>
             </Card>
           )}
+          {scriptSaveError && (
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+                <p className="text-xs text-red-700">{scriptSaveError}</p>
+              </div>
+              <button onClick={() => setScriptSaveError(null)} className="shrink-0 text-xs text-red-500 hover:text-red-700">✕</button>
+            </div>
+          )}
           <div className="space-y-2">
-            {scenes.map((scene) => (
-              <Card key={scene.id} className="border-gray-200">
-                <CardContent className="p-4">
-                  <div className="mb-1 flex items-center justify-between">
-                    <p className="text-xs font-semibold text-gray-500">Scene {scene.scene_number}</p>
-                    <p className="text-xs text-gray-400">{Math.round(scene.target_duration_ms / 1000)}s</p>
-                  </div>
-                  <p className="text-sm text-gray-800">{scene.visual_description}</p>
-                  {scene.shot_notes && <p className="mt-1 text-xs text-gray-400">{scene.shot_notes}</p>}
-                </CardContent>
-              </Card>
-            ))}
+            {scenes.map((scene) => {
+              const narrationText = editedNarration[scene.id] ?? sceneNarrationText(scene.narration_intent)
+              const wordCount = narrationWordCount(narrationText)
+              const maxWords = maxNarrationWords(scene.target_duration_ms)
+              const overBudget = overBudgetSceneIds.has(scene.id)
+              const nearBudget = !overBudget && wordCount >= maxWords * 0.85
+              return (
+                <Card key={scene.id} className={`border-gray-200 ${overBudget ? 'border-red-300' : ''}`}>
+                  <CardContent className="space-y-2 p-4">
+                    <div className="mb-1 flex items-center justify-between">
+                      <p className="text-xs font-semibold text-gray-500">Scene {scene.scene_number}</p>
+                      <p className="text-xs text-gray-400">{Math.round(scene.target_duration_ms / 1000)}s</p>
+                    </div>
+                    <p className="text-sm text-gray-800">{scene.visual_description}</p>
+                    {scene.shot_notes && <p className="text-xs text-gray-400">{scene.shot_notes}</p>}
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <label className="block text-xs font-medium text-gray-500">Narration</label>
+                        <p
+                          className={`text-xs ${
+                            overBudget ? 'font-medium text-red-600' : nearBudget ? 'text-amber-600' : 'text-gray-400'
+                          }`}
+                        >
+                          {wordCount}/{maxWords} words
+                        </p>
+                      </div>
+                      <Textarea
+                        value={narrationText}
+                        onChange={(e) => setEditedNarration((prev) => ({ ...prev, [scene.id]: e.target.value }))}
+                        rows={2}
+                        disabled={!isEditable || savingScript}
+                        className={`text-sm ${overBudget ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                      />
+                      {overBudget && (
+                        <p className="mt-1 text-xs text-red-600">
+                          Too long for this scene&apos;s {Math.round(scene.target_duration_ms / 1000)}s — trim to {maxWords} words or fewer.
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
-          <p className="text-xs text-gray-400">
-            Editing isn&apos;t available yet — approve below to lock this script and start generating visuals.
-          </p>
+          {isEditable && (
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveScript}
+                disabled={savingScript || dirtySceneIds.length === 0 || overBudgetSceneIds.size > 0}
+              >
+                {savingScript ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-3.5 w-3.5" />
+                )}
+                Save script
+              </Button>
+              <p className="text-xs text-gray-400">
+                Save your narration edits before approving — scenes lock once generation starts.
+              </p>
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -2488,6 +2617,7 @@ export default function JobDetailPage() {
           cancelling={videoCancelling}
           cancelError={videoCancelError}
           onOpenRegenerate={() => setRegenDialog({ open: true, type: 'video' })}
+          onScriptSaved={loadVideoStatus}
         />
       )
     }
