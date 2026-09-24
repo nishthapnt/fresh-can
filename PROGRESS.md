@@ -1744,3 +1744,19 @@
 
 **⭐ Next steps**
 - Same as above — manual end-to-end verification is still outstanding for the whole script-editing feature, budget included.
+
+---
+
+### 2026-09-24 (cont'd) — Made blog's draft edit persist independently of Approve
+**Investigated first, since blog turned out NOT to have video's problem:** blog has no pre-generation approval gate, and `content_drafts.draft_data` for blog already IS the final artifact (hero/inline images and per-language copy are all generated automatically before a human ever sees it) — there's no decoupled "semantic intent vs. literal text" split like video's `narration_intent`. `BlogTabContent` (`page.tsx`) already had a full editor for every field, wired through `blogEdit` state and `blogEditToDraftData()`.
+
+**The real gap:** no standalone save. `blogEditToDraftData(blogEdit)` was only ever persisted inside `handleContentApprove`, bundled with the Approve action itself (`PATCH /api/jobs/[jobId]/draft` — a route also used by image_post, and with no `is_approved` guard at all). An edit made and abandoned without clicking Approve was silently lost, living only in React state.
+
+**✅ Completed**
+- New `POST /api/jobs/[jobId]/blog/draft` (blog-specific, not the shared generic route — that one is also image_post's save-on-approve path, so its behavior was left untouched to avoid an unrelated regression there). Validates `{ language, draft_data }` via a new pure `validateBlogDraftSaveRequest` (`src/server/pipeline/steps/blog/saveDraft.ts`, unit-tested), then hard-blocks (409) once the draft's `is_approved` is `true` — matching video's `/video/script` gate: an edit after approval would silently diverge from the hero/inline images already generated against the old copy.
+- `BlogTabContent` gained a real "Save" button (next to the existing approve-error banner), with its own saving/error state, disabled when there are no unsaved changes. Dirty-checking compares `blogEditFromDraft` on both sides (not raw `draft_data` JSON) since that round-trip isn't byte-identical to the stored shape (`html_final` is regenerated, some legacy fields drop) — a raw diff would show "dirty" even with zero real edits.
+- `handleContentApprove`'s existing bundled persist-then-approve call is unchanged — Save is just an earlier, optional checkpoint.
+- Tests: 6 new `saveDraft.test.ts` cases. Full suite 459/459, clean `tsc --noEmit`, no new lint errors.
+
+**⭐ Next steps**
+- Manual verification: edit a blog draft, click Save (not Approve), reload/navigate away and back, confirm the edit survived; confirm Save is refused once approved.

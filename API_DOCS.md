@@ -104,6 +104,30 @@ Status: 400 / 404 / 500
 
 ---
 
+### Jobs — Blog
+
+#### `POST /api/jobs/[jobId]/blog/draft`
+**Auth:** Requires session (gated by `src/proxy.ts`)
+**Description:** Saves an edited blog draft independently of Approve. Before this route, an edit only ever persisted bundled inside the Approve action (`PATCH /api/jobs/[jobId]/draft`) — navigating away without approving silently lost it. Only allowed while the draft's `is_approved` is `false`; once approved, edits are rejected (the hero/inline images were already generated against the approved copy).
+
+**Request Body:**
+```json
+{ "language": "EN | FR", "draft_data": { "post_title": "string", "...": "..." } }
+```
+
+**Response (success):**
+```json
+{ "draft": { "id": "uuid", "draft_data": { "...": "..." }, "is_approved": false } }
+```
+
+**Response (error):**
+```json
+{ "error": "This draft is already approved and can no longer be edited" }
+```
+Status: 400 (invalid language/missing draft_data) / 404 (no draft for that language) / 409 (already approved) / 500
+
+---
+
 ### Jobs — Image
 
 #### `POST /api/jobs/[jobId]/image/questions`
@@ -218,3 +242,4 @@ These are fired from the frontend — documented here for reference.
 | 2026-07-17 | Created | POST /api/auth/logout |
 | 2026-09-14 | Created (replaces n8n `image_questions` webhook) | POST /api/jobs/[jobId]/image/questions |
 | 2026-09-24 | Created | POST /api/jobs/[jobId]/video/script |
+| 2026-09-24 | Created | POST /api/jobs/[jobId]/blog/draft |
