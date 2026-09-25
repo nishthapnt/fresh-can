@@ -5,10 +5,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
-import PlatformSelector from './PlatformSelector'
+import PlatformSelector, { PLATFORM_IDS } from './PlatformSelector'
 import StatusBadge from './StatusBadge'
-import type { SocialPost, PlatformType } from '@/types/content'
+import type { SocialPost, PlatformType, PlatformConnectionMap } from '@/types/content'
 import { Loader2, Send, X } from 'lucide-react'
+
+// Drops any stored platform value no longer selectable (e.g. a pre-rename
+// 'twitter' row from before upload-post.com's real identifier, 'x', was
+// discovered) — otherwise it rides along on a retry with no checkbox to
+// remove it, silently failing the same way again.
+const validPlatforms = (platforms: unknown): PlatformType[] =>
+  ((platforms as PlatformType[]) ?? []).filter((p) => PLATFORM_IDS.includes(p))
 
 interface SocialApprovalCardProps {
   socialPost: SocialPost | null
@@ -18,12 +25,14 @@ interface SocialApprovalCardProps {
     hashtags: string[],
     platforms: PlatformType[],
   ) => Promise<void>
+  connectionStatus?: PlatformConnectionMap | null
 }
 
 export default function SocialApprovalCard({
   socialPost,
   contentType,
   onApprove,
+  connectionStatus,
 }: SocialApprovalCardProps) {
   const [caption, setCaption] = useState(socialPost?.caption ?? '')
   const [hashtagInput, setHashtagInput] = useState('')
@@ -31,7 +40,7 @@ export default function SocialApprovalCard({
     socialPost?.hashtags ?? [],
   )
   const [platforms, setPlatforms] = useState<PlatformType[]>(
-    (socialPost?.platforms as PlatformType[]) ?? [],
+    validPlatforms(socialPost?.platforms),
   )
   const [posting, setPosting] = useState(false)
 
@@ -42,7 +51,7 @@ export default function SocialApprovalCard({
   useEffect(() => {
     setCaption(socialPost?.caption ?? '')
     setHashtags(socialPost?.hashtags ?? [])
-    setPlatforms((socialPost?.platforms as PlatformType[]) ?? [])
+    setPlatforms(validPlatforms(socialPost?.platforms))
   }, [socialPost?.id])
 
   const addHashtag = () => {
@@ -75,6 +84,7 @@ export default function SocialApprovalCard({
   }
 
   const isPosted = socialPost?.status === 'posted'
+  const isPartial = socialPost?.status === 'partial'
   const isRetry = socialPost?.status === 'failed'
   // upload-post.com's publish() only ever takes a real image/video file URL
   // (video → /api/upload, everything else → /api/upload_photos with
@@ -164,6 +174,7 @@ export default function SocialApprovalCard({
                 selected={platforms}
                 onChange={setPlatforms}
                 disabled={isPosted}
+                connectionStatus={connectionStatus}
               />
             </div>
 
@@ -171,6 +182,14 @@ export default function SocialApprovalCard({
               <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                 The last attempt failed on every selected platform — see the platform status below for
                 details. Posting again will retry all of them.
+              </div>
+            )}
+
+            {isPartial && (
+              <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                Posted to some platforms but not others — see the platform status below for details.
+                Retrying only resubmits the platforms that failed; the ones that already posted won&apos;t
+                be posted again.
               </div>
             )}
 
@@ -185,7 +204,7 @@ export default function SocialApprovalCard({
                 ) : (
                   <Send className="mr-2 h-4 w-4" />
                 )}
-                {isRetry ? 'Retry Post' : 'Approve & Post'}
+                {isPartial ? 'Retry Failed Platforms' : isRetry ? 'Retry Post' : 'Approve & Post'}
               </Button>
             )}
 

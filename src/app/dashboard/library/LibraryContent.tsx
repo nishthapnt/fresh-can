@@ -22,11 +22,13 @@ import {
   getImageLibrary,
   getBlogLibrary,
   getPostedContent,
+  getSocialConnectionStatus,
 } from '@/services/contentService'
 import type {
   VideoLibraryItem,
   ImageLibraryItem,
   BlogLibraryItem,
+  PlatformConnectionMap,
   ContentType,
   PlatformType,
 } from '@/types/content'
@@ -76,7 +78,7 @@ const CATEGORIES = [
 const PLATFORM_OPTIONS: { id: PlatformType; label: string }[] = [
   { id: 'instagram', label: 'Instagram' },
   { id: 'facebook',  label: 'Facebook'  },
-  { id: 'twitter',   label: 'X / Twitter' },
+  { id: 'x',         label: 'X / Twitter' },
 ]
 
 // ─── PostModal ────────────────────────────────────────────────────────────────
@@ -85,10 +87,23 @@ interface PostTarget {
   job_id: string
   topic: string
   content_type: ContentType
+  language: 'EN' | 'FR'
   media_url: string | null
   media_type: 'video' | 'image' | 'blog'
   prefill_caption?: string
   prefill_hashtags?: string
+}
+
+// Library items' own `.language` (VideoLibraryItem/ImageLibraryItem/
+// BlogLibraryItem) can be '' or 'BOTH' for legacy rows that predate — or,
+// for blog, still fall back to — content_jobs.language rather than their
+// own generated_content.language (see contentService.ts's getBlogLibrary).
+// social_posts.language is EN/FR only (never BOTH — same restriction
+// content_language_tracks already uses), so normalize the same way the
+// dashboard's own language toggles default a BOTH job: FR only if it's
+// exactly FR, EN otherwise.
+function toPostLanguage(language: string): 'EN' | 'FR' {
+  return language === 'FR' ? 'FR' : 'EN'
 }
 
 function PostModal({
@@ -105,6 +120,12 @@ function PostModal({
   const [hashtags, setHashtags]   = useState('')
   const [phase, setPhase]         = useState<'idle' | 'posting' | 'success' | 'error'>('idle')
   const [errorMsg, setErrorMsg]   = useState('')
+  // Fetched on open rather than threaded down from LibraryContent's root —
+  // PostModal is instantiated once per card across three separate
+  // component trees (Video/Image/BlogSection), and only one is ever open
+  // at a time, so a fetch-on-open here is one lightweight GET per modal
+  // open instead of prop-drilling through six components for a shared value.
+  const [connectionStatus, setConnectionStatus] = useState<PlatformConnectionMap | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -113,6 +134,7 @@ function PostModal({
       setPlatforms(['instagram'])
       setPhase('idle')
       setErrorMsg('')
+      getSocialConnectionStatus().then((res) => setConnectionStatus(res.platforms))
     }
   }, [open, target.topic, target.prefill_caption, target.prefill_hashtags])
 
@@ -133,6 +155,7 @@ function PostModal({
         body: JSON.stringify({
           job_id: target.job_id,
           content_type: target.content_type,
+          language: target.language,
           caption,
           hashtags: hashtags.split(/[\s,]+/).filter((h) => h.startsWith('#')),
           platforms,
@@ -213,17 +236,34 @@ function PostModal({
               <div className="flex flex-wrap gap-2">
                 {PLATFORM_OPTIONS.map((p) => {
                   const selected = platforms.includes(p.id)
+                  const status = connectionStatus?.[p.id]
+                  // Not connected at all is a guaranteed failure — disable
+                  // it, same reasoning as PlatformSelector.tsx's own guard.
+                  // A live-but-stale token (reauthRequired) is only a warning.
+                  const notConnected = status !== undefined && !status.connected
                   return (
                     <button
                       key={p.id}
                       onClick={() => togglePlatform(p.id)}
+                      disabled={notConnected}
+                      title={
+                        notConnected
+                          ? 'Not connected on upload-post.com'
+                          : status?.connected && status.reauthRequired
+                            ? 'This account may need reconnecting on upload-post.com'
+                            : undefined
+                      }
                       className={`rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
-                        selected
-                          ? 'border-gray-900 bg-gray-900 text-white'
-                          : 'border-gray-200 bg-white text-gray-600 hover:border-gray-400 hover:bg-gray-50'
+                        notConnected
+                          ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300'
+                          : selected
+                            ? 'border-gray-900 bg-gray-900 text-white'
+                            : 'border-gray-200 bg-white text-gray-600 hover:border-gray-400 hover:bg-gray-50'
                       }`}
                     >
                       {p.label}
+                      {notConnected && <span className="ml-1 text-red-400">·</span>}
+                      {status?.connected && status.reauthRequired && <span className="ml-1 text-amber-500">⚠</span>}
                     </button>
                   )
                 })}
@@ -673,7 +713,7 @@ function VideoCard({
 
       {/* Post modal */}
       <PostModal
-        target={{ job_id: item.job_id, topic: item.topic, content_type: 'video', media_url: item.video_url, media_type: 'video' }}
+        target={{ job_id: item.job_id, topic: item.topic, content_type: 'video', language: toPostLanguage(item.language), media_url: item.video_url, media_type: 'video' }}
         open={postOpen}
         onClose={() => setPostOpen(false)}
       />
@@ -877,6 +917,7 @@ function ImageCard({
       <PostModal
         target={{
           job_id: item.job_id, topic: item.topic, content_type: 'image_post',
+          language: toPostLanguage(item.language),
           media_url: item.image_url, media_type: 'image',
           prefill_caption: item.caption || undefined,
           prefill_hashtags: item.hashtags.length > 0 ? item.hashtags.join(' ') : undefined,
@@ -1286,7 +1327,7 @@ function BlogCard({
 
       {/* Post modal */}
       <PostModal
-        target={{ job_id: item.job_id, topic: title, content_type: 'blog', media_url: validHero ?? item.file_url ?? null, media_type: 'blog' }}
+        target={{ job_id: item.job_id, topic: title, content_type: 'blog', language: toPostLanguage(item.language), media_url: validHero ?? item.file_url ?? null, media_type: 'blog' }}
         open={postOpen}
         onClose={() => setPostOpen(false)}
       />

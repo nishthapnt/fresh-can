@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { UploadPostSocialPublisher } from './socialPublisher'
+import { UploadPostSocialPublisher, getConnectionStatus } from './socialPublisher'
 import { ProviderCallError } from './types'
 
 function mockFetch(response: Partial<Response> & { jsonBody?: unknown; textBody?: string }) {
@@ -235,6 +235,62 @@ describe('UploadPostSocialPublisher (upload-post.com — docs.upload-post.com)',
       const fetchImpl = mockFetch({ ok: false, status: 404, textBody: 'not found' })
       const publisher = new UploadPostSocialPublisher('test-key', 'test-profile', fetchImpl)
       await expect(publisher.poll({ kind: 'request', requestId: 'req-123' })).rejects.toThrow(ProviderCallError)
+    })
+  })
+
+  describe('getConnectionStatus() — CONFIRMED live response shape, 2026-09-25', () => {
+    it('reports connected: true and reauthRequired from a real object entry', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: {
+          success: true,
+          profiles: [
+            {
+              username: 'freshcan',
+              social_accounts: {
+                tiktok: '',
+                instagram: { handle: 'freshcan.official', reauth_required: false },
+                facebook: { handle: 'Fresh-CAN', reauth_required: true },
+              },
+            },
+          ],
+          limit: 5,
+          plan: 'basic',
+        },
+      })
+      const result = await getConnectionStatus('test-key', 'freshcan', fetchImpl)
+      expect(result.instagram).toEqual({ platform: 'instagram', connected: true, reauthRequired: false, handle: 'freshcan.official' })
+      expect(result.facebook).toEqual({ platform: 'facebook', connected: true, reauthRequired: true, handle: 'Fresh-CAN' })
+    })
+
+    it("reports connected: false for a platform whose social_accounts entry is '' (never linked)", async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: { success: true, profiles: [{ username: 'freshcan', social_accounts: { x: '' } }] },
+      })
+      const result = await getConnectionStatus('test-key', 'freshcan', fetchImpl)
+      expect(result.x).toEqual({ platform: 'x', connected: false, reauthRequired: false, handle: undefined })
+    })
+
+    it('treats every known platform as disconnected when the configured profile is not found', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: { success: true, profiles: [{ username: 'some-other-profile', social_accounts: { instagram: { reauth_required: false } } }] },
+      })
+      const result = await getConnectionStatus('test-key', 'freshcan', fetchImpl)
+      expect(result.instagram).toEqual({ platform: 'instagram', connected: false, reauthRequired: false, handle: undefined })
+      expect(result.facebook.connected).toBe(false)
+      expect(result.x.connected).toBe(false)
+    })
+
+    it('throws ProviderCallError on a non-ok HTTP response', async () => {
+      const fetchImpl = mockFetch({ ok: false, status: 401, textBody: 'invalid api key' })
+      await expect(getConnectionStatus('bad-key', 'freshcan', fetchImpl)).rejects.toThrow(ProviderCallError)
+    })
+
+    it('sends the Apikey auth header against the users endpoint', async () => {
+      const { fetchImpl, getUrl, getInit } = capturingFetch()
+      await getConnectionStatus('my-secret-key', 'freshcan', fetchImpl).catch(() => {})
+      expect(getUrl()).toBe('https://api.upload-post.com/api/uploadposts/users')
+      const headers = getInit()!.headers as Record<string, string>
+      expect(headers.Authorization).toBe('Apikey my-secret-key')
     })
   })
 })

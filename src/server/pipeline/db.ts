@@ -1033,6 +1033,7 @@ export interface SocialPostRow {
   id: string
   job_id: string
   content_type: string
+  language: string
   caption: string
   hashtags: string[]
   platforms: string[]
@@ -1060,17 +1061,30 @@ export interface SocialPlatformLogRow {
 
 /**
  * social_posts rows the dashboard has approved (src/app/api/social/post's
- * upsertSocialPost sets status='approved') but this worker hasn't submitted
- * to upload-post.com yet. "Not yet submitted" is read off the ABSENCE of any
- * social_platform_logs row for that post, rather than a status flag on
- * social_posts itself — the old n8n flow never created platform-log rows
- * until its callback fired, so there's no existing column to repurpose for
- * this, and adding one would duplicate what "no child rows yet" already
- * tells you for free.
+ * upsertSocialPost sets status='approved') paired with the specific subset
+ * of their platforms[] that this worker hasn't successfully submitted yet.
+ * "Not yet submitted" is read off the ABSENCE of a 'posted' social_platform_logs
+ * row for that (post, platform) — rather than a status flag on social_posts
+ * itself — the old n8n flow never created platform-log rows until its
+ * callback fired, so there's no existing column to repurpose for this, and
+ * adding one would duplicate what the child rows already tell you for free.
+ *
+ * A post whose every platform already has a 'posted' row is left out
+ * entirely. This is what makes a partial retry (upsertSocialPost flipping a
+ * 'partial' post back to 'approved' after clearing only its 'failed' rows —
+ * see contentService.ts) resubmit ONLY the still-pending platforms instead
+ * of re-posting to a platform that already went out live: submitOnePost
+ * below only ever calls publisher.publish() with the `platforms` this
+ * function returns, never post.platforms directly. Safe to key this purely
+ * on "posted somewhere, ever" (no need to also check for a lingering
+ * 'posting' row) because social-publish's function-level concurrency limit
+ * of 1 (src/inngest/functions/social.ts) guarantees any previous run has
+ * fully drained its own poll loop — every log row it created is terminal —
+ * before this function's next run's submit step ever executes.
  */
 export async function getApprovedSocialPostsAwaitingSubmission(
   client: SupabaseClient,
-): Promise<SocialPostRow[]> {
+): Promise<Array<{ post: SocialPostRow; platforms: string[] }>> {
   const { data: posts, error } = await client.from('social_posts').select('*').eq('status', 'approved')
   if (error) throw error
   if (!posts?.length) return []
@@ -1078,23 +1092,40 @@ export async function getApprovedSocialPostsAwaitingSubmission(
   const ids = posts.map((p) => p.id as string)
   const { data: logs, error: logErr } = await client
     .from('social_platform_logs')
-    .select('social_post_id')
+    .select('social_post_id, platform, status')
     .in('social_post_id', ids)
   if (logErr) throw logErr
 
-  const alreadySubmitted = new Set((logs ?? []).map((l) => l.social_post_id as string))
-  return (posts as SocialPostRow[]).filter((p) => !alreadySubmitted.has(p.id))
+  const postedPlatformsByPost = new Map<string, Set<string>>()
+  for (const log of logs ?? []) {
+    if (log.status !== 'posted') continue
+    const postId = log.social_post_id as string
+    const set = postedPlatformsByPost.get(postId) ?? new Set<string>()
+    set.add(log.platform as string)
+    postedPlatformsByPost.set(postId, set)
+  }
+
+  const result: Array<{ post: SocialPostRow; platforms: string[] }> = []
+  for (const post of posts as SocialPostRow[]) {
+    const posted = postedPlatformsByPost.get(post.id)
+    const pending = posted ? post.platforms.filter((p) => !posted.has(p)) : post.platforms
+    if (pending.length > 0) result.push({ post, platforms: pending })
+  }
+  return result
 }
 
 /**
- * Writes one social_platform_logs row per platform from a single
- * publish() call's outcome — one upload-post.com call covers every
- * selected platform at once (its own platform[] array), but this app
- * tracks per-platform status in separate rows (SocialApprovalCard/
- * PROGRESS.md's per-platform posting history), so the fan-out happens
- * here, not on the provider side. providerJobRef is the SAME value across
- * every row from one call — poll() resolves them all together for
- * exactly that reason (see publishPost.ts).
+ * Writes one social_platform_logs row per outcome in a single publish()
+ * call's result. submitOnePlatform (publishPost.ts) now calls publish()
+ * once PER PLATFORM rather than batching a post's whole platforms[] into
+ * one call — a confirmed live bug had upload-post.com reject an entire
+ * multi-platform call over just one invalid platform, failing every
+ * platform in it together — so in practice this is called once per
+ * platform with a single-outcome array, and providerJobRef is that one
+ * platform's own job ref, not shared across a post's other platforms. The
+ * function itself stays general (an outcomes array, not a single outcome)
+ * since nothing about its own contract requires the one-call-per-platform
+ * discipline — that's a caller-side choice, enforced in publishPost.ts.
  */
 export async function insertSocialPlatformLogs(
   client: SupabaseClient,
@@ -1231,13 +1262,15 @@ export async function bumpSocialPlatformLogAttempt(client: SupabaseClient, rowId
 /** The already-generated file this post is publicizing — read fresh from
  *  generated_content rather than trusting a value the dashboard's request
  *  happened to carry, same "worker re-derives its own inputs from durable
- *  state" reasoning fetchJobInputs uses for content_jobs. Picks the most
- *  recent row for this (job, content_type) — social_posts has no language
- *  dimension yet (unlike content_language_tracks/generated_content for
- *  every other purpose, ARCHITECTURE.MD §17.4's proposed widening isn't
- *  applied here), so a BOTH-language job's two generated_content rows are
- *  not separately representable at the social layer yet; this is the same
- *  limitation the old n8n flow had, not a regression introduced here.
+ *  state" reasoning fetchJobInputs uses for content_jobs. Scoped to this
+ *  post's own language (social_posts.language, added alongside social_posts'
+ *  UNIQUE(job_id, content_type, language) — ARCHITECTURE.MD §17.4's proposed
+ *  widening, now applied here) so a BOTH-language job's two generated_content
+ *  rows — one per language, same pattern content_language_tracks already
+ *  uses — are each independently postable instead of one arbitrarily
+ *  shadowing the other. Still orders by created_at desc/limit 1 per
+ *  (job, content_type, language) in case of a re-generation leaving more
+ *  than one row behind.
  *
  * Falls back to `image_url` when `file_url` is null — confirmed live
  * (2026-09-17): pre-migration, n8n-era image_post rows only ever populated
@@ -1252,12 +1285,14 @@ export async function getGeneratedContentFileUrl(
   client: SupabaseClient,
   jobId: string,
   contentType: string,
+  language: string,
 ): Promise<string | null> {
   const { data, error } = await client
     .from('generated_content')
     .select('file_url, image_url')
     .eq('job_id', jobId)
     .eq('content_type', contentType)
+    .eq('language', language)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -1266,12 +1301,11 @@ export async function getGeneratedContentFileUrl(
 }
 
 /** Rolls social_posts.status up from its child platform-log rows once
- *  every one of them has reached a terminal state. SocialStatus has no
- *  'partial' value yet (ARCHITECTURE.MD §17.4 proposes one) — until then,
- *  "at least one platform succeeded" reads as 'posted' overall, matching
- *  what SocialApprovalCard already shows today (a per-platform success
- *  list, not an all-or-nothing banner). Only 'failed' if EVERY platform
- *  failed. */
+ *  every one of them has reached a terminal state: 'posted' if every
+ *  platform succeeded, 'failed' if every platform failed, 'partial' if it's
+ *  a mix — SocialApprovalCard uses 'partial' to keep the retry action
+ *  available (scoped to just the still-failed platforms) instead of
+ *  treating a partial success as fully done. */
 export async function rollupSocialPostStatus(client: SupabaseClient, socialPostId: string): Promise<void> {
   const { data: logs, error } = await client
     .from('social_platform_logs')
@@ -1283,10 +1317,12 @@ export async function rollupSocialPostStatus(client: SupabaseClient, socialPostI
   const allTerminal = logs.every((l) => l.status === 'posted' || l.status === 'failed')
   if (!allTerminal) return
 
-  const anyPosted = logs.some((l) => l.status === 'posted')
+  const allPosted = logs.every((l) => l.status === 'posted')
+  const allFailed = logs.every((l) => l.status === 'failed')
+  const status = allPosted ? 'posted' : allFailed ? 'failed' : 'partial'
   const { error: updateErr } = await client
     .from('social_posts')
-    .update({ status: anyPosted ? 'posted' : 'failed', updated_at: new Date().toISOString() })
+    .update({ status, updated_at: new Date().toISOString() })
     .eq('id', socialPostId)
   if (updateErr) throw updateErr
 }

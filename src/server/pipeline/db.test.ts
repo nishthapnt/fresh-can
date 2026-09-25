@@ -282,13 +282,14 @@ describe.skipIf(!hasCreds)('db.ts (live integration)', () => {
     const { error } = await client.from('generated_content').insert({
       job_id: jobId,
       content_type: 'image_post',
+      language: 'EN',
       status: 'completed',
       file_url: null,
       image_url: 'https://example.com/legacy-image-post.jpg',
     })
     if (error) throw error
 
-    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post')
+    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post', 'EN')
     expect(url).toBe('https://example.com/legacy-image-post.jpg')
   })
 
@@ -297,13 +298,14 @@ describe.skipIf(!hasCreds)('db.ts (live integration)', () => {
     const { error } = await client.from('generated_content').insert({
       job_id: jobId,
       content_type: 'image_post',
+      language: 'EN',
       status: 'completed',
       file_url: 'https://example.com/current-worker-file.jpg',
       image_url: 'https://example.com/also-present.jpg',
     })
     if (error) throw error
 
-    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post')
+    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post', 'EN')
     expect(url).toBe('https://example.com/current-worker-file.jpg')
   })
 
@@ -312,12 +314,37 @@ describe.skipIf(!hasCreds)('db.ts (live integration)', () => {
     const { error } = await client.from('generated_content').insert({
       job_id: jobId,
       content_type: 'image_post',
+      language: 'EN',
       status: 'completed',
     })
     if (error) throw error
 
-    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post')
+    const url = await getGeneratedContentFileUrl(client, jobId, 'image_post', 'EN')
     expect(url).toBeNull()
+  })
+
+  it('getGeneratedContentFileUrl is scoped to the requested language — a BOTH job\'s EN and FR rows are independently postable', async () => {
+    const jobId = await makeJob()
+    const { error } = await client.from('generated_content').insert([
+      {
+        job_id: jobId,
+        content_type: 'image_post',
+        language: 'EN',
+        status: 'completed',
+        file_url: 'https://example.com/en.jpg',
+      },
+      {
+        job_id: jobId,
+        content_type: 'image_post',
+        language: 'FR',
+        status: 'completed',
+        file_url: 'https://example.com/fr.jpg',
+      },
+    ])
+    if (error) throw error
+
+    expect(await getGeneratedContentFileUrl(client, jobId, 'image_post', 'EN')).toBe('https://example.com/en.jpg')
+    expect(await getGeneratedContentFileUrl(client, jobId, 'image_post', 'FR')).toBe('https://example.com/fr.jpg')
   })
 
   describe('markJobDraftReadyIfPending', () => {

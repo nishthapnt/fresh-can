@@ -124,6 +124,7 @@ UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render + social posti
 | `ready` | Green |
 | `failed` | Red |
 | `posted` | Purple |
+| `partial` (social — some platforms posted, some failed) | Amber |
 
 ---
 

@@ -42,6 +42,10 @@ const statusConfig: Record<BadgeStatus, { label: string; className: string }> =
       label: 'Posted',
       className: 'bg-purple-100 text-purple-700 border-purple-200',
     },
+    partial: {
+      label: 'Partial',
+      className: 'bg-amber-100 text-amber-700 border-amber-200',
+    },
   }
 
 interface StatusBadgeProps {

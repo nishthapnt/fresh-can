@@ -13,11 +13,26 @@ export type SocialStatus =
   | 'approved'
   | 'posting'
   | 'posted'
+  | 'partial'
   | 'failed'
 
 export type ContentType = 'image_post' | 'video' | 'blog'
 
-export type PlatformType = 'instagram' | 'facebook' | 'twitter'
+// upload-post.com's own platform[] identifier for X is literally 'x', not
+// 'twitter' — confirmed both by their photo-upload SDK example and by a
+// live "Invalid platforms for photo upload: ['twitter']" rejection from a
+// real post attempt.
+export type PlatformType = 'instagram' | 'facebook' | 'x'
+
+// GET /api/social/connection-status's response shape — `platforms` is null
+// when the feature isn't configured (no UPLOAD_POST_PROFILE) or the
+// upload-post.com check itself failed transiently; either way, the UI
+// treats it as "no data available", never as "nothing is connected".
+export type PlatformConnectionMap = Record<PlatformType, { connected: boolean; reauthRequired: boolean; handle?: string }>
+export interface SocialConnectionStatusResponse {
+  configured: boolean
+  platforms: PlatformConnectionMap | null
+}
 
 export type Language = 'EN' | 'FR' | 'BOTH'
 
@@ -96,16 +111,22 @@ export interface GeneratedContent {
   id: string
   job_id: string
   content_type: ContentType
+  // Null only for legacy rows that predate this column (see db.ts's
+  // getGeneratedContentFileUrl) — every current insert path (blog/image/video)
+  // sets it explicitly, including for single-language jobs.
+  language: 'EN' | 'FR' | null
   file_url: string | null
   thumbnail_url: string | null
   output_data: Record<string, unknown> | null
   created_at: string
+  updated_at: string
 }
 
 export interface SocialPost {
   id: string
   job_id: string
   content_type: ContentType
+  language: 'EN' | 'FR'
   caption: string
   hashtags: string[]
   platforms: PlatformType[]

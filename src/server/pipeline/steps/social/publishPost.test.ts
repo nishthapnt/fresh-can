@@ -45,6 +45,7 @@ function makePost(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     id: 'post-1',
     job_id: 'job-1',
     content_type: 'image_post',
+    language: 'EN',
     caption: 'Fresh produce today!',
     hashtags: ['fresh', 'local'],
     platforms: ['instagram', 'facebook'],
@@ -53,6 +54,14 @@ function makePost(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     updated_at: '2026-09-17T00:00:00Z',
     ...overrides,
   }
+}
+
+/** getApprovedSocialPostsAwaitingSubmission now returns { post, platforms }
+ *  pairs, where `platforms` is the pending subset (see db.ts) — defaults to
+ *  the post's full platforms[] (a first-time submission) unless a test
+ *  overrides it to exercise a partial retry. */
+function makePending(post: SocialPostRow, platforms?: string[]): { post: SocialPostRow; platforms: string[] } {
+  return { post, platforms: platforms ?? post.platforms }
 }
 
 function makeLog(overrides: Partial<SocialPlatformLogRow> = {}): SocialPlatformLogRow {
@@ -99,8 +108,8 @@ beforeEach(() => {
 })
 
 describe('runSubmitSocialPosts', () => {
-  it('resolves the media URL, publishes, and writes one posted platform log per platform on a sync-ready outcome', async () => {
-    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePost()])
+  it('resolves the media URL once, then publishes and logs each platform as its OWN independent call', async () => {
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePending(makePost())])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
     const publisher = makeMockPublisher({
       publish: vi.fn(
@@ -113,13 +122,77 @@ describe('runSubmitSocialPosts', () => {
 
     await runSubmitSocialPosts(client, publisher)
 
-    expect(db.getGeneratedContentFileUrl).toHaveBeenCalledWith(client, 'job-1', 'image_post')
-    expect(publisher.publish).toHaveBeenCalledWith({
+    // Media URL is resolved once for the post, not once per platform.
+    expect(db.getGeneratedContentFileUrl).toHaveBeenCalledTimes(1)
+    expect(db.getGeneratedContentFileUrl).toHaveBeenCalledWith(client, 'job-1', 'image_post', 'EN')
+
+    // One publish() call PER PLATFORM — never a single batched call covering
+    // both, which is the whole point of this fix (see publishPost.ts's
+    // submitOnePlatform header).
+    expect(publisher.publish).toHaveBeenCalledTimes(2)
+    expect(publisher.publish).toHaveBeenNthCalledWith(1, {
       contentType: 'image_post',
-      platforms: ['instagram', 'facebook'],
+      platforms: ['instagram'],
       caption: 'Fresh produce today!',
       hashtags: ['fresh', 'local'],
       mediaUrl: 'https://example.com/photo.png',
+    })
+    expect(publisher.publish).toHaveBeenNthCalledWith(2, {
+      contentType: 'image_post',
+      platforms: ['facebook'],
+      caption: 'Fresh produce today!',
+      hashtags: ['fresh', 'local'],
+      mediaUrl: 'https://example.com/photo.png',
+    })
+
+    // One insertSocialPlatformLogs call PER PLATFORM too — never one call
+    // with both outcomes bundled together.
+    expect(db.insertSocialPlatformLogs).toHaveBeenCalledTimes(2)
+    expect(db.insertSocialPlatformLogs).toHaveBeenNthCalledWith(1, client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'instagram', status: 'posted', postUrl: 'https://x.com/instagram', errorMessage: undefined }],
+    })
+    expect(db.insertSocialPlatformLogs).toHaveBeenNthCalledWith(2, client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'facebook', status: 'posted', postUrl: 'https://x.com/facebook', errorMessage: undefined }],
+    })
+    expect(db.rollupSocialPostStatus).toHaveBeenCalledWith(client, 'post-1')
+  })
+
+  it('one platform failing never affects another platform in the same post — the actual fix for the confirmed-live "one bad platform fails the whole batch" bug', async () => {
+    // Reproduces the real incident: an image_post submitted to
+    // ['instagram', 'facebook'] where upload-post.com would have rejected
+    // a BATCHED call over facebook alone being invalid, wrongly failing
+    // instagram too. With one publish() call per platform, instagram's
+    // call never even knows facebook's failed.
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePending(makePost())])
+    vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
+    const publisher = makeMockPublisher({
+      publish: vi.fn(async (input: SocialPublishInput): Promise<SocialPublishOutcome> => {
+        if (input.platforms[0] === 'facebook') {
+          throw new Error("upload-post call failed (status 400): Invalid platforms for photo upload: ['facebook']")
+        }
+        return {
+          status: 'ready',
+          perPlatform: input.platforms.map((platform) => ({ platform, success: true, url: `https://x.com/${platform}` })),
+        }
+      }),
+    })
+
+    await runSubmitSocialPosts(client, publisher)
+
+    expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'instagram', status: 'posted', postUrl: 'https://x.com/instagram', errorMessage: undefined }],
     })
     expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
       socialPostId: 'post-1',
@@ -127,15 +200,23 @@ describe('runSubmitSocialPosts', () => {
       contentType: 'image_post',
       providerJobRef: null,
       outcomes: [
-        { platform: 'instagram', status: 'posted', postUrl: 'https://x.com/instagram', errorMessage: undefined },
-        { platform: 'facebook', status: 'posted', postUrl: 'https://x.com/facebook', errorMessage: undefined },
+        {
+          platform: 'facebook',
+          status: 'failed',
+          errorMessage: "upload-post call failed (status 400): Invalid platforms for photo upload: ['facebook']",
+        },
       ],
     })
+    // rollupSocialPostStatus (from the earlier partial-retry fix) is what
+    // turns this mix into social_posts.status='partial' — composing the
+    // two fixes correctly.
     expect(db.rollupSocialPostStatus).toHaveBeenCalledWith(client, 'post-1')
   })
 
   it('writes posting rows with the encoded provider_job_ref for an async (pending) outcome', async () => {
-    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePost({ platforms: ['instagram'] })])
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
+      makePending(makePost({ platforms: ['instagram'] })),
+    ])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
     const publisher = makeMockPublisher({
       publish: vi.fn(
@@ -155,7 +236,9 @@ describe('runSubmitSocialPosts', () => {
   })
 
   it('encodes a job-kind jobRef distinctly from a request-kind one', async () => {
-    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePost({ platforms: ['instagram'] })])
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
+      makePending(makePost({ platforms: ['instagram'] })),
+    ])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
     const publisher = makeMockPublisher({
       publish: vi.fn(
@@ -172,7 +255,9 @@ describe('runSubmitSocialPosts', () => {
   })
 
   it('never calls publish() when no generated_content.file_url exists, and records a failed row per platform instead', async () => {
-    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePost({ platforms: ['instagram'] })])
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
+      makePending(makePost({ platforms: ['instagram'] })),
+    ])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue(null)
     const publisher = makeMockPublisher()
 
@@ -191,7 +276,9 @@ describe('runSubmitSocialPosts', () => {
   })
 
   it('records a failed row per platform when publish() itself throws, instead of leaving the post stuck at approved', async () => {
-    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([makePost({ platforms: ['instagram', 'facebook'] })])
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
+      makePending(makePost({ platforms: ['instagram', 'facebook'] })),
+    ])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
     const publisher = makeMockPublisher({
       publish: vi.fn(async () => {
@@ -201,32 +288,81 @@ describe('runSubmitSocialPosts', () => {
 
     await runSubmitSocialPosts(client, publisher)
 
+    // Each platform's throw is caught and recorded independently — one
+    // insertSocialPlatformLogs call per platform, not one shared call.
     expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
       socialPostId: 'post-1',
       jobId: 'job-1',
       contentType: 'image_post',
       providerJobRef: null,
-      outcomes: [
-        { platform: 'instagram', status: 'failed', errorMessage: 'simulated upload-post.com outage' },
-        { platform: 'facebook', status: 'failed', errorMessage: 'simulated upload-post.com outage' },
-      ],
+      outcomes: [{ platform: 'instagram', status: 'failed', errorMessage: 'simulated upload-post.com outage' }],
+    })
+    expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'facebook', status: 'failed', errorMessage: 'simulated upload-post.com outage' }],
     })
     expect(db.rollupSocialPostStatus).toHaveBeenCalledWith(client, 'post-1')
   })
 
   it('processes every approved post independently, in a single tick', async () => {
     vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
-      makePost({ id: 'post-1', job_id: 'job-1' }),
-      makePost({ id: 'post-2', job_id: 'job-2' }),
+      makePending(makePost({ id: 'post-1', job_id: 'job-1' })),
+      makePending(makePost({ id: 'post-2', job_id: 'job-2' })),
     ])
     vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
     const publisher = makeMockPublisher()
 
     await runSubmitSocialPosts(client, publisher)
 
-    expect(publisher.publish).toHaveBeenCalledTimes(2)
+    // 2 posts x 2 platforms each (makePost()'s default platforms) = 4 calls.
+    expect(publisher.publish).toHaveBeenCalledTimes(4)
     expect(db.rollupSocialPostStatus).toHaveBeenCalledWith(client, 'post-1')
     expect(db.rollupSocialPostStatus).toHaveBeenCalledWith(client, 'post-2')
+  })
+
+  it('a partial retry only publishes to the pending platforms db.ts hands it, never the full post.platforms', async () => {
+    // post.platforms still lists all three — instagram already succeeded
+    // last attempt, so getApprovedSocialPostsAwaitingSubmission (mocked
+    // here to stand in for its real "exclude already-'posted' platforms"
+    // logic) hands back only the two that still need submitting.
+    vi.mocked(db.getApprovedSocialPostsAwaitingSubmission).mockResolvedValue([
+      makePending(makePost({ platforms: ['instagram', 'facebook', 'x'] }), ['facebook', 'x']),
+    ])
+    vi.mocked(db.getGeneratedContentFileUrl).mockResolvedValue('https://example.com/photo.png')
+    const publisher = makeMockPublisher({
+      publish: vi.fn(
+        async (input: SocialPublishInput): Promise<SocialPublishOutcome> => ({
+          status: 'ready',
+          perPlatform: input.platforms.map((platform) => ({ platform, success: true, url: `https://x.com/${platform}` })),
+        }),
+      ),
+    })
+
+    await runSubmitSocialPosts(client, publisher)
+
+    expect(publisher.publish).toHaveBeenCalledTimes(2)
+    expect(publisher.publish).toHaveBeenCalledWith(expect.objectContaining({ platforms: ['facebook'] }))
+    expect(publisher.publish).toHaveBeenCalledWith(expect.objectContaining({ platforms: ['x'] }))
+    // instagram was never submitted at all — not even its own call.
+    expect(publisher.publish).not.toHaveBeenCalledWith(expect.objectContaining({ platforms: ['instagram'] }))
+
+    expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'facebook', status: 'posted', postUrl: 'https://x.com/facebook', errorMessage: undefined }],
+    })
+    expect(db.insertSocialPlatformLogs).toHaveBeenCalledWith(client, {
+      socialPostId: 'post-1',
+      jobId: 'job-1',
+      contentType: 'image_post',
+      providerJobRef: null,
+      outcomes: [{ platform: 'x', status: 'posted', postUrl: 'https://x.com/x', errorMessage: undefined }],
+    })
   })
 })
 

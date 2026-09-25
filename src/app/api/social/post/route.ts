@@ -19,23 +19,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { job_id, content_type, caption, hashtags, platforms } = body as {
+  const { job_id, content_type, language, caption, hashtags, platforms } = body as {
     job_id: string
     content_type: ContentType
+    language: 'EN' | 'FR'
     caption: string
     hashtags: string[]
     platforms: PlatformType[]
   }
 
-  if (!job_id || !content_type || !caption || !platforms?.length) {
+  if (!job_id || !content_type || !language || !caption || !platforms?.length) {
     return NextResponse.json(
-      { error: 'Missing required fields: job_id, content_type, caption, platforms' },
+      { error: 'Missing required fields: job_id, content_type, language, caption, platforms' },
       { status: 400 },
     )
   }
+  if (language !== 'EN' && language !== 'FR') {
+    return NextResponse.json({ error: "language must be 'EN' or 'FR'" }, { status: 400 })
+  }
 
   try {
-    const post = await upsertSocialPost(job_id, content_type, caption, hashtags ?? [], platforms)
+    const post = await upsertSocialPost(job_id, content_type, language, caption, hashtags ?? [], platforms)
     // The function ignores postId (it sweeps all approved-but-unsubmitted
     // posts, matching runSubmitSocialPosts' own global scope — see
     // src/inngest/functions/social.ts) — included here only for

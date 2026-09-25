@@ -416,7 +416,8 @@ export interface SceneClipScaler {
 /** Matches src/types/content.ts's PlatformType (the app only ever lets a
  *  user pick from these three) — upload-post.com itself supports many more
  *  platforms, but nothing in this codebase ever selects them. */
-export type SocialPlatform = 'instagram' | 'facebook' | 'twitter'
+// 'x', not 'twitter' — see types/content.ts's PlatformType for why.
+export type SocialPlatform = 'instagram' | 'facebook' | 'x'
 
 export interface SocialPublishInput {
   /** 'video' → POST /api/upload; 'image_post'/'blog' → POST /api/upload_photos
@@ -467,5 +468,19 @@ export type SocialPublishPollResult =
 export interface SocialPublisher {
   publish(input: SocialPublishInput): Promise<SocialPublishOutcome>
   poll(jobRef: SocialPublishJobRef): Promise<SocialPublishPollResult>
+}
+
+/** Account-level connection health for one platform on upload-post.com's
+ *  configured profile — NOT tied to a single publish()/poll() call, so it's
+ *  not part of SocialPublisher itself (see socialPublisher.ts's
+ *  getConnectionStatus). `connected: false` means the platform was never
+ *  linked at all (social_accounts[platform] is '' in their API); a
+ *  connected platform can still have `reauthRequired: true` if its OAuth
+ *  token needs refreshing. */
+export interface PlatformConnectionStatus {
+  platform: SocialPlatform
+  connected: boolean
+  reauthRequired: boolean
+  handle?: string
 }
 

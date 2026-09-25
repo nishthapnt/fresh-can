@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import SocialApprovalCard from '@/components/SocialApprovalCard'
 import StatusBadge from '@/components/StatusBadge'
+import LanguageToggle from '@/components/LanguageToggle'
 import TopBar from '@/components/layout/TopBar'
 import { SocialPageSkeleton } from '@/components/skeletons/Skeleton'
 import { supabase } from '@/lib/supabase'
@@ -15,6 +16,7 @@ import {
   getSocialPostsForJob,
   upsertSocialPost,
   getPlatformLogsForPost,
+  getSocialConnectionStatus,
 } from '@/services/contentService'
 import type {
   ContentJob,
@@ -23,6 +25,7 @@ import type {
   SocialPost,
   SocialPlatformLog,
   PlatformType,
+  PlatformConnectionMap,
 } from '@/types/content'
 import {
   AlertCircle,
@@ -104,13 +107,19 @@ export default function SocialPage() {
   const [platformLogs, setPlatformLogs] = useState<Record<string, SocialPlatformLog[]>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Which language's post is shown per content type — mirrors src/app/dashboard/jobs/
+  // [job_id]/page.tsx's own selectedLanguage/getEffectiveLanguage (draft editing),
+  // now that social_posts has the same one-row-per-language shape as generated_content.
+  const [selectedLanguage, setSelectedLanguage] = useState<Map<ContentType, string>>(new Map())
+  const [connectionStatus, setConnectionStatus] = useState<PlatformConnectionMap | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [jobData, gen, posts] = await Promise.all([
+      const [jobData, gen, posts, connection] = await Promise.all([
         getContentJob(job_id),
         getGeneratedContent(job_id),
         getSocialPostsForJob(job_id),
+        getSocialConnectionStatus(),
       ])
       if (!jobData) throw new Error('Job not found')
       if (jobData.status !== 'ready') {
@@ -120,6 +129,7 @@ export default function SocialPage() {
       setJob(jobData)
       setGenerated(gen)
       setSocialPosts(posts)
+      setConnectionStatus(connection.platforms)
       const logs: Record<string, SocialPlatformLog[]> = {}
       await Promise.all(
         posts.map(async (post) => {
@@ -182,14 +192,35 @@ export default function SocialPage() {
     return () => { supabase.removeChannel(channel) }
   }, [job_id])
 
-  const getSocialPostForType = (type: ContentType): SocialPost | null =>
-    socialPosts.find((p) => p.content_type === type) ?? null
+  // Languages that actually have generated content for this content type —
+  // mirrors page.tsx's getAvailableLanguages (there: scanning drafts; here:
+  // scanning generated_content, since that's what's postable). A row's
+  // language can be null only for legacy pre-language-column data (see
+  // types/content.ts's GeneratedContent) — never usable as a selectable tab.
+  const getAvailableLanguages = (type: ContentType): string[] => {
+    const langs = new Set<string>()
+    for (const g of generated) {
+      if (g.content_type === type && g.language) langs.add(g.language)
+    }
+    return [...langs]
+  }
 
-  const getGeneratedForType = (type: ContentType): GeneratedContent | null =>
-    generated.find((g) => g.content_type === type) ?? null
+  const getEffectiveLanguage = (type: ContentType): string => {
+    const chosen = selectedLanguage.get(type)
+    if (chosen) return chosen
+    const jobLang = job?.language ?? 'EN'
+    return jobLang === 'BOTH' ? 'EN' : jobLang
+  }
+
+  const getSocialPostForType = (type: ContentType, language: string): SocialPost | null =>
+    socialPosts.find((p) => p.content_type === type && p.language === language) ?? null
+
+  const getGeneratedForType = (type: ContentType, language: string): GeneratedContent | null =>
+    generated.find((g) => g.content_type === type && g.language === language) ?? null
 
   const handleApprovePost = async (
     contentType: ContentType,
+    language: 'EN' | 'FR',
     caption: string,
     hashtags: string[],
     platforms: PlatformType[],
@@ -206,7 +237,7 @@ export default function SocialPage() {
     // failed or hung, with no way back. The worker is the only thing that
     // writes 'posting' now, and only once it actually has a provider job
     // ref to poll.
-    await upsertSocialPost(job_id, contentType, caption, hashtags, platforms)
+    await upsertSocialPost(job_id, contentType, language, caption, hashtags, platforms)
     await load()
   }
 
@@ -261,7 +292,7 @@ export default function SocialPage() {
           style={{ gridTemplateColumns: `repeat(${contentTypes.length}, 1fr)` }}
         >
           {contentTypes.map((type) => {
-            const post = getSocialPostForType(type)
+            const post = getSocialPostForType(type, getEffectiveLanguage(type))
             return (
               <TabsTrigger key={type} value={type} className="gap-1.5">
                 {typeIcons[type]}
@@ -273,10 +304,17 @@ export default function SocialPage() {
         </TabsList>
 
         {contentTypes.map((type) => {
+          const languages = getAvailableLanguages(type)
+          const language = getEffectiveLanguage(type)
           // Fix #10 — cache lookup once per tab instead of calling getSocialPostForType 3×
-          const socialPost = getSocialPostForType(type)
+          const socialPost = getSocialPostForType(type, language)
           return (
           <TabsContent key={type} value={type} className="mt-4">
+            <LanguageToggle
+              languages={languages}
+              selected={language}
+              onSelect={(lang) => setSelectedLanguage((prev) => new Map(prev).set(type, lang))}
+            />
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Preview */}
               <div className="space-y-3">
@@ -285,7 +323,7 @@ export default function SocialPage() {
                 </h3>
                 <ContentPreview
                   contentType={type}
-                  generated={getGeneratedForType(type)}
+                  generated={getGeneratedForType(type, language)}
                 />
               </div>
 
@@ -295,8 +333,9 @@ export default function SocialPage() {
                   socialPost={socialPost}
                   contentType={type}
                   onApprove={(caption, hashtags, platforms) =>
-                    handleApprovePost(type, caption, hashtags, platforms)
+                    handleApprovePost(type, language as 'EN' | 'FR', caption, hashtags, platforms)
                   }
+                  connectionStatus={connectionStatus}
                 />
 
                 {/* Platform posting logs */}

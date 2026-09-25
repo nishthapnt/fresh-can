@@ -48,41 +48,48 @@ function decodeJobRef(stored: string): SocialPublishJobRef {
   return { kind: 'request', requestId: id }
 }
 
-async function submitOnePost(
+/** Submits ONE platform's publish() call for a post, and records its own
+ *  outcome independently of every other platform's call. This isolation is
+ *  the whole point: upload-post.com validates the entire platform[] array
+ *  of a single call together, so a batched multi-platform call can fail
+ *  EVERY platform in it over just one being invalid/unsupported — confirmed
+ *  live (2026-09-25): a 3-platform image_post call was rejected wholesale
+ *  with "Invalid platforms for photo upload: ['twitter']", marking
+ *  Instagram and Facebook 'failed' too, with that same misattributed error,
+ *  even though neither was the actual problem. Calling publish() once per
+ *  platform means one platform's rejection can never affect another's
+ *  outcome, status, or error message. */
+async function submitOnePlatform(
   client: SupabaseClient,
   publisher: SocialPublisher,
   post: SocialPostRow,
+  platform: SocialPlatform,
+  mediaUrl: string,
 ): Promise<void> {
-  const platforms = post.platforms as SocialPlatform[]
-
   try {
-    const mediaUrl = await getGeneratedContentFileUrl(client, post.job_id, post.content_type)
-    if (!mediaUrl) {
-      throw new Error(
-        `no generated_content.file_url found for job ${post.job_id} / ${post.content_type} — nothing to post`,
-      )
-    }
-
     const outcome = await publisher.publish({
       contentType: post.content_type as 'video' | 'image_post' | 'blog',
-      platforms,
+      platforms: [platform],
       caption: post.caption,
       hashtags: post.hashtags,
       mediaUrl,
     })
 
     if (outcome.status === 'ready') {
+      const result = outcome.perPlatform.find((p) => p.platform === platform)
       await insertSocialPlatformLogs(client, {
         socialPostId: post.id,
         jobId: post.job_id,
         contentType: post.content_type,
         providerJobRef: null,
-        outcomes: outcome.perPlatform.map((p) => ({
-          platform: p.platform,
-          status: p.success ? 'posted' : 'failed',
-          postUrl: p.url,
-          errorMessage: p.error,
-        })),
+        outcomes: [
+          {
+            platform,
+            status: result?.success ? 'posted' : 'failed',
+            postUrl: result?.url,
+            errorMessage: result?.error,
+          },
+        ],
       })
     } else if (outcome.status === 'pending') {
       await insertSocialPlatformLogs(client, {
@@ -90,7 +97,7 @@ async function submitOnePost(
         jobId: post.job_id,
         contentType: post.content_type,
         providerJobRef: encodeJobRef(outcome.jobRef),
-        outcomes: platforms.map((platform) => ({ platform, status: 'posting' })),
+        outcomes: [{ platform, status: 'posting' }],
       })
     } else {
       // 'failed' — UploadPostSocialPublisher.publish() never actually
@@ -103,40 +110,78 @@ async function submitOnePost(
         jobId: post.job_id,
         contentType: post.content_type,
         providerJobRef: null,
-        outcomes: platforms.map((platform) => ({ platform, status: 'failed', errorMessage: outcome.detail })),
+        outcomes: [{ platform, status: 'failed', errorMessage: outcome.detail }],
       })
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`[worker] social post ${post.id} submit failed:`, message)
-    // No social_platform_logs rows exist yet for this post (that's why it
-    // matched getApprovedSocialPostsAwaitingSubmission in the first place)
-    // — write one failed row per selected platform directly, rather than
-    // leaving the post silently stuck at 'approved' forever, which is the
-    // exact class of bug this migration replaces.
+    console.error(`[worker] social post ${post.id} platform ${platform} submit failed:`, message)
+    // No social_platform_logs row exists yet for this (post, platform) —
+    // write a failed row directly, rather than leaving it silently stuck
+    // at 'approved' forever, which is the exact class of bug this
+    // migration replaces. Caught here, not in submitOnePost, so this
+    // platform's failure never stops the loop from attempting the rest.
     await insertSocialPlatformLogs(client, {
       socialPostId: post.id,
       jobId: post.job_id,
       contentType: post.content_type,
       providerJobRef: null,
-      outcomes: platforms.map((platform) => ({ platform, status: 'failed', errorMessage: message })),
+      outcomes: [{ platform, status: 'failed', errorMessage: message }],
     }).catch((insertErr) => {
-      console.error(`[worker] social post ${post.id}: failed to record submit failure:`, insertErr)
+      console.error(`[worker] social post ${post.id} platform ${platform}: failed to record submit failure:`, insertErr)
     })
+  }
+}
+
+/** `platformsToSubmit` is the subset of post.platforms that still needs
+ *  submission (no 'posted' log row yet) — see getApprovedSocialPostsAwaitingSubmission's
+ *  own header for why this is safe to trust as-is rather than re-deriving
+ *  it here. Using ONLY this subset (never post.platforms) is what makes a
+ *  partial retry resubmit just the platforms that previously failed,
+ *  instead of re-posting to one that already went out live. */
+async function submitOnePost(
+  client: SupabaseClient,
+  publisher: SocialPublisher,
+  post: SocialPostRow,
+  platformsToSubmit: SocialPlatform[],
+): Promise<void> {
+  const mediaUrl = await getGeneratedContentFileUrl(client, post.job_id, post.content_type, post.language)
+  if (!mediaUrl) {
+    // Not platform-specific — there's nothing to post at all regardless of
+    // platform, so every platform genuinely shares this one failure reason
+    // (unlike a provider-side per-platform rejection), and batching it here
+    // doesn't reintroduce the coupling this fix removes.
+    await insertSocialPlatformLogs(client, {
+      socialPostId: post.id,
+      jobId: post.job_id,
+      contentType: post.content_type,
+      providerJobRef: null,
+      outcomes: platformsToSubmit.map((platform) => ({
+        platform,
+        status: 'failed',
+        errorMessage: `no generated_content.file_url found for job ${post.job_id} / ${post.content_type} — nothing to post`,
+      })),
+    })
+  } else {
+    for (const platform of platformsToSubmit) {
+      await submitOnePlatform(client, publisher, post, platform, mediaUrl)
+    }
   }
 
   await rollupSocialPostStatus(client, post.id)
 }
 
-/** Submits every approved-but-not-yet-submitted social_posts row to
- *  upload-post.com — one call per post (its platforms[] array covers every
- *  selected platform in that single call), fanning the result out into one
- *  social_platform_logs row per platform. Replaces the fire-and-forget
- *  N8N_SOCIAL_WEBHOOK call src/app/api/social/post/route.ts used to make. */
+/** Submits every approved social_posts row's still-pending platforms to
+ *  upload-post.com — one call per post covering whichever of its
+ *  platforms[] haven't already succeeded (a first submission: all of
+ *  them; a partial retry: just the ones that failed last time), fanning
+ *  the result out into one social_platform_logs row per platform.
+ *  Replaces the fire-and-forget N8N_SOCIAL_WEBHOOK call
+ *  src/app/api/social/post/route.ts used to make. */
 export async function runSubmitSocialPosts(client: SupabaseClient, publisher: SocialPublisher): Promise<void> {
-  const posts = await getApprovedSocialPostsAwaitingSubmission(client)
-  for (const post of posts) {
-    await submitOnePost(client, publisher, post)
+  const pending = await getApprovedSocialPostsAwaitingSubmission(client)
+  for (const { post, platforms } of pending) {
+    await submitOnePost(client, publisher, post, platforms as SocialPlatform[])
   }
 }
 

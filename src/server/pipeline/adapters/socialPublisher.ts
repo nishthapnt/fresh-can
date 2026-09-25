@@ -1,5 +1,6 @@
 import {
   ProviderCallError,
+  type PlatformConnectionStatus,
   type SocialPlatform,
   type SocialPlatformOutcome,
   type SocialPublishInput,
@@ -8,6 +9,8 @@ import {
   type SocialPublishPollResult,
   type SocialPublisher,
 } from './types'
+
+const KNOWN_PLATFORMS: SocialPlatform[] = ['instagram', 'facebook', 'x']
 
 type PlatformResult = { success: boolean; url?: string; error?: string }
 
@@ -158,4 +161,58 @@ export class UploadPostSocialPublisher implements SocialPublisher {
 
     return { status: 'pending' }
   }
+}
+
+/** Account-level connection health, not tied to any single publish()/poll()
+ *  call — reads upload-post.com's own view of which platforms are actually
+ *  linked to the configured profile, and whether any need re-authorizing.
+ *  A standalone function (not a SocialPublisher method) for that reason,
+ *  same as encodeJobRef/decodeJobRef sitting next to submitOnePost in
+ *  publishPost.ts rather than on the interface.
+ *
+ * CONFIRMED live 2026-09-25 (same session that found and fixed a stale
+ * UPLOAD_POST_PROFILE value): GET /api/uploadposts/users returns
+ * `{ success, profiles: [{ username, social_accounts: {...} }], limit, plan }`.
+ * A platform key in `social_accounts` is either `''` (never connected) or an
+ * object with `reauth_required` (connected; may still need re-auth). Only
+ * `instagram`/`facebook`/`x` are read — the only platforms this app ever
+ * lets a user select (SocialPlatform) — even though the account can have
+ * more (their API also showed linkedin/youtube/tiktok entries here). */
+export async function getConnectionStatus(
+  apiKey: string,
+  profile: string,
+  fetchImpl: typeof fetch = fetch,
+  baseUrl: string = 'https://api.upload-post.com',
+): Promise<Record<SocialPlatform, PlatformConnectionStatus>> {
+  const res = await fetchImpl(`${baseUrl}/api/uploadposts/users`, {
+    headers: { Authorization: `Apikey ${apiKey}` },
+  })
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new ProviderCallError('upload-post', res.status, detail)
+  }
+
+  const data = (await res.json()) as {
+    profiles?: Array<{
+      username: string
+      social_accounts?: Record<string, '' | { handle?: string; reauth_required?: boolean } | undefined>
+    }>
+  }
+
+  const matched = data.profiles?.find((p) => p.username === profile)
+  const socialAccounts = matched?.social_accounts ?? {}
+
+  const result = {} as Record<SocialPlatform, PlatformConnectionStatus>
+  for (const platform of KNOWN_PLATFORMS) {
+    const entry = socialAccounts[platform]
+    const connected = typeof entry === 'object' && entry !== null
+    result[platform] = {
+      platform,
+      connected,
+      reauthRequired: connected && entry.reauth_required === true,
+      handle: connected ? entry.handle : undefined,
+    }
+  }
+  return result
 }

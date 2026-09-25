@@ -16,6 +16,7 @@ import type {
   ImageLibraryItem,
   BlogLibraryItem,
   AspectRatio,
+  SocialConnectionStatusResponse,
 } from '@/types/content'
 
 // ─── Content Jobs ─────────────────────────────────────────────────────────────
@@ -358,6 +359,7 @@ export async function getSocialPostsForJob(
 export async function upsertSocialPost(
   jobId: string,
   contentType: ContentType,
+  language: 'EN' | 'FR',
   caption: string,
   hashtags: string[],
   platforms: PlatformType[],
@@ -370,6 +372,7 @@ export async function upsertSocialPost(
     .select('id, status')
     .eq('job_id', jobId)
     .eq('content_type', contentType)
+    .eq('language', language)
     .maybeSingle()
 
   const { data, error } = await supabase
@@ -378,35 +381,42 @@ export async function upsertSocialPost(
       {
         job_id: jobId,
         content_type: contentType,
+        language,
         caption,
         hashtags,
         platforms,
         status: 'approved',
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'job_id,content_type' },
+      { onConflict: 'job_id,content_type,language' },
     )
     .select()
     .single()
 
   if (error) throw new Error(error.message)
 
-  // Retrying a previously failed post: db.ts's
-  // getApprovedSocialPostsAwaitingSubmission infers "not yet submitted"
-  // purely from the ABSENCE of any social_platform_logs row for this post —
+  // Retrying a previously failed or partially-failed post: db.ts's
+  // getApprovedSocialPostsAwaitingSubmission infers "still needs submission"
+  // per platform from the ABSENCE of a 'posted' social_platform_logs row —
   // so flipping status back to 'approved' above, on its own, is silently a
-  // permanent no-op if the old 'failed' rows from the last attempt are still
-  // there (confirmed: there was no retry path at all before this). Clearing
-  // them here is what makes clicking "Approve & Post" again on a failed post
-  // actually resubmit it. Gated strictly on the PREVIOUS status being
-  // 'failed' — never on 'posted' (SocialApprovalCard hides this whole action
-  // once posted, so that path should be unreachable anyway, but this never
-  // discards a real success record even if some future caller changes that).
-  if (existing?.status === 'failed') {
+  // permanent no-op for any platform whose 'failed' row from the last
+  // attempt is still there (confirmed: there was no retry path at all
+  // before this). Clearing those rows here is what makes clicking
+  // "Approve & Post"/"Retry" again on a failed or partial post actually
+  // resubmit the platforms that didn't go out. Only 'failed' rows are
+  // deleted — never 'posted' ones — so a partial retry can never lose a
+  // real success record or cause a duplicate live post to a platform that
+  // already succeeded. Gated strictly on the PREVIOUS status being 'failed'
+  // or 'partial' — never on 'posted' (SocialApprovalCard hides this whole
+  // action once every platform posted, so that path should be unreachable
+  // anyway, but this never discards a real success record even if some
+  // future caller changes that).
+  if (existing?.status === 'failed' || existing?.status === 'partial') {
     const { error: delErr } = await supabase
       .from('social_platform_logs')
       .delete()
       .eq('social_post_id', existing.id)
+      .eq('status', 'failed')
     if (delErr) throw new Error(delErr.message)
   }
 
@@ -418,30 +428,23 @@ export async function upsertSocialPost(
 // remaining caller writes it from the frontend or an API route, so there's
 // no updateSocialPostStatus export here anymore.
 
-// ─── Social Platform Logs ─────────────────────────────────────────────────────
-
-export async function upsertPlatformLog(
-  socialPostId: string,
-  platform: PlatformType,
-  status: string,
-  platformPostId?: string,
-  postUrl?: string,
-  errorMessage?: string,
-): Promise<void> {
-  const { error } = await supabase.from('social_platform_logs').upsert(
-    {
-      social_post_id: socialPostId,
-      platform,
-      status,
-      platform_post_id: platformPostId ?? null,
-      post_url: postUrl ?? null,
-      error_message: errorMessage ?? null,
-    },
-    { onConflict: 'social_post_id,platform' },
-  )
-
-  if (error) throw new Error(error.message)
+/** upload-post.com's per-platform connection/reauth state, via
+ *  /api/social/connection-status (server-side, holds the API key) — never
+ *  called directly from the browser. Degrades to "no data" rather than
+ *  throwing on a network error, since a transient failure here shouldn't
+ *  block rendering PlatformSelector; callers already treat `platforms: null`
+ *  as "don't show any warnings," same as the "not configured" case. */
+export async function getSocialConnectionStatus(): Promise<SocialConnectionStatusResponse> {
+  try {
+    const res = await fetch('/api/social/connection-status')
+    if (!res.ok) return { configured: true, platforms: null }
+    return (await res.json()) as SocialConnectionStatusResponse
+  } catch {
+    return { configured: true, platforms: null }
+  }
 }
+
+// ─── Social Platform Logs ─────────────────────────────────────────────────────
 
 export async function getPlatformLogsForPost(
   socialPostId: string,
