@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { withCacheBust } from '@/lib/mediaUrl'
 import type {
   ContentJob,
   ContentDraft,
@@ -157,7 +158,17 @@ export async function getGeneratedContent(
     .eq('job_id', jobId)
 
   if (error) throw new Error(error.message)
-  return (data as GeneratedContent[]) ?? []
+  // Video-only: a render retry/re-render overwrites the SAME storage path
+  // (renderLanguageTrack.ts's `{job_id}/{language}.mp4` convention), so an
+  // unchanged file_url string never re-fetches on its own — see
+  // lib/mediaUrl.ts's own header for the incident this fixes. Scoped to
+  // 'video' only for now; blog/image_post share the same latent risk but
+  // aren't part of this fix.
+  return ((data as GeneratedContent[]) ?? []).map((row) =>
+    row.content_type === 'video' && row.file_url
+      ? { ...row, file_url: withCacheBust(row.file_url, row.updated_at) }
+      : row,
+  )
 }
 
 export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
@@ -169,6 +180,7 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
       file_url,
       output_data,
       created_at,
+      updated_at,
       language,
       content_jobs!inner (
         topic,
@@ -187,7 +199,10 @@ export async function getVideoLibrary(): Promise<VideoLibraryItem[]> {
   return (data ?? []).map((row: any) => ({
     id:           row.id,
     job_id:       row.job_id,
-    video_url:    row.file_url as string,
+    // Cache-busted (lib/mediaUrl.ts) — a render retry/re-render overwrites
+    // this SAME storage path, so an unchanged URL string never re-fetches
+    // on its own in a <video> tag.
+    video_url:    withCacheBust(row.file_url as string, row.updated_at as string | null),
     output_data:  row.output_data ?? null,
     completed_at: row.created_at as string,
     topic:        (row.content_jobs as { topic: string })?.topic ?? 'Untitled',
