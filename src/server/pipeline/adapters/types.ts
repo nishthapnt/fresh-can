@@ -364,8 +364,23 @@ export interface AVMerger {
    *  No `currentDurationSeconds` parameter (removed 2026-09-21) — the clip's
    *  real input length is deliberately never assumed here; see
    *  buildSceneDurationMatchCommand's header for the caption/audio desync
-   *  this fixed. */
-  submitSceneDurationMatch(clipUrl: string, targetDurationSeconds: number): Promise<AVMergeJobRef>
+   *  this fixed.
+   *
+   *  `transition` (2026-09-25) — optional dip-to-black fade in/out applied
+   *  by THIS pass, at the scene's own head/tail, so scene joins in the
+   *  later concat pass aren't instantaneous hard cuts. See
+   *  buildSceneDurationMatchCommand's header for why this lives here
+   *  instead of a crossfade in submitVideoConcat/submitAudioConcat
+   *  (upload-post.com's ';' denylist rules out a single-pass N-ary
+   *  crossfade, and a multi-pass one would double this render's FFmpeg-
+   *  minutes usage). renderLanguageTrack.ts passes fadeInSeconds: 0 for
+   *  the first scene and fadeOutSeconds: 0 for the last — nothing to
+   *  transition from/to at either end of the whole track. */
+  submitSceneDurationMatch(
+    clipUrl: string,
+    targetDurationSeconds: number,
+    transition?: { fadeInSeconds?: number; fadeOutSeconds?: number },
+  ): Promise<AVMergeJobRef>
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }
 

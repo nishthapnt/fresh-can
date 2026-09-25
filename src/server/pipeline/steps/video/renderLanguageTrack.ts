@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AVMerger } from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
-import { buildCaptionAssFile } from '../../adapters/avMerger'
+import { buildCaptionAssFile, SCENE_TRANSITION_FADE_SECONDS } from '../../adapters/avMerger'
 import type { VideoStorageUploader } from '../../adapters/storage'
 import {
   claimTrack,
@@ -277,9 +277,20 @@ export async function runRenderLanguageTrack(
     // the same real, unmodified shared clip. Run in parallel across
     // scenes — independent single-file operations, same reasoning the
     // video/audio concat passes below use for their own two halves.
+    //
+    // Each scene also gets a dip-to-black fade at whichever of its own
+    // head/tail borders an INTERIOR join — never the very first scene's
+    // head or the very last scene's tail (buildMuxCommand's own end-of-
+    // video fade already covers that closing beat) — see
+    // buildSceneDurationMatchCommand's header for why this fade lives in
+    // this per-scene pass rather than as a crossfade in the concat pass
+    // below.
     const matchedScenes = await Promise.all(
-      sceneRenderInputs.map(async (input) => {
-        const jobRef = await avMerger.submitSceneDurationMatch(input.clipUrl, input.audioDurationSeconds)
+      sceneRenderInputs.map(async (input, index) => {
+        const jobRef = await avMerger.submitSceneDurationMatch(input.clipUrl, input.audioDurationSeconds, {
+          fadeInSeconds: index === 0 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
+          fadeOutSeconds: index === sceneRenderInputs.length - 1 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
+        })
         const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match', client, track.id)
         if ('cancelled' in outcome) return { cancelled: true as const }
         if (!('fileBuffer' in outcome)) {
@@ -422,7 +433,19 @@ export async function runRenderLanguageTrack(
     // built and uploaded here (not inside avMerger.ts) for the same
     // reason the mux pass's output is re-hosted at a temp path first: this
     // provider's `files` field takes fetchable URLs, not raw content.
-    const assContent = buildCaptionAssFile(captionRow?.timing_data, aspectRatio)
+    // Cut-point timestamps between consecutive scenes, in the SAME
+    // cumulative timeline transcribeAudio.ts built video_captions.timing_data
+    // against (sceneRenderInputs' own audioDurationSeconds values are exactly
+    // what got persisted into video_scene_audio.duration_ms and summed there
+    // — see that file's own header). Used so a caption cue is never allowed
+    // to straddle a scene join (normalizeCaptionCues's own doc comment).
+    const sceneBoundariesMs: number[] = []
+    let cumulativeMs = 0
+    for (const input of sceneRenderInputs.slice(0, -1)) {
+      cumulativeMs += input.audioDurationSeconds * 1000
+      sceneBoundariesMs.push(cumulativeMs)
+    }
+    const assContent = buildCaptionAssFile(captionRow?.timing_data, aspectRatio, sceneBoundariesMs)
     let finalBuffer = muxOutcome.fileBuffer
     // captionElapsedMs stays null (not 0) when there were no cues, so the
     // success snapshot below can tell "no caption pass ran" apart from "the

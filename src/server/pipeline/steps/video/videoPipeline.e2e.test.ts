@@ -1250,6 +1250,19 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(avMerger.submitMuxCapped).not.toHaveBeenCalled()
     expect(avMerger.submitCaptionBurnCapped).not.toHaveBeenCalled()
 
+    // Dip-to-black transition (2026-09-25): the first scene gets no
+    // fade-in (nothing to transition FROM) and the last scene gets no
+    // fade-out (buildMuxCommand's own end-of-video fade covers that beat)
+    // — with exactly 2 scenes here, scene 0 is "first" and scene 1 is
+    // "last", so each gets exactly one non-zero fade, at the single
+    // interior join between them.
+    expect(avMerger.submitSceneDurationMatch).toHaveBeenCalledTimes(2)
+    const durationMatchCalls = (avMerger.submitSceneDurationMatch as ReturnType<typeof vi.fn>).mock.calls
+    expect(durationMatchCalls[0][2]).toMatchObject({ fadeInSeconds: 0 })
+    expect(durationMatchCalls[0][2].fadeOutSeconds).toBeGreaterThan(0)
+    expect(durationMatchCalls[1][2]).toMatchObject({ fadeOutSeconds: 0 })
+    expect(durationMatchCalls[1][2].fadeInSeconds).toBeGreaterThan(0)
+
     const { data: row } = await client
       .from('generated_content')
       .select('*')

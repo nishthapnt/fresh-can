@@ -256,6 +256,18 @@ describe('buildCaptionAssFile', () => {
     expect(countDialogues(narrow)).toBeGreaterThan(countDialogues(wide))
   })
 
+  it('splits a Dialogue event at a scene boundary instead of letting one cue span two scenes', () => {
+    const words = [
+      { text: 'hello', start: 0, end: 400 },
+      { text: 'world', start: 6200, end: 6580 },
+    ]
+    const withoutBoundary = buildCaptionAssFile(words)!
+    expect(withoutBoundary.split('Dialogue:').length - 1).toBe(1)
+
+    const withBoundary = buildCaptionAssFile(words, '9:16', [6000])!
+    expect(withBoundary.split('Dialogue:').length - 1).toBe(2)
+  })
+
   it('shrinks fontsize (via an inline {\\fsN} override) only for a single word too long to fit on its own line, never for an ordinary short cue', () => {
     const longWord = 'a'.repeat(60) // long enough to exceed even the widest (16:9) safe line width alone
     const long = buildCaptionAssFile([{ text: longWord, start: 0, end: 1000 }], '9:16')!
@@ -348,6 +360,43 @@ describe('normalizeCaptionCues', () => {
     expect(normalizeCaptionCues(null, 1080, 63)).toEqual([])
     expect(normalizeCaptionCues({ not: 'an array' }, 1080, 63)).toEqual([])
   })
+
+  it('forces a break at a scene boundary even when the words would otherwise fit on one line together — regression for a caption phrase continuing verbatim across an unrelated scene cut', () => {
+    const words = [
+      { text: 'hello', start: 0, end: 400 },
+      { text: 'world', start: 6200, end: 6580 }, // after the 6000ms boundary
+    ]
+    // No boundary: both words are short enough to share one cue.
+    const withoutBoundary = normalizeCaptionCues(words, 1080, 63)
+    expect(withoutBoundary).toHaveLength(1)
+
+    // With a scene boundary at 6000ms, they must split into two cues even
+    // though nothing about the width budget forces it.
+    const withBoundary = normalizeCaptionCues(words, 1080, 63, [6000])
+    expect(withBoundary).toHaveLength(2)
+    expect(withBoundary[0].text).toBe('hello')
+    expect(withBoundary[1].text).toBe('world')
+  })
+
+  it('does not force a break for words on the same side of every boundary', () => {
+    const words = [
+      { text: 'hello', start: 0, end: 400 },
+      { text: 'there', start: 400, end: 800 },
+    ]
+    const cues = normalizeCaptionCues(words, 1080, 63, [6000, 12000])
+    expect(cues).toHaveLength(1)
+    expect(cues[0].text).toBe('hello there')
+  })
+
+  it('handles multiple boundaries, splitting one word per scene when each is isolated by a cut', () => {
+    const words = [
+      { text: 'one', start: 0, end: 200 },
+      { text: 'two', start: 6100, end: 6300 },
+      { text: 'three', start: 12100, end: 12400 },
+    ]
+    const cues = normalizeCaptionCues(words, 1080, 63, [6000, 12000])
+    expect(cues.map((c) => c.text)).toEqual(['one', 'two', 'three'])
+  })
 })
 
 describe('buildScaleCommand', () => {
@@ -421,6 +470,45 @@ describe('buildSceneDurationMatchCommand', () => {
   it('never contains a semicolon', () => {
     const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8)
     expect(fullCommand).not.toContain(';')
+  })
+
+  it('applies no fade by default — unchanged behavior for a caller that omits transition', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8)
+    expect(fullCommand).not.toContain('fade=')
+  })
+
+  it('chains a fade-in after tpad, in the same -vf, when fadeInSeconds is given — no new pass, no semicolon', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8, { fadeInSeconds: 0.25 })
+    expect(fullCommand).toContain('tpad=stop_mode=clone:stop_duration=8.00,fade=t=in:st=0:d=0.25')
+    expect(fullCommand).not.toContain(';')
+  })
+
+  it('chains a fade-out timed against the END of the target duration when fadeOutSeconds is given', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8, { fadeOutSeconds: 0.25 })
+    expect(fullCommand).toContain('fade=t=out:st=7.75:d=0.25')
+    expect(fullCommand).not.toContain(';')
+  })
+
+  it('applies both fade-in and fade-out together, comma-chained, when a scene borders two interior joins', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8, {
+      fadeInSeconds: 0.25,
+      fadeOutSeconds: 0.25,
+    })
+    expect(fullCommand).toContain('fade=t=in:st=0:d=0.25,fade=t=out:st=7.75:d=0.25')
+  })
+
+  it('clamps each fade side to at most a quarter of the target duration — a pathologically short scene never fades through most of its own runtime', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 1, {
+      fadeInSeconds: 0.9,
+      fadeOutSeconds: 0.9,
+    })
+    expect(fullCommand).toContain('fade=t=in:st=0:d=0.25')
+    expect(fullCommand).toContain('fade=t=out:st=0.75:d=0.25')
+  })
+
+  it('ignores a negative fade value rather than emitting an invalid filter', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/clip.mp4', 8, { fadeInSeconds: -1 })
+    expect(fullCommand).not.toContain('fade=')
   })
 })
 
@@ -549,6 +637,22 @@ describe('UploadPostAVMerger', () => {
     expect(body.files).toEqual(['https://example.com/clip.mp4'])
     expect(body.full_command).toContain('stop_duration=8.00')
     expect(body.full_command).toContain('-t 8.00')
+  })
+
+  it('submitSceneDurationMatch() threads the transition option through to the built fade filters', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string
+      return { ok: true, status: 202, json: async () => ({ job_id: 'job-transition' }), text: async () => '' }
+    }) as unknown as typeof fetch
+    const merger = new UploadPostAVMerger('secret-key', fetchImpl)
+    await merger.submitSceneDurationMatch('https://example.com/clip.mp4', 8, {
+      fadeInSeconds: 0.25,
+      fadeOutSeconds: 0.25,
+    })
+    const body = JSON.parse(capturedBody!)
+    expect(body.full_command).toContain('fade=t=in:st=0:d=0.25')
+    expect(body.full_command).toContain('fade=t=out:st=7.75:d=0.25')
   })
 
   it('submitVideoConcat() throws ProviderCallError when job_id is missing', async () => {

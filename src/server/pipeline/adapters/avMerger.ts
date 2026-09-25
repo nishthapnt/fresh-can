@@ -9,6 +9,16 @@ import {
   type SceneClipScaler,
 } from './types'
 
+// Dip-to-black-and-back at every INTERIOR scene join (never the video's
+// very first frame or very last frame — the opening stays at full
+// brightness, and the closing is already handled by buildMuxCommand's own
+// end-of-video fade) — see buildSceneDurationMatchCommand's own header for
+// why this lives there instead of as a crossfade in the concat pass.
+// 0.25s per side (~0.5s total dark window spanning a join) is fast enough
+// to read as a deliberate cut, not a slow dissolve, matching this app's
+// fast-paced short-form ad pacing (scenes run ~5-10s each).
+export const SCENE_TRANSITION_FADE_SECONDS = 0.25
+
 interface CaptionCue {
   text: string
   startMs: number
@@ -64,6 +74,16 @@ export function normalizeCaptionCues(
   timingData: unknown,
   frameWidthPx?: number,
   fontSizePx?: number,
+  // Sorted ascending cut-point timestamps (ms) between consecutive scenes
+  // in the combined caption timeline — e.g. [6580, 15750, ...] for a
+  // 3+-scene track. When given, a cue is never allowed to contain words
+  // from two different scenes, even if they'd otherwise fit on one line
+  // together: a caption phrase continuing verbatim across an unrelated
+  // scene cut reads as more jarring than the cut alone (confirmed against
+  // two real renders — see docs/PROMPT_ARCHITECTURE.md's video section).
+  // Independent of SCENE_TRANSITION_FADE_SECONDS's dip-to-black fix —
+  // this helps regardless of which transition style the render uses.
+  sceneBoundariesMs?: number[],
 ): CaptionCue[] {
   if (!Array.isArray(timingData)) return []
   const words = timingData.filter(
@@ -74,10 +94,21 @@ export function normalizeCaptionCues(
 
   const maxLineWidthPx = frameWidthPx ? frameWidthPx * SAFE_WIDTH_FRACTION : undefined
   const fallbackWordsPerLine = 7
+  const boundaries = sceneBoundariesMs ?? []
+  // Which scene (0-indexed) a timestamp falls in, given ascending cut points.
+  const sceneIndexOf = (ms: number): number => {
+    let idx = 0
+    for (const b of boundaries) {
+      if (ms >= b) idx++
+      else break
+    }
+    return idx
+  }
 
   const cues: CaptionCue[] = []
   let chunk: typeof words = []
   let chunkText = ''
+  let chunkSceneIndex = 0
 
   const flush = () => {
     if (chunk.length === 0) return
@@ -92,6 +123,12 @@ export function normalizeCaptionCues(
 
   for (const w of words) {
     const word = String(w.text)
+    const wordSceneIndex = boundaries.length > 0 ? sceneIndexOf(Number(w.start)) : 0
+    if (chunk.length > 0 && wordSceneIndex !== chunkSceneIndex) {
+      flush()
+    }
+    chunkSceneIndex = wordSceneIndex
+
     if (!maxLineWidthPx || !fontSizePx) {
       // No real frame width known — fall back to the old fixed-count
       // behavior rather than guessing at a width budget with nothing to
@@ -427,13 +464,14 @@ export function buildMuxCommandCapped(videoUrl: string, audioUrl: string, totalD
 export function buildCaptionAssFile(
   captionTimingData: unknown,
   aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
+  sceneBoundariesMs?: number[],
 ): string | null {
   const { width: frameWidthPx, height: frameHeightPx } = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
   const baseFontSizePx = Math.round(frameHeightPx * CAPTION_FONTSIZE_RATIO)
   const maxLineWidthPx = frameWidthPx * SAFE_WIDTH_FRACTION
   const marginVPx = Math.round(frameHeightPx * 0.083)
 
-  const cues = normalizeCaptionCues(captionTimingData, frameWidthPx, baseFontSizePx)
+  const cues = normalizeCaptionCues(captionTimingData, frameWidthPx, baseFontSizePx, sceneBoundariesMs)
   if (cues.length === 0) return null
 
   // Per-cue fontsize override via ASS's inline `{\fsN}` tag — same rare
@@ -638,18 +676,48 @@ export function buildScaleCommand(
  * unaffected). One command still handles both directions with no
  * branching, and stays a single input / single linear `-vf` chain — like
  * buildScaleCommand, it structurally can never need a ';'.
+ *
+ * `transition` (2026-09-25) — dip-to-black at scene JOINS, added here
+ * rather than as a crossfade in buildVideoConcatCommand. A real crossfade
+ * (ffmpeg's `xfade`) needs a SEPARATE filter call per pair of clips beyond
+ * the first two, chained with ';' — upload-post.com's API rejects any ';'
+ * in full_command outright (a fixed command-injection denylist, see
+ * AVMerger's own doc comment in types.ts), and running one xfade pass per
+ * transition instead would roughly double this render's already-scarce
+ * upload-post.com FFmpeg-minutes usage (see this repo's own recent quota-
+ * exhaustion incidents). A plain `fade` (single-stream, in/out, defaults
+ * to black) fits this pass's existing single-input/single-`-vf`-chain
+ * shape for free — no new provider round trip, no extra quota, and
+ * renderLanguageTrack.ts's own concat pass right after this one needs no
+ * changes at all. `fadeInSeconds` is 0 for the FIRST scene (nothing to
+ * transition FROM) and `fadeOutSeconds` is 0 for the LAST scene
+ * (buildMuxCommand's own end-of-video fade already covers that beat) —
+ * the caller decides which, this function just applies whatever it's
+ * given. Each side is clamped to at most a quarter of
+ * targetDurationSeconds so a pathologically short scene can never fade
+ * through most of its own runtime.
  */
 export function buildSceneDurationMatchCommand(
   clipUrl: string,
   targetDurationSeconds: number,
+  transition: { fadeInSeconds?: number; fadeOutSeconds?: number } = {},
 ): { files: string[]; fullCommand: string; outputExtension: string } {
+  const maxFade = targetDurationSeconds / 4
+  const fadeIn = Math.max(0, Math.min(transition.fadeInSeconds ?? 0, maxFade))
+  const fadeOut = Math.max(0, Math.min(transition.fadeOutSeconds ?? 0, maxFade))
+
+  let vf = `tpad=stop_mode=clone:stop_duration=${targetDurationSeconds.toFixed(2)}`
+  if (fadeIn > 0) vf += `,fade=t=in:st=0:d=${fadeIn.toFixed(2)}`
+  if (fadeOut > 0) {
+    const fadeOutStart = targetDurationSeconds - fadeOut
+    vf += `,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=${fadeOut.toFixed(2)}`
+  }
+
   // -preset veryfast, not ultrafast (2026-09-23) — same reasoning as
   // buildScaleCommand just above: this is a per-scene, per-language-track
   // pass on one short clip, never the whole-render pass the ~9min queue
   // ceiling was actually measured against.
-  const fullCommand =
-    `ffmpeg -y -i {input} -vf "tpad=stop_mode=clone:stop_duration=${targetDurationSeconds.toFixed(2)}" ` +
-    `-t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf 23 -an {output}`
+  const fullCommand = `ffmpeg -y -i {input} -vf "${vf}" -t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf 23 -an {output}`
   return { files: [clipUrl], fullCommand, outputExtension: 'mp4' }
 }
 
@@ -713,8 +781,12 @@ export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
 
   /** Called from renderLanguageTrack.ts, once per scene, before the video
    *  concat pass — see buildSceneDurationMatchCommand's own header. */
-  async submitSceneDurationMatch(clipUrl: string, targetDurationSeconds: number): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildSceneDurationMatchCommand(clipUrl, targetDurationSeconds))
+  async submitSceneDurationMatch(
+    clipUrl: string,
+    targetDurationSeconds: number,
+    transition?: { fadeInSeconds?: number; fadeOutSeconds?: number },
+  ): Promise<AVMergeJobRef> {
+    return this.submitCommand(buildSceneDurationMatchCommand(clipUrl, targetDurationSeconds, transition))
   }
 
   private async submitCommand(command: {
