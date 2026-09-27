@@ -737,11 +737,18 @@ async function runSceneVideoClipStep(
           attemptNumber,
         })
 
+        // Read here (never previously needed by this step) only so
+        // composeSceneVideoPrompt can gate WORDMARK_LEGIBILITY_CLAUSE on
+        // whether this scene's reference frame actually has a branded unit
+        // in it — same source (scene.narration_intent) runSceneImageStep
+        // already reads for the still-image step, no new DB read.
+        const layer2 = extractSceneLayer2Fields(scene.narration_intent)
         const prompt = composeSceneVideoPrompt({
           visualDescription: scene.visual_description,
           shotNotes: scene.shot_notes,
           isFinalScene,
           look: plan.look,
+          unitPresence: layer2.unit_presence,
         })
 
         console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)

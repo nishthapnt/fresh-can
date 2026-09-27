@@ -14,10 +14,18 @@ import {
 // brightness, and the closing is already handled by buildMuxCommand's own
 // end-of-video fade) — see buildSceneDurationMatchCommand's own header for
 // why this lives there instead of as a crossfade in the concat pass.
-// 0.25s per side (~0.5s total dark window spanning a join) is fast enough
-// to read as a deliberate cut, not a slow dissolve, matching this app's
-// fast-paced short-form ad pacing (scenes run ~5-10s each).
-export const SCENE_TRANSITION_FADE_SECONDS = 0.25
+//
+// Set to 0 (2026-09-26) — a real render (0.25s/side, ~0.5s total dark
+// window per join) was compared side-by-side against earlier hard-cut
+// renders of two other videos and read as a dead-air GAP, not a smooth
+// join: for this app's 6-10s scenes, half a second of solid black four
+// times in one video is more noticeable pause than "deliberate cut." The
+// hard cut it replaced tested as more continuous, not less. Left at 0
+// rather than deleting the mechanism — buildSceneDurationMatchCommand's
+// fade math is already a no-op whenever both fadeIn/fadeOut are 0 (see its
+// own `if (fadeIn > 0)`/`if (fadeOut > 0)` guards), so this one constant is
+// the single place to reintroduce a (shorter) fade later if wanted.
+export const SCENE_TRANSITION_FADE_SECONDS = 0
 
 interface CaptionCue {
   text: string
@@ -626,10 +634,30 @@ export function buildScaleCommand(
   return { files: [videoUrl], fullCommand, outputExtension: 'mp4' }
 }
 
+// Replaces tpad=stop_mode=clone (removed 2026-09-26) — freezing the clip's
+// last frame to cover a shortfall reads as a dead pause once the shortfall
+// is more than a fraction of a second, and a real job (the one that
+// motivated this) needed several SECONDS of hold per scene (its narration
+// ran 53-92% over its own scene budget — see transcribeAudio.ts's
+// OVERSHOOT_HARD_TOLERANCE for the upstream fix that now catches the worst
+// of that at the source). `-stream_loop -1` replays the clip's own real
+// footage from its start as many times as needed instead of freezing on a
+// still frame — continuous real motion the whole time — and needs no
+// foreknowledge of the input's actual duration (unlike a `setpts` speed
+// change, which would need to know that to compute a stretch factor):
+// looping past the target and trimming with the unchanged `-t` below just
+// degrades to "one loop, cut early" when the clip is already long enough,
+// exactly like today's trim-only behavior for that direction. Trade-off:
+// a clip whose motion doesn't loop seamlessly (e.g. a continuous camera
+// push-in) will show one visible restart-of-motion cut instead of a
+// freeze — a smaller, more honest artifact than several seconds of dead
+// air, and the upstream narration fix above means this should now rarely
+// need to cover more than a small fraction of a clip's own length anyway.
 /**
  * Matches ONE scene's shared video clip to THIS language track's real
- * narration length — holding the last frame if the clip is shorter than
- * the audio, trimming if it's longer. This is the render-time
+ * narration length — looping the clip's own footage from the start if it's
+ * shorter than the audio (never freezing a still frame — see the note
+ * above), trimming if it's longer. This is the render-time
  * reconciliation ARCHITECTURE.MD §4.2 always called for ("the render step
  * handles per-scene sync by holding the last frame... or trimming
  * trailing silence...") but that was never actually implemented — video
@@ -696,28 +724,102 @@ export function buildScaleCommand(
  * given. Each side is clamped to at most a quarter of
  * targetDurationSeconds so a pathologically short scene can never fade
  * through most of its own runtime.
+ *
+ * `gapSeconds` (2026-09-26) — the caller's own probe (renderLanguageTrack.ts,
+ * via lib/mp4Duration.ts's local MP4-box duration read — no ffprobe binary,
+ * no new provider call) of how far the REAL clip falls short of
+ * targetDurationSeconds; null when that probe couldn't determine it. Three
+ * cases, deliberately narrow:
+ *   - gapSeconds <= 0 (clip already covers the target): plain trim, no loop,
+ *     no pad — unchanged from what a long-enough clip always got.
+ *   - 0 < gapSeconds <= MAX_GAP_SECONDS (a small shortfall — the ordinary
+ *     Seedance duration-adherence slop sceneClipDuration.ts's own header
+ *     already documents, not a narration problem: that's corrected upstream
+ *     in transcribeAudio.ts before this target is ever computed): holds the
+ *     clip's own final frame for exactly gapSeconds via `tpad`, but ANIMATES
+ *     it with a barely-noticeable continuous zoom (ZOOM_PEAK_FACTOR) instead
+ *     of leaving it a bare freeze — `tpad` is still the only zero-probe-cost
+ *     way to guarantee reaching target exactly, the difference from the old
+ *     freeze-frame mechanism is that this hold is never left unanimated.
+ *   - gapSeconds is null OR > MAX_GAP_SECONDS (unknown, or a shortfall too
+ *     large to paper over with a subtle zoom without it reading as an
+ *     obviously artificial stretch): falls back to the existing
+ *     `-stream_loop -1` behavior, unchanged — never KIE/Seedance
+ *     regeneration, never a longer zoom.
+ * `aspectRatio` only matters for the zoom case — it's the fixed pixel size
+ * (ASPECT_RATIO_RESOLUTIONS) every clip was already downscaled to
+ * (buildScaleCommand) before ever reaching this pass, needed so the
+ * zoom+crop chain can hold that same fixed frame size throughout (crop's own
+ * `iw`/`ih` refer to ITS input, i.e. the just-scaled-up frame, not the
+ * original — a literal target size is the only way to keep output
+ * resolution constant across a per-frame-varying zoom).
  */
+const MAX_GAP_SECONDS = 1
+// 104% peak — within the requested "approximately 100% -> 103-105%" range,
+// picked as a middle value rather than either edge.
+const ZOOM_PEAK_FACTOR = 1.04
+
 export function buildSceneDurationMatchCommand(
   clipUrl: string,
   targetDurationSeconds: number,
   transition: { fadeInSeconds?: number; fadeOutSeconds?: number } = {},
+  gapSeconds: number | null = null,
+  aspectRatio: '9:16' | '1:1' | '16:9' = '9:16',
 ): { files: string[]; fullCommand: string; outputExtension: string } {
   const maxFade = targetDurationSeconds / 4
   const fadeIn = Math.max(0, Math.min(transition.fadeInSeconds ?? 0, maxFade))
   const fadeOut = Math.max(0, Math.min(transition.fadeOutSeconds ?? 0, maxFade))
 
-  let vf = `tpad=stop_mode=clone:stop_duration=${targetDurationSeconds.toFixed(2)}`
-  if (fadeIn > 0) vf += `,fade=t=in:st=0:d=${fadeIn.toFixed(2)}`
+  const isSmallGap = gapSeconds !== null && gapSeconds > 0 && gapSeconds <= MAX_GAP_SECONDS
+  const useLoopFallback = !isSmallGap && (gapSeconds === null || gapSeconds > MAX_GAP_SECONDS)
+
+  let vf = ''
+  if (isSmallGap) {
+    // zoomStart is exactly where the real clip's own last real frame ends
+    // (target - gapSeconds) — known precisely here because gapSeconds came
+    // from a real probe of this same clip, unlike the old stream_loop/tpad
+    // fallbacks, which were deliberately designed to never need that value.
+    // `clip(x,0,1)` is ffmpeg's own eval built-in (three-arg clamp); the
+    // ramp progress is 0 before the hold starts and 1 once it's fully
+    // eased in, linearly in between. Commas inside it are escaped (`\,`)
+    // since a bare `,` would otherwise read as the next filter in this -vf
+    // chain. `eval=frame` re-evaluates the (otherwise `t`-dependent) scale
+    // expression every frame — without it `scale` only evaluates once, at
+    // t=0, and the "zoom" would never move.
+    const zoomStart = (targetDurationSeconds - gapSeconds!).toFixed(2)
+    const rampProgress = `clip((t-${zoomStart})/${gapSeconds!.toFixed(2)}\\,0\\,1)`
+    const zoomFactor = `(1+${(ZOOM_PEAK_FACTOR - 1).toFixed(2)}*${rampProgress})`
+    const { width, height } = ASPECT_RATIO_RESOLUTIONS[aspectRatio]
+    vf = `tpad=stop_mode=clone:stop_duration=${gapSeconds!.toFixed(2)},scale=iw*${zoomFactor}:ih*${zoomFactor}:eval=frame,crop=${width}:${height}`
+  }
+  if (fadeIn > 0) vf += `${vf ? ',' : ''}fade=t=in:st=0:d=${fadeIn.toFixed(2)}`
   if (fadeOut > 0) {
     const fadeOutStart = targetDurationSeconds - fadeOut
-    vf += `,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=${fadeOut.toFixed(2)}`
+    vf += `${vf ? ',' : ''}fade=t=out:st=${fadeOutStart.toFixed(2)}:d=${fadeOut.toFixed(2)}`
   }
 
-  // -preset veryfast, not ultrafast (2026-09-23) — same reasoning as
-  // buildScaleCommand just above: this is a per-scene, per-language-track
-  // pass on one short clip, never the whole-render pass the ~9min queue
-  // ceiling was actually measured against.
-  const fullCommand = `ffmpeg -y -i {input} -vf "${vf}" -t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf 23 -an {output}`
+  // -stream_loop -1 (an INPUT option, before -i, not a `-vf` filter) loops
+  // the clip indefinitely if it's shorter than -t's cutoff — real motion
+  // replaying from the clip's own start — instead of tpad's still-frame
+  // hold. Only used for the "unknown or large gap" fallback above; the
+  // small-gap zoom case above needs no looping at all (tpad alone reaches
+  // target exactly), and an already-long-enough clip (gapSeconds <= 0)
+  // needs neither. `-t` (unchanged either way) is still what actually caps
+  // the output at targetDurationSeconds, and still trims a clip that was
+  // already long enough down to size, exactly as before. -preset veryfast,
+  // not ultrafast (2026-09-23) — same reasoning as buildScaleCommand just
+  // above: this is a per-scene, per-language-track pass on one short clip,
+  // never the whole-render pass the ~9min queue ceiling was actually
+  // measured against.
+  // NOT YET CONFIRMED live: that upload-post.com's command-injection
+  // denylist (see buildCaptionBurnCommand's own header) allows `-stream_loop`
+  // or this zoom chain's function calls/escaped commas — no semicolon and no
+  // shell metacharacter either way, same shape as every other flag this file
+  // already sends successfully, but neither has itself been sent to that
+  // API yet.
+  const inputFlags = useLoopFallback ? '-stream_loop -1 ' : ''
+  const vfArg = vf ? ` -vf "${vf}"` : ''
+  const fullCommand = `ffmpeg -y ${inputFlags}-i {input}${vfArg} -t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf 23 -an {output}`
   return { files: [clipUrl], fullCommand, outputExtension: 'mp4' }
 }
 
@@ -785,8 +887,12 @@ export class UploadPostAVMerger implements AVMerger, SceneClipScaler {
     clipUrl: string,
     targetDurationSeconds: number,
     transition?: { fadeInSeconds?: number; fadeOutSeconds?: number },
+    gapSeconds?: number | null,
+    aspectRatio?: '9:16' | '1:1' | '16:9',
   ): Promise<AVMergeJobRef> {
-    return this.submitCommand(buildSceneDurationMatchCommand(clipUrl, targetDurationSeconds, transition))
+    return this.submitCommand(
+      buildSceneDurationMatchCommand(clipUrl, targetDurationSeconds, transition, gapSeconds, aspectRatio),
+    )
   }
 
   private async submitCommand(command: {

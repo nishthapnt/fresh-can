@@ -1078,6 +1078,95 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(audioRowsAfter!.every((a) => a.duration_ms === 5000)).toBe(true)
   })
 
+  // Regression for a real job (2026-09-25/26): a 7-9s scene budget's real
+  // ElevenLabs+AssemblyAI-measured narration landed 53-92% over its own
+  // target (target 38s total across 5 scenes measured at 62.65s total) —
+  // traced to one scene's voice speaking meaningfully slower than the
+  // pipeline's usual pace, not a word-count problem (that job's word counts
+  // were already near budget). transcribeAudio.ts's runTranscribeAudio now
+  // takes an optional `correction` dependency bundle that reacts to THIS
+  // scene's own just-measured real duration — self-calibrated, never a
+  // fleet-wide or per-voice guess, so it behaves the same regardless of
+  // which dashboard-selected ElevenLabs voice produced the audio.
+  it('M3: a scene whose real measured narration badly overshoots its own budget gets corrected via one shortened re-synthesis, instead of silently inflating the track total', async () => {
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+    const { data: tracks } = await client.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id)
+    const track = tracks![0] as TrackRow
+
+    await runLocalizeScript(client, track, approved.id, scriptGen)
+    const { data: afterLocalize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+
+    // SCRIPT_OUTPUT's two scenes both budget target_duration_seconds: 10 —
+    // localizeAwareScriptGenerator writes "English text for scene N" (5
+    // words) for each. Scene 1's ORIGINAL transcription below reports a
+    // real duration of 17s (1.7x over budget, same ballpark as the real
+    // incident's worst scenes) to trigger the correction; scene 1's RETRY
+    // (after a shortened re-synthesis) reports 10s (fits); scene 2's
+    // ORIGINAL reports 9s (under the 1.35x hard tolerance — no correction
+    // needed, confirming the fix doesn't touch a scene that's already fine).
+    const voice = makeMockVoiceSynthesizer()
+    const uploader = makeFakeVideoUploader()
+    await runSynthesizeVoice(client, afterLocalize as TrackRow, approved.id, jobId, voice, uploader)
+    expect(voice.synthesize).toHaveBeenCalledTimes(2) // one per scene, before any correction
+
+    const { data: afterSynthesize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+
+    let submitCount = 0
+    const submit = vi.fn(async () => ({ providerRef: `transcript-${++submitCount}` }))
+    const poll = vi.fn(async (jobRef: { providerRef: string }): Promise<TranscriptionPollResult> => {
+      if (jobRef.providerRef === 'transcript-1') {
+        // Scene 1, original — 16700 + 300ms trailing-silence buffer = 17000ms.
+        return { status: 'ready', timingData: [{ text: 'word', start: 0, end: 16_700 }], text: 'word' }
+      }
+      if (jobRef.providerRef === 'transcript-2') {
+        // Scene 1, correction retry (shortened text) — fits its 10s budget.
+        return { status: 'ready', timingData: [{ text: 'word', start: 0, end: 9_700 }], text: 'word' }
+      }
+      // Scene 2, original — under tolerance, no correction expected.
+      return { status: 'ready', timingData: [{ text: 'word', start: 0, end: 8_700 }], text: 'word' }
+    })
+    const transcription = { submit, poll } satisfies TranscriptionService
+
+    await runTranscribeAudio(client, afterSynthesize as TrackRow, approved.id, transcription, undefined, {
+      voiceSynthesizer: voice,
+      uploader,
+      jobId,
+    })
+
+    expect(submit).toHaveBeenCalledTimes(3) // scene 1 original + scene 1 retry + scene 2 original
+    expect(voice.synthesize).toHaveBeenCalledTimes(3) // +1 correction retry for scene 1 only
+
+    const { data: finalTrack } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+    expect(finalTrack.status).toBe('awaiting_shared')
+
+    const { data: scenes } = await client
+      .from('video_scenes')
+      .select('*')
+      .eq('content_pipeline_id', approved.id)
+      .order('scene_number', { ascending: true })
+    const scene1Id = scenes!.find((s) => s.scene_number === 1)!.id
+    const { data: audioRows } = await client
+      .from('video_scene_audio')
+      .select('*')
+      .eq('content_language_track_id', track.id)
+    const scene1Audio = audioRows!.find((a) => a.video_scene_id === scene1Id)!
+    // Scene 1's narration_text was replaced by the shortened retry — no
+    // longer the original "English text for scene 1".
+    expect(scene1Audio.narration_text).not.toBe('English text for scene 1')
+    expect(audioRows!.some((a) => a.narration_text === 'English text for scene 2')).toBe(true)
+
+    const totalRealDurationMs = audioRows!.reduce((sum, a) => sum + (a.duration_ms ?? 0), 0)
+    // Uncorrected, this would have been 17000 + 9000 = 26000ms against a
+    // 20000ms (2 x 10s) budget. Corrected, scene 1 lands near its own 10s
+    // budget instead — total should be close to budget, not 1.3x over it.
+    expect(totalRealDurationMs).toBeLessThan(20_000 * 1.15)
+    expect(scene1Audio?.duration_ms).toBeLessThan(17_000)
+  })
+
   it('M3: one language failing (ElevenLabs down) never blocks or corrupts the other', async () => {
     const { pipeline } = await makeJobAndPipeline('BOTH')
     const scriptGen = makeLocalizeAwareScriptGenerator()
@@ -1250,18 +1339,16 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     expect(avMerger.submitMuxCapped).not.toHaveBeenCalled()
     expect(avMerger.submitCaptionBurnCapped).not.toHaveBeenCalled()
 
-    // Dip-to-black transition (2026-09-25): the first scene gets no
-    // fade-in (nothing to transition FROM) and the last scene gets no
-    // fade-out (buildMuxCommand's own end-of-video fade covers that beat)
-    // — with exactly 2 scenes here, scene 0 is "first" and scene 1 is
-    // "last", so each gets exactly one non-zero fade, at the single
-    // interior join between them.
+    // Dip-to-black transition — SCENE_TRANSITION_FADE_SECONDS is 0
+    // (avMerger.ts, 2026-09-26: a real render's fade-to-black read as a
+    // dead-air gap, not a smooth join, compared against hard-cut renders
+    // that tested as more continuous) — every scene still gets a
+    // fadeIn/fadeOut value passed (0 for interior joins too, not just the
+    // first/last scene), same call shape as when the constant was nonzero.
     expect(avMerger.submitSceneDurationMatch).toHaveBeenCalledTimes(2)
     const durationMatchCalls = (avMerger.submitSceneDurationMatch as ReturnType<typeof vi.fn>).mock.calls
-    expect(durationMatchCalls[0][2]).toMatchObject({ fadeInSeconds: 0 })
-    expect(durationMatchCalls[0][2].fadeOutSeconds).toBeGreaterThan(0)
-    expect(durationMatchCalls[1][2]).toMatchObject({ fadeOutSeconds: 0 })
-    expect(durationMatchCalls[1][2].fadeInSeconds).toBeGreaterThan(0)
+    expect(durationMatchCalls[0][2]).toMatchObject({ fadeInSeconds: 0, fadeOutSeconds: 0 })
+    expect(durationMatchCalls[1][2]).toMatchObject({ fadeInSeconds: 0, fadeOutSeconds: 0 })
 
     const { data: row } = await client
       .from('generated_content')

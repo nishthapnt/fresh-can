@@ -422,10 +422,20 @@ const GENERIC_DOCUMENTARY_HINT =
 // props, bad hands/skin) in a fraction of the length. Kept 'physically
 // plausible and safe' / 'middle of a road' — the specific named scenario
 // is what makes the plausibility rule land.
+// "reflection" sentence added 2026-09-26 after a real render showed a
+// ghostly, translucent duplicate arm/torso bled through a glass door
+// alongside the real person standing in it — same class of defect as the
+// rest of this constant (an extra, unscripted figure in frame), just
+// produced via a reflection instead of a second body standing in the
+// scene outright, so it gets one more clause here rather than a new
+// separate constant (this file's own consolidation history above already
+// found that fragmenting these into many small constants diluted the
+// scene-specific instruction).
 const SCENE_CONTENTS_RULE =
   'Show only the people, objects, and setting this scene describes or clearly implies, in a physically ' +
   'plausible and safe setting (never, e.g., people eating in the middle of a road). Every visible hand ' +
-  'belongs to one of those people, with natural anatomy; skin looks real.'
+  'belongs to one of those people, with natural anatomy; skin looks real. Any reflection in glass, a window, ' +
+  'or a mirror shows exactly that same real person and setting — never an extra, duplicated, or ghostly figure.'
 
 // A production-value quality floor, not a style dictate — the scene's own
 // description still decides mood/style/composition (SCENE_IS_CREATIVE_BRIEF).
@@ -760,7 +770,7 @@ function castClause(cast: readonly CastBibleEntry[] | undefined): string {
     const name = field(c.role) || c.id
     return details.length > 0 ? `the ${name} (${details.join(', ')})` : `the ${name}`
   })
-  return `Recurring people — render each exactly like this, same face, hair, and clothing as every other scene: ${people.join('; ')}.`
+  return `Recurring people — each one is the exact same real individual in every scene, never a different person who merely resembles the description: same face, hair, and clothing as every other scene: ${people.join('; ')}.`
 }
 
 /**
@@ -877,12 +887,20 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
-  if (overflow > 0 && cast) {
-    cast = ''
-    overflow = totalLen() - PROMPT_LIMITS.sceneImage
-  }
+  // cast is the ONLY thing anchoring a recurring person's face across
+  // scenes — unlike the branded unit (character_ref, a real reference
+  // image), a human cast member has no image anchor at all, just this text.
+  // Sacrificing it here, before visualDescription is even touched, meant
+  // exactly the scenes most likely to overflow the budget (the busier,
+  // more detailed ones) lost the one thing keeping their people
+  // recognizable — silently reinventing that person's face. Truncate the
+  // actual creative brief first; cast is the last resort, not the second.
   if (overflow > 0) {
     visualDescription = truncateToFit(visualDescription, visualDescription.length - overflow)
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
+  if (overflow > 0 && cast) {
+    cast = ''
   }
 
   const parts = [
@@ -984,6 +1002,11 @@ interface SceneVideoJob {
    *  hold the frame's planned lighting steady instead of drifting (see
    *  SceneImageJob.look for where the frame itself gets that look). */
   look?: VideoScriptLook | null
+  /** THIS scene's own Layer 2 unit_presence (see SceneImageJob.unitPresence)
+   *  — undefined/'none' adds nothing extra; 'background'/'featured' appends
+   *  WORDMARK_LEGIBILITY_CLAUSE, since only those scenes have a real branded
+   *  wordmark in the reference frame for the clip to keep legible. */
+  unitPresence?: UnitPresence
 }
 
 /** Prompt for Seedance 1.5 Pro image-to-video (adapters/kie.ts's
@@ -1093,6 +1116,40 @@ const VIDEO_VISUAL_QUALITY_STYLE =
   'textures, natural skin and lighting, natural motion blur — polished commercial quality, never ' +
   'oversaturated, over-sharpened, or CGI-looking.'
 
+// Added 2026-09-26 after real Seedance renders showed two failure modes the
+// ambient-motion/reference-frame-authority clauses above didn't fully close:
+// (1) a smoke column rising from a landfill scene with no fire, flare, or
+// heat source anywhere in frame — the old ambient-motion wording permitted
+// "steam, smoke... " for every scene regardless of whether the scene's own
+// content plausibly involves one, so the model had positive license to add
+// it purely for atmosphere; (2) a background pedestrian rendered floating,
+// detached from the ground, in an otherwise ordinary street shot. Both are
+// judgment calls the model makes at animation time, not something a fixed
+// per-scene schema field could gate any more reliably — so both are closed
+// the same way the rest of this function's guardrails already are: a short,
+// explicit textual rule the model checks itself against, self-referencing
+// the very scene description it was just given (no new plan field, no new
+// LLM call, no extra provider spend).
+const NO_PHANTOM_EFFECTS_CLAUSE =
+  ' Only animate smoke, steam, or fire when the description above names a real source for it — never invent ' +
+  'unexplained smoke or fire. Add no extra people or figures anywhere in frame beyond who the reference frame ' +
+  'shows; every person and object stays grounded, never floating or detached.'
+
+// Added 2026-09-26 alongside NO_PHANTOM_EFFECTS_CLAUSE — a real render's
+// brand wordmark (correct and legible in the seed scene_image frame, per
+// composeCharacterRefPrompt/composeSceneImagePrompt's own wordmark
+// guardrails) turned into garbled, mirrored text mid-clip once Seedance
+// animated it, then reverted a couple seconds later — video diffusion is
+// materially worse than the image model at holding small static text
+// stable across motion, and nothing here previously said anything about
+// the wordmark at all once the clip stopped being a still image. Appended
+// only for unitPresence !== 'none' (SceneVideoJob.unitPresence) — a scene
+// with no branded unit in its reference frame has no wordmark for this
+// clause to protect, so it costs those scenes nothing.
+const WORDMARK_LEGIBILITY_CLAUSE =
+  ' Keep the visible brand wordmark pixel-accurate and legible in every frame — identical letters and layout, ' +
+  'never distorted, mirrored, or reinterpreted.'
+
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
@@ -1106,9 +1163,11 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
     'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
     'a new person, limb, or object that was not already in that frame.' +
+    NO_PHANTOM_EFFECTS_CLAUSE +
     TEMPORAL_CONSISTENCY_CLAUSE +
     VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +
+    (job.unitPresence && job.unitPresence !== 'none' ? WORDMARK_LEGIBILITY_CLAUSE : '') +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
   let visualDescription = job.visualDescription

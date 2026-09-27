@@ -727,9 +727,21 @@ describe('composeSceneImagePrompt', () => {
     expect(withoutLook.prompt).toContain('If unspecified, default mood: Natural daylight')
   })
 
-  it('drops the cast clause before ever truncating the scene description, and stays within budget', () => {
+  it('truncates the scene description before ever dropping the cast clause, and stays within budget', () => {
+    // cast is the only thing anchoring a recurring person's face across
+    // scenes (character_ref only ever backs the branded unit, never a
+    // human) — sacrificing it to fit budget silently reinvents that
+    // person's face in whichever scene happens to overflow. The scene
+    // description gets shortened first instead.
     const longText = 'a very long descriptive sentence about the scene and its surroundings '.repeat(30)
     const visualDescription = `The student reads the note. ${longText}`.slice(0, 600).trimEnd()
+    // Cast's own appearance/wardrobe kept to a realistic length (unlike
+    // shotNotes/visualDescription above, deliberately oversized to force
+    // truncation) — cast text is never itself truncated, only ever kept
+    // whole or dropped entirely, so an unrealistically long value here
+    // would just eat the whole remaining budget and this test's own point
+    // (the opening of the scene description survives truncation) with it.
+    const castText = longText.slice(0, 100)
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-cast-budget',
       sceneNumber: 2,
@@ -737,11 +749,12 @@ describe('composeSceneImagePrompt', () => {
       shotNotes: longText,
       characterRefUrl: 'https://example.com/character-ref.jpg',
       unitPresence: 'featured',
-      cast: [{ id: 'student', role: 'student', appearance: longText, wardrobe: longText }],
+      cast: [{ id: 'student', role: 'student', appearance: castText, wardrobe: castText }],
     })
     expect(scene.prompt.length).toBeLessThanOrEqual(3000)
-    expect(scene.prompt).toContain(visualDescription)
-    expect(scene.prompt).not.toContain('Recurring people')
+    expect(scene.prompt).toContain('Scene 2: The student reads the note.')
+    expect(scene.prompt).not.toContain(visualDescription)
+    expect(scene.prompt).toContain('Recurring people')
   })
 
   it("never exceeds KieImageGenerator's real ~3000-char prompt cap, even with a maximally long visual_description/shot_notes/regenInstructions — regression for \"The prompt word cannot exceed 3000 characters\" (confirmed live against KIE.ai, recurred 3 times before this guard was added)", () => {

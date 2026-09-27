@@ -30,7 +30,21 @@
 const MIN_CLIP_SECONDS = 4
 const MAX_CLIP_SECONDS = 12
 
+// +1s headroom (2026-09-26) — the other half (alongside transcribeAudio.ts's
+// tightened OVERSHOOT_HARD_TOLERANCE/OVERSHOOT_SOFT_TOLERANCE) of making
+// renderLanguageTrack.ts's visual fallback (avMerger.ts's small-gap zoom /
+// large-gap loop) rarely necessary instead of routinely relied on: with
+// narration now landing much closer to its own target, requesting a touch
+// MORE clip than that target directly biases toward "actual video duration
+// >= actual audio duration" holding on its own, so the render step's own
+// probe (renderLanguageTrack.ts's probeClipGapSeconds) usually finds a plain
+// trim is all that's needed. Applied BEFORE the existing 4-12s clamp, so a
+// target already near the 12s ceiling gets progressively less real headroom
+// (a 12s target still only ever requests 12s) rather than ever exceeding
+// Seedance's accepted range.
+const HEADROOM_SECONDS = 1
+
 export function pickClipDurationSeconds(targetDurationMs: number): number {
   const targetSeconds = Math.round(targetDurationMs / 1000)
-  return Math.min(MAX_CLIP_SECONDS, Math.max(MIN_CLIP_SECONDS, targetSeconds))
+  return Math.min(MAX_CLIP_SECONDS, Math.max(MIN_CLIP_SECONDS, targetSeconds + HEADROOM_SECONDS))
 }

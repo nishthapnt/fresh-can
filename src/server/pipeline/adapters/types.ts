@@ -380,6 +380,12 @@ export interface AVMerger {
     clipUrl: string,
     targetDurationSeconds: number,
     transition?: { fadeInSeconds?: number; fadeOutSeconds?: number },
+    /** Real (probed) shortfall between the clip's actual duration and
+     *  targetDurationSeconds, or null when unknown — see
+     *  buildSceneDurationMatchCommand's own header (avMerger.ts) for what
+     *  each case does. */
+    gapSeconds?: number | null,
+    aspectRatio?: '9:16' | '1:1' | '16:9',
   ): Promise<AVMergeJobRef>
   poll(jobRef: AVMergeJobRef): Promise<AVMergeResult>
 }

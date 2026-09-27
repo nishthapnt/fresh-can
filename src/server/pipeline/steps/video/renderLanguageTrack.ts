@@ -3,6 +3,7 @@ import type { AVMerger } from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
 import { buildCaptionAssFile, SCENE_TRANSITION_FADE_SECONDS } from '../../adapters/avMerger'
 import type { VideoStorageUploader } from '../../adapters/storage'
+import { parseMp4DurationSeconds } from '../../lib/mp4Duration'
 import {
   claimTrack,
   hasSucceededStep,
@@ -54,6 +55,39 @@ const STALE_CLAIM_MS = 2 * POLL_TIMEOUT_MS + 5 * 60 * 1000
 
 function isStaleClaim(updatedAt: string): boolean {
   return Date.now() - new Date(updatedAt).getTime() > STALE_CLAIM_MS
+}
+
+/**
+ * How far THIS scene's real, generated clip falls short of the target
+ * duration — read directly from the clip's own MP4 metadata (lib/
+ * mp4Duration.ts), never from KIE/Seedance itself (no new provider call,
+ * no regeneration, no retry of any kind). Feeds buildSceneDurationMatchCommand
+ * 's small-vs-large gap decision (avMerger.ts's own header) — never used for
+ * anything else, and never touches narration/transcription at all (that
+ * correction already ran earlier, in transcribeAudio.ts, against the SAME
+ * targetDurationSeconds this function is handed).
+ *
+ * Returns null — the same "unknown gap" signal buildSceneDurationMatchCommand
+ * already treats as "fall back to today's existing behavior" — for anything
+ * that isn't a fetchable, parseable MP4 (a network hiccup, an unreachable/
+ * fake URL, or a slow fetch past PROBE_TIMEOUT_MS): this probe is a pure
+ * best-effort optimization on top of an already-safe fallback, never a new
+ * failure mode of its own — a hung or refused fetch must never block the
+ * render itself.
+ */
+const PROBE_TIMEOUT_MS = 5000
+
+async function probeClipGapSeconds(clipUrl: string, targetDurationSeconds: number): Promise<number | null> {
+  try {
+    const res = await fetch(clipUrl, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+    if (!res.ok) return null
+    const buffer = Buffer.from(await res.arrayBuffer())
+    const actualDurationSeconds = parseMp4DurationSeconds(buffer)
+    if (actualDurationSeconds === null) return null
+    return targetDurationSeconds - actualDurationSeconds
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -287,10 +321,17 @@ export async function runRenderLanguageTrack(
     // below.
     const matchedScenes = await Promise.all(
       sceneRenderInputs.map(async (input, index) => {
-        const jobRef = await avMerger.submitSceneDurationMatch(input.clipUrl, input.audioDurationSeconds, {
-          fadeInSeconds: index === 0 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
-          fadeOutSeconds: index === sceneRenderInputs.length - 1 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
-        })
+        const gapSeconds = await probeClipGapSeconds(input.clipUrl, input.audioDurationSeconds)
+        const jobRef = await avMerger.submitSceneDurationMatch(
+          input.clipUrl,
+          input.audioDurationSeconds,
+          {
+            fadeInSeconds: index === 0 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
+            fadeOutSeconds: index === sceneRenderInputs.length - 1 ? 0 : SCENE_TRANSITION_FADE_SECONDS,
+          },
+          gapSeconds,
+          aspectRatio,
+        )
         const outcome = await pollUntilDone(avMerger, jobRef, 'duration-match', client, track.id)
         if ('cancelled' in outcome) return { cancelled: true as const }
         if (!('fileBuffer' in outcome)) {

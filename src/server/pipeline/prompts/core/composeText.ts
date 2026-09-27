@@ -638,10 +638,13 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '"camera_language": string } (the visual mood/style for the WHOLE video, deferential to whatever the scene ' +
     'idea itself already implies — this replaces guessing a default mood per image later),\n' +
     '  "cast_bible": [ { "id": string (short, stable, e.g. "mother"), "role": string, "age_range": string, ' +
-    '"appearance": string, "wardrobe": string, "distinguishing_details": string } ] (one entry per named or ' +
-    'recurring person in the story — locked physical descriptions to reuse VERBATIM in every scene that person ' +
-    'appears in, the backbone of keeping them looking the same scene to scene; omit entirely for a video with ' +
-    'no recurring named people),\n' +
+    '"appearance": string (specific and unambiguous enough that a different artist working from this text ' +
+    'alone, with no image reference, would draw the same individual every time — always state apparent ' +
+    'ethnicity/skin tone, exact hair color/texture/style, and build or facial structure; never a generic phrase ' +
+    'like "kind-looking" or "friendly" that could describe many different people), "wardrobe": string, ' +
+    '"distinguishing_details": string } ] (one entry per named or recurring person in the story — locked ' +
+    'physical descriptions to reuse VERBATIM in every scene that person appears in, the backbone of keeping ' +
+    'them looking the same scene to scene; omit entirely for a video with no recurring named people),\n' +
     '  "locations": [ { "id": string, "description": string, "continuity_details": string } ] (one entry per ' +
     'distinct place the story visits, if it revisits any; omit for a single-location or single-shot video),\n' +
     '  "scenes": [\n' +
@@ -667,8 +670,11 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'the idea in plain terms, NEVER write it as a finished sentence in any one language, since this gets ' +
     'independently localized into actual EN or FR wording by a later step),\n' +
     '      "target_duration_seconds": number (this scene\'s planned runtime budget),\n' +
-    '      "cast_present": string[] (the cast_bible ids of who appears in this scene, if any — [] or omit if ' +
-    'the video has no cast_bible),\n' +
+    '      "cast_present": string[] (the cast_bible ids of every recurring person who VISUALLY appears in ' +
+    'this scene, if any — include them even when this scene is set at a different location or in a different ' +
+    'setting than where they last appeared; never drop a recurring person from this list just because the ' +
+    'scene changed location, that is exactly when losing their locked appearance is most noticeable. [] or ' +
+    'omit only if the video has no cast_bible or genuinely no cast_bible person is shown in this scene),\n' +
     '      "props_present": string[] (visually significant objects this scene establishes or carries forward),\n' +
     `      "unit_presence": "none" | "background" | "featured" (is ${brand.name}'s physical unit the ` +
     'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +

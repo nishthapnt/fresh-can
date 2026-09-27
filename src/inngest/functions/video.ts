@@ -415,7 +415,12 @@ export const videoTrackRender = inngest.createFunction(
     for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
       track = await step.run(`transcribe-${attempt}`, async () => {
         const current = await fetchTrack(trackId)
-        await runTranscribeAudio(client, current, pipelineId, transcriptionService)
+        await runTranscribeAudio(client, current, pipelineId, transcriptionService, undefined, {
+          voiceSynthesizer,
+          uploader: videoUploader,
+          jobId,
+          voiceId: voiceIdOverride,
+        })
         return fetchTrack(trackId)
       })
       if (track.status === 'awaiting_shared' || track.status === 'failed') break

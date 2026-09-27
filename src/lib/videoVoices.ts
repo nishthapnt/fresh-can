@@ -6,6 +6,24 @@
 // field) — playing it directly costs nothing and needs no API call, unlike
 // a live synthesize-on-demand preview.
 //
+// Daniel (onwK4e9ZLuTAKqWW03F9, "Steady Broadcaster") removed 2026-09-26 —
+// confirmed live across multiple real jobs to speak meaningfully slower
+// than every other voice in this list (measured ~1.6-2.25 words/sec vs.
+// this pipeline's usual ~2.6-2.7), which is what caused two separate real
+// incidents: a video landing far over its requested duration, and — once
+// transcribeAudio.ts's narration-overshoot correction started reacting to
+// that — narration getting truncated mid-sentence trying to force this
+// voice's slow, deliberate delivery back within budget. Its own ElevenLabs
+// labels (`use_case: informative_educational`, `descriptive: formal`) are
+// consistent with that deliberately slower broadcaster style, unlike this
+// list's other three male voices (`conversational`/`social_media`).
+// Replaced with Eric (cjVigY5qzO86Huf0OWal, "Smooth, Trustworthy") — same
+// `conversational`, american-accent, middle_aged profile as Chris
+// (iP95p4xoKVk53GoZ742B), picked specifically because it shares that
+// profile with an already-confirmed-normal-pace voice, not because of any
+// direct pace measurement of Eric itself (not yet measured against a real
+// job the way the other three have been).
+//
 // The first entry per language is today's hardcoded default
 // (worker/src/prompts/brand/fresh-can.ts's videoVoiceIds) so an unedited
 // job keeps producing exactly the same narration voice it always has.
@@ -38,7 +56,7 @@ export const VIDEO_VOICES: Record<'EN' | 'FR', VideoVoiceOption[]> = {
     { id: 'epkQ8pqDcY2DxhmFi8xl', name: 'Current default (male)', gender: 'male', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/database/workspace/9f451350024149bb8ffdad22ffd131e7/voices/epkQ8pqDcY2DxhmFi8xl/ISnzs529q1VwUgRPnLYz.mp3' },
     { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam - Energetic, Social Media Creator', gender: 'male', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/TX3LPaxmHKxFdv7VOQHJ/63148076-6363-42db-aea8-31424308b92c.mp3' },
     { id: 'iP95p4xoKVk53GoZ742B', name: 'Chris - Charming, Down-to-Earth', gender: 'male', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/iP95p4xoKVk53GoZ742B/3f4bde72-cc48-40dd-829f-57fbf906f4d7.mp3' },
-    { id: 'onwK4e9ZLuTAKqWW03F9', name: 'Daniel - Steady Broadcaster', gender: 'male', previewUrl: 'https://api.us.elevenlabs.io/v1/voices/onwK4e9ZLuTAKqWW03F9/previews/audio?payload=eyJ2b2ljZV9zb3VyY2UiOiJwcmVtYWRlIiwiZmlsZW5hbWUiOiI3ZWVlMDIzNi0xYTcyLTRiODYtYjMwMy01ZGNhZGMwMDdiYTkubXAzIiwidGltZXN0YW1wIjoxNzg5NDQ4NDAwMDAwMDAwfQ%3D%3D' },
+    { id: 'cjVigY5qzO86Huf0OWal', name: 'Eric - Smooth, Trustworthy', gender: 'male', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/cjVigY5qzO86Huf0OWal/d098fda0-6456-4030-b3d8-63aa048c9070.mp3' },
     { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah - Mature, Reassuring, Confident', gender: 'female', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/EXAVITQu4vr4xnSDxMaL/01a3e33c-6e99-4ee7-8543-ff2216a32186.mp3' },
     { id: 'cgSgspJ2msm6clMCkdW9', name: 'Jessica - Playful, Bright, Warm', gender: 'female', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/cgSgspJ2msm6clMCkdW9/56a97bf8-b69b-448f-846c-c3a11683d45a.mp3' },
     { id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice - Clear, Engaging Educator', gender: 'female', previewUrl: 'https://storage.googleapis.com/eleven-public-prod/premade/voices/Xb7hH8MSUJpSbSDYk0k2/d10f7534-11f6-41fe-a012-2de1e482d336.mp3' },
