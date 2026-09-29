@@ -111,3 +111,11 @@ describe('computeNarrationCorrection', () => {
     expect(result!.shortenedText.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(1)
   })
 })
+
+describe('computeNarrationCorrection — never collapses a slot (regression, job 8e92b381)', () => {
+  it('keeps a moderately long two-sentence narration instead of cutting it to ~58% of the slot', () => {
+    const text = 'Fresh-CAN is extending a warm welcome to neighbourhoods across Canada. It offers an intriguing and novel way to shop.'
+    // 6s slot, 7.8s real (1.3x): the first-sentence cut would land ~3.5s.
+    expect(computeNarrationCorrection(7_800, 6_000, text)).toBeNull()
+  })
+})

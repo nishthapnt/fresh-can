@@ -7,6 +7,8 @@ import {
   composeSceneImageEditPrompt,
   composeSceneVideoPrompt,
   composeCharacterRefPrompt,
+  appUiVideoClause,
+  sceneGuardVideoClause,
 } from './compose'
 import type { BrandProfile } from '../types'
 import { BRAND_PROFILE } from '../brand/fresh-can'
@@ -1178,5 +1180,87 @@ describe('brand-agnosticism (G4 — swapping the brand profile changes the outpu
     const freshCan = composeHeroPrompt(testBrand, job)
     const acme = composeHeroPrompt(acmeBrand, job)
     expect(freshCan.prompt).not.toBe(acme.prompt)
+  })
+})
+
+describe('app UI palette clause (maroon + white)', () => {
+  const job = {
+    pipelineId: 'p',
+    sceneNumber: 1,
+    visualDescription: 'A woman holds up her phone to find the nearest unit.',
+    shotNotes: null,
+    characterRefUrl: 'https://example.com/ref.png',
+  }
+
+  it('adds the palette to the scene image prompt only when the app is on screen', () => {
+    for (const appPresence of ['featured', 'background'] as const) {
+      const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, appPresence })
+      expect(prompt).toContain('#6B1A1A')
+      expect(prompt.length).toBeLessThanOrEqual(2995)
+    }
+    for (const appPresence of ['none', undefined] as const) {
+      const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, appPresence })
+      expect(prompt).not.toContain('#6B1A1A')
+    }
+  })
+
+  it('adds the short clause to the scene video prompt only when resolved', () => {
+    const base = { visualDescription: 'She scans the QR code.', shotNotes: null }
+    expect(composeSceneVideoPrompt({ ...base, appUiVideoClause: appUiVideoClause(BRAND_PROFILE, 'featured') })).toContain('maroon')
+    expect(composeSceneVideoPrompt({ ...base, appUiVideoClause: appUiVideoClause(BRAND_PROFILE, 'none') })).not.toContain('maroon')
+    expect(composeSceneVideoPrompt(base).length).toBeLessThanOrEqual(2450)
+  })
+})
+
+describe('self-serve guard + interior scenes', () => {
+  const job = {
+    pipelineId: 'p',
+    sceneNumber: 4,
+    visualDescription: 'The customer picks fruit off a shelf and puts it in her bag.',
+    shotNotes: null,
+    characterRefUrl: 'https://example.com/exterior-ref.png',
+  }
+
+  it('interior scenes with the unit present use an interior reference, not the exterior ref', () => {
+    const { prompt, referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
+      ...job, unitPresence: 'featured', setting: 'interior',
+    })
+    expect(BRAND_PROFILE.referenceImages.interior.map((r) => r.url)).toContain(referenceImageUrl)
+    expect(prompt).toContain('INSIDE the store')
+    expect(prompt).toMatch(/[Ss]elf-serve/)
+    expect(prompt.length).toBeLessThanOrEqual(2995)
+  })
+
+  it('exterior scenes still use the exterior character ref', () => {
+    const { referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
+      ...job, unitPresence: 'featured', setting: 'exterior',
+    })
+    expect(referenceImageUrl).toBe(job.characterRefUrl)
+  })
+
+  it('scenes without the unit or app get no guard and no interior ref', () => {
+    const { prompt, referenceImageUrl } = composeSceneImagePrompt(BRAND_PROFILE, {
+      ...job, unitPresence: 'none', setting: 'interior',
+    })
+    expect(prompt).not.toMatch(/[Ss]elf-serve/)
+    expect(referenceImageUrl).toBeUndefined()
+  })
+
+  it('a featured app scene requires the phone to be visible', () => {
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, appPresence: 'featured' })
+    expect(prompt).toContain('must be clearly visible')
+  })
+
+  it('edit retries re-state the scene', () => {
+    const { prompt } = composeSceneImageEditPrompt(BRAND_PROFILE, {
+      rejectedImageUrl: 'https://example.com/x.png', issues: ['extra hand'], visualDescription: job.visualDescription,
+    })
+    expect(prompt).toContain('must still show')
+    expect(prompt).toContain('picks fruit')
+  })
+
+  it('video guard only when the unit/app is present', () => {
+    expect(sceneGuardVideoClause(BRAND_PROFILE, 'featured', undefined)).toMatch(/[Ss]elf-serve/)
+    expect(sceneGuardVideoClause(BRAND_PROFILE, 'none', 'none')).toBe('')
   })
 })

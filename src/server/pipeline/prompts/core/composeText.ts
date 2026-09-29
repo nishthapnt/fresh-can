@@ -46,7 +46,8 @@ function statsLine(brand: BrandProfile): string {
 // (PROMPT_REFACTOR_BRIEF.md §6.2); category may remain light job metadata
 // but must never dictate subject, setting, composition, or style.
 function brandContext(brand: BrandProfile, _category: string): string {
-  return `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
+  const journey = brand.journey.length > 0 ? ` How a visit really works: ${brand.journey.join(' ')}` : ''
+  return `${brand.missionStatement}${journey} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n`
 }
 
 const CONTENT_TYPE_LABEL: Record<string, string> = {
@@ -590,7 +591,8 @@ function brandAssetFidelity(brand: BrandProfile): string {
   return (
     `When ${brand.name}'s vehicle, app, or other real assets appear in a scene, describe them only as already true ` +
     'per the brand facts above — never invent a new logo, redesign the vehicle\'s shape or colors, invent a ' +
-    `product or service ${brand.name} doesn't actually offer, or add an app feature that isn't real. Use an ` +
+    `product or service ${brand.name} doesn't actually offer, or add an app feature that isn't real. The app's UI ` +
+    'is only ever deep maroon and white, never any other screen color. Use an ' +
     'existing asset because this specific scene\'s idea genuinely calls for it, never merely because it exists.'
   )
 }
@@ -680,6 +682,11 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +
     '      "unit_presence_rationale": string (one sentence, honest and specific to this scene, never ' +
     'boilerplate — why you chose that unit_presence value; omit only if unit_presence is "none"),\n' +
+    `      "app_on_screen": "none" | "background" | "featured" (is a person shown using the ${brand.name} app on a ` +
+    'phone in this scene — searching for a unit, scanning the entry QR code; "featured" when the phone screen is ' +
+    'a focal point, "background" when it is merely visible, "none" otherwise — an honest per-scene read, never a ' +
+    'default. When not "none", describe the phone screen in visual_description only as a simple maroon-and-white ' +
+    'screen),\n' +
     '      "setting": "exterior" | "interior" | "unrelated" (unrelated for a setting that has nothing to do ' +
     'with the unit at all, e.g. a home kitchen),\n' +
     '      "contains_food": boolean (does this scene show food, produce, or packaged groceries),\n' +
@@ -793,7 +800,9 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     `You are localizing a video's narration into ${opts.language}. You will be given a list of scenes, each ` +
     'with a "narration_intent" (the SEMANTIC content that scene\'s narration should convey — not literal ' +
     `wording) and a target_duration_seconds budget. Write the actual narration wording in ${opts.language} for ` +
-    'each scene, writing to fill close to its FULL target duration — real measured narration audio for this ' +
+    'each scene, writing to fill close to its FULL target duration, and every scene\'s narration_text MUST have between ' +
+    'its given min_words and max_words words (a hard requirement, not a suggestion; a scene with previous_narration_off_length ' +
+    'must be rewritten to fit that band (longer or shorter), still faithful to its narration_intent) — real measured narration audio for this ' +
     `pipeline runs at roughly ${NARRATION_WORDS_PER_SECOND} words per second (multiply that rate by ` +
     'target_duration_seconds for the word count to aim for), noticeably faster than a slow, deliberate ' +
     'voiceover pace. Err on the side of a few words ' +

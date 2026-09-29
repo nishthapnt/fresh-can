@@ -21,7 +21,8 @@ export const PROMPT_LIMITS = {
    *  NanoBananaImageGenerator on 2026-09-23 (adapters/nanoBanana.ts), which
    *  has no documented prompt-length limit — this budget is kept as-is as
    *  a conservative ceiling regardless, not loosened just because the new
-   *  model may not enforce one. */
+   *  model may not enforce one.
+ */
   sceneImage: 2995,
   /** KieVideoGenerator — Seedance 1.5 Pro. Documented at
    *  docs.kie.ai/market/bytedance/seedance-1-5-pro: `input.prompt` is

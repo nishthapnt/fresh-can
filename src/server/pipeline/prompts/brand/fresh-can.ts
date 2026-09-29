@@ -102,7 +102,7 @@ export const BRAND_PROFILE: BrandProfile = {
   unit: {
     // Minimum recognisable descriptor — background/incidental appearances only.
     identity:
-      'A white box truck with a dark maroon-red steel cargo container mounted on back. The white "Fresh ' +
+      'A white box truck with a deep maroon (#6B1A1A) steel cargo container mounted on back. The white "Fresh ' +
       '[maple leaf icon] CAN" wordmark appears once, centered, on each side panel — nowhere else on the ' +
       'vehicle.',
 
@@ -111,11 +111,11 @@ export const BRAND_PROFILE: BrandProfile = {
     // "nowhere else" — see docs/PROMPT_ARCHITECTURE.md for why that
     // specificity matters here.
     full:
-      'The Fresh-CAN mobile grocery store: a white box truck with a dark maroon-red steel cargo container ' +
+      'The Fresh-CAN mobile grocery store: a white box truck with a deep maroon (#6B1A1A) steel cargo container ' +
       'mounted on back. The cab is plain white and unbranded; all branding is on the container only. The ' +
       'white "Fresh [maple leaf icon] CAN" wordmark, never distorted, appears once, centered, on each of ' +
       'the two side panels — nowhere else on the vehicle. The front face (where it meets the cab) and the ' +
-      'rear face are both plain maroon-red with no wordmark or signage. NEVER render a door, hatch, ' +
+      'rear face are both plain maroon with no wordmark or signage. NEVER render a door, hatch, ' +
       'service window, vent, or any other opening or fixture on the front face or either side — the rear ' +
       'double door, a black-frame glass double door flush at bumper height with no external staircase, is ' +
       "the vehicle's ONLY entrance and ONLY opening, on any face, and the only place customers are ever " +
@@ -125,7 +125,7 @@ export const BRAND_PROFILE: BrandProfile = {
       'The interior of the Fresh-CAN mobile grocery store: a narrow aisle inside the shipping container ' +
       'with light grey wood-look laminate flooring and bright overhead fluorescent lighting. Black wire ' +
       'shelving units on one side of the aisle, stocked with bagged snacks and packaged groceries. ' +
-      'Black-framed glass-door refrigerated cases on the other side, each topped with a red header sign ' +
+      'Black-framed glass-door refrigerated cases on the other side, each topped with a deep maroon (#6B1A1A) header sign ' +
       'bearing a white "Fresh [maple leaf icon] CAN" wordmark, stocked with beverages and fresh salad ' +
       'containers (some individually labeled with a small "Fresh CAN" sticker). A stainless steel prep ' +
       'counter and sink — a fixed utility fitting, never a checkout or point-of-sale — near a plain white ' +
@@ -141,7 +141,7 @@ export const BRAND_PROFILE: BrandProfile = {
       'per side panel, nowhere else on the vehicle.',
     'No other text, graphics, decals, stripes, URLs, or QR panels anywhere on the unit.',
     'The cab is plain white and completely unbranded.',
-    'Colour and structure identical in every appearance — always this exact maroon-red, wordmark never ' +
+    'Colour and structure identical in every appearance — always this exact maroon (#6B1A1A), wordmark never ' +
       'distorted.',
     'Never place the Fresh-CAN wordmark or logo on any other vehicle, sign, storefront, building, or object.',
   ],
@@ -171,6 +171,25 @@ export const BRAND_PROFILE: BrandProfile = {
   typographyDescriptor:
     'Manrope or a very similar clean, modern, geometric sans-serif typeface — bold weight for the headline, ' +
     'semi-bold weight for the subtitle, never cursive, never script, never a serif font.',
+  // Maroon sampled from the real truck container photos in assets/fresh-can/
+  // (~#6B1A1A) — swap the hex here if the official guideline value differs.
+  // The image clause is what scene-image prompts carry; the video clause is
+  // deliberately short (sceneVideo has a tight character budget).
+  sceneGuard: {
+    image: 'Self-serve store, not a market: no staff serving, no crates or produce outside.',
+    video:
+      ' Fresh-CAN is self-serve and cashierless: never show staff serving, hand-overs of goods, crates or produce ' +
+      'stands outside, or a service window.',
+  },
+  appUi: {
+    imageClause:
+      'Any Fresh-CAN app phone screen is ONLY deep maroon (#6B1A1A) and white: white background, maroon header, ' +
+      'buttons and icons, QR code in maroon on white. No blue, green, black, gradient, dark mode, or other ' +
+      'app/map styling. Keep the UI simple, little readable text.',
+    videoClause:
+      ' Any phone screen showing the Fresh-CAN app stays strictly maroon (#6B1A1A) and white in every frame — ' +
+      'never any other UI color.',
+  },
   ctaBarColorDescriptor: 'a solid charcoal-black band, similar to hex #1F1F1F',
 
   // Fallback ONLY — real ElevenLabs voice IDs, used by synthesizeVoice.ts

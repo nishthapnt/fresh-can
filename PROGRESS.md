@@ -1760,3 +1760,41 @@
 
 **⭐ Next steps**
 - Manual verification: edit a blog draft, click Save (not Approve), reload/navigate away and back, confirm the edit survived; confirm Save is refused once approved.
+
+---
+
+### 2026-09-29 — App screens in video scenes are maroon + white only
+**✅ Completed**
+- New optional per-scene plan field `app_on_screen` (`none|background|featured`, LLM-decided, lenient like the other Layer 2 fields) in `generateScript.ts`, persisted in `narration_intent` and read back by `extractSceneLayer2Fields`. Script prompt (`composeText.ts`) asks for it and `brandAssetFidelity` now states the app UI is only deep maroon + white.
+- `BrandProfile.appUi` (`imageClause`, `videoClause`) in `brand/fresh-can.ts`; maroon `#6B1A1A` sampled from the truck photos (swap if the official hex differs).
+- `composeSceneImagePrompt` adds the palette clause (inside the fixed, budgeted parts) and `composeSceneVideoPrompt` a short clause, only when `app_on_screen != none`.
+- **No extra KIE spend by design:** prompt text only — no new validator, no throwing guard, no retry path, no new provider call. Existing vision-gate/retry logic untouched.
+- Tests added in `compose.test.ts`; `tsc --noEmit` clean.
+
+**⭐ Next steps**
+- Generate a "how it works" video and eyeball the phone screens; if drift persists, consider maroon/white app-screen reference mockups (deferred to avoid extra image inputs/cost).
+
+---
+
+### 2026-09-29 (cont'd) — Short-video fix + brand identity (no vendor/market visuals)
+**Investigated:** job f0df42af (36s requested) rendered ~23s: video length = sum of per-scene narration audio, and localize_script under-wrote (3–8 words for 4–6s slots). The prior fix was prose-only; nothing enforced a floor (transcribeAudio only corrects overshoot).
+
+**✅ Completed**
+- `localizeScript.ts`: per-scene `min_words`/`max_words` (85–105% of 3.1 wps) in the prompt + one best-effort text-only corrective rewrite for scenes under the floor (no TTS/KIE spend; never throws; never shortens). `localizeScript.test.ts`.
+- Interior scenes (`setting: interior` + unit present) now edit from the store's interior reference photos with `unit.interior`, not the exterior truck ref (`compose.ts` `interiorBlock`).
+- `BrandProfile.sceneGuard`: self-serve/no-vendor guard added to scene image (droppable before any scene content is truncated; `PROMPT_LIMITS.sceneImage` stays 2995) and scene video prompts when the unit/app is present.
+- `app_on_screen: featured` now requires the phone visible; edit-mode retries re-state the scene; `journey` added to `brandContext()`; unit/interior descriptors use maroon `#6B1A1A`.
+- Tests added; `tsc --noEmit` clean; prompts suite 197/197.
+
+**⭐ Next steps**
+- Generate a "how it works" video and inspect stills; log vision-validator rejection reasons per attempt (still unknown why scenes 1/4/5 retried).
+
+### 2026-09-29 (cont'd) — Character-ref poll timeout no longer resubmits a paid generation
+- `generateCharacterRef.ts`: a poll timeout now keeps `provider_ref` and re-polls the same KIE task on the next attempt (same as `generateSceneVisual.ts`); still counts against `MAX_ATTEMPTS.kie` (attempt_number+1 stored), and the final timeout falls through to the failure path. Real failures/404s still discard the task. Cause: job f0df42af paid for 4 character-ref generations (3 consecutive 60s timeouts).
+- `tsc --noEmit` clean. Not covered by a unit test — the step is DB-bound and only the live-DB e2e (`videoPipeline.e2e.test.ts`) exercises it, which I did not run.
+
+### 2026-09-29 (cont'd) — Why job 8e92b381 (32s requested) came out 18.9s
+- Plan was fine (5 scenes, 34s). `localize_script` wrote full-length narration, but `transcribeAudio`'s overshoot correction then sentence-chopped it (24 words for a 5s slot → 5 words/1.6s; 22 → 10 words/3.45s), and a scene renders as long as its narration → 18.9s total. The earlier word-floor fix was live but only handled too-SHORT text; the model also ignored `max_words`.
+- `localizeScript.ts`: corrective text-only rewrite now covers too-long as well as too-short (`findOffBandScenes`, swaps in a rewrite only if `isBetterFit`).
+- `transcribeAudio.ts` `computeNarrationCorrection`: no longer accepts a cut that would leave the slot <70% filled unless the original overshoots ≥1.8x. Regression tests added.
+- Character-ref timeout fix worked in this job (1 timeout, resumed, no resubmission).

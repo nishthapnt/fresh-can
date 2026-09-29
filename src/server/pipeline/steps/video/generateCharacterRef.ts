@@ -204,6 +204,36 @@ export async function runGenerateCharacterRef(
           provider: 'kie',
           outputSnapshot: { fileUrl: permanentUrl },
         })
+      } else if ('timedOut' in outcome && !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)) {
+        // A poll timeout is NOT a confirmed failure — the task may still be
+        // running server-side. Keep provider_ref so the next attempt's
+        // RESUMED branch re-polls this exact task instead of paying for a
+        // fresh submission (a real job burned 3 paid character-ref
+        // generations on consecutive timeouts). Same handling as
+        // generateSceneVisual.ts. Still counts against MAX_ATTEMPTS.kie:
+        // attempt_number+1 is stored, so a task that never finishes cannot
+        // loop forever — the final timeout falls through to the failure path.
+        console.log(
+          `[${stepName}] poll timed out (attempt ${attemptNumber}) — leaving task ${jobRef.providerRef} resumable, not resubmitting`,
+        )
+        await upsertVisualAsset(client, {
+          contentPipelineId: pipeline.id,
+          generation,
+          assetType: 'character_ref',
+          status: 'generating',
+          providerRef: jobRef.providerRef,
+          attemptNumber: attemptNumber + 1,
+        })
+        await recordStepAttempt(client, {
+          contentPipelineId: pipeline.id,
+          stepName,
+          generation,
+          attemptNumber,
+          status: 'failed_retryable',
+          provider: 'kie',
+          errorMessage: 'KIE.ai poll timed out (task left resumable, not resubmitted)',
+        })
+        return { ran: true }
       } else {
         const detail = 'failed' in outcome ? outcome.detail : 'KIE.ai poll timed out'
         throw new ProviderCallError('kie', null, detail)

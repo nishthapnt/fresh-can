@@ -300,6 +300,30 @@ export interface BrandProfile {
    */
   ctaBarColorDescriptor: string
   /**
+   * The brand's own app UI palette, for any scene where a person is shown
+   * using the app (finding a unit, scanning the entry QR). Optional so a
+   * rebrand without an app simply omits it and no clause is added.
+   * Prompt-text only — never validated against generated output, so it
+   * can never trigger a regeneration/retry (and so never spends extra
+   * KIE credits).
+   */
+  /**
+   * Compact 'what this business is NOT' guard spliced into every video scene
+   * that shows the unit, its interior, or the app — the scene image model
+   * otherwise drifts to generic market-stall/vendor imagery (staff handing
+   * over crates, produce displayed outside, service windows). Optional.
+   */
+  sceneGuard?: {
+    image: string
+    video: string
+  }
+  appUi?: {
+    /** Palette clause spliced into the scene-image prompt. */
+    imageClause: string
+    /** Shorter clause for the (motion-only) scene-video prompt. */
+    videoClause: string
+  }
+  /**
    * ElevenLabs voice ID for video narration, one per supported language —
    * a single fixed voice per language (no rotation, no gender variation,
    * no per-job selection); see synthesizeVoice.ts's lookup. An empty/missing

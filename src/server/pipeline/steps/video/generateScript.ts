@@ -81,6 +81,9 @@ export interface ScriptSceneOutput {
    *  auditing against that checklist). Optional/lenient like every other
    *  Layer 2 field here — a missing rationale never fails the scene. */
   unit_presence_rationale?: string
+  /** Is a person shown using the brand's app on a phone (finding a unit,
+   *  scanning the entry QR). Optional/lenient; undefined means 'none'. */
+  app_on_screen?: 'none' | 'background' | 'featured'
   setting?: 'exterior' | 'interior' | 'unrelated'
   contains_food?: boolean
   is_final_scene?: boolean
@@ -261,6 +264,7 @@ export function normalizeScriptOutput(parsed: unknown): VideoScriptOutput | null
       props_present: toStringArray(scene.props_present),
       unit_presence: normalizeEnum(scene.unit_presence, UNIT_PRESENCE_VALUES),
       unit_presence_rationale: typeof scene.unit_presence_rationale === 'string' ? scene.unit_presence_rationale : undefined,
+      app_on_screen: normalizeEnum(scene.app_on_screen, UNIT_PRESENCE_VALUES),
       setting: normalizeEnum(scene.setting, SETTING_VALUES),
       contains_food: coerceBoolean(scene.contains_food),
       is_final_scene: coerceBoolean(scene.is_final_scene),
@@ -302,6 +306,7 @@ export function extractVisualState(narrationIntent: unknown): SceneVisualState |
 export interface SceneLayer2Fields {
   unit_presence?: 'none' | 'background' | 'featured'
   unit_presence_rationale?: string
+  app_on_screen?: 'none' | 'background' | 'featured'
   setting?: 'exterior' | 'interior' | 'unrelated'
   contains_food?: boolean
   cast_present?: string[]
@@ -314,6 +319,7 @@ export function extractSceneLayer2Fields(narrationIntent: unknown): SceneLayer2F
   return {
     unit_presence: normalizeEnum(v.unit_presence, UNIT_PRESENCE_VALUES),
     unit_presence_rationale: typeof v.unit_presence_rationale === 'string' ? v.unit_presence_rationale : undefined,
+    app_on_screen: normalizeEnum(v.app_on_screen, UNIT_PRESENCE_VALUES),
     setting: normalizeEnum(v.setting, SETTING_VALUES),
     contains_food: coerceBoolean(v.contains_food),
     cast_present: toStringArray(v.cast_present),
@@ -444,6 +450,7 @@ export async function runGenerateScript(
             props_present: s.props_present,
             unit_presence: s.unit_presence,
             unit_presence_rationale: s.unit_presence_rationale,
+            app_on_screen: s.app_on_screen,
             setting: s.setting,
             contains_food: s.contains_food,
             is_final_scene: s.is_final_scene,

@@ -79,6 +79,10 @@ interface WordTiming {
 // only these two numbers moved.
 const OVERSHOOT_HARD_TOLERANCE = 1.15
 const OVERSHOOT_SOFT_TOLERANCE = 1.05
+// A cut must leave at least this much of the slot filled, unless the original
+// overshoots by EXTREME_OVERSHOOT x or more (then shortening still wins).
+const MIN_FILL_AFTER_CUT = 0.7
+const EXTREME_OVERSHOOT = 1.8
 
 /** Word-level truncation — NEVER returns a fragment with no clean ending
  *  (confirmed live 2026-09-26: the old version's "don't sacrifice more than
@@ -145,7 +149,18 @@ export function computeNarrationCorrection(
   if (maxWords >= words) return null
 
   const shortenedText = truncateNarrationToWordCount(narrationText, maxWords)
-  return shortenedText !== narrationText ? { shortenedText } : null
+  if (shortenedText === narrationText) return null
+  // Sentence-level chopping can overshoot DOWNWARD: real job 8e92b381 cut a
+  // two-sentence narration to its first sentence, landing at ~58% of the
+  // slot — and since a scene's rendered length IS its narration length, that
+  // shrinks the whole video (18s delivered vs 32s requested). A moderately
+  // long scene is harmless (its clip is held/trimmed by the render step),
+  // so unless it overshoots badly, keep the original rather than accept a
+  // cut that would leave the slot mostly empty.
+  const predictedShortenedMs = (narrationWordCount(shortenedText) / selfWordsPerSecond) * 1000
+  const overshootRatio = realDurationMs / targetDurationMs
+  if (predictedShortenedMs < targetDurationMs * MIN_FILL_AFTER_CUT && overshootRatio < EXTREME_OVERSHOOT) return null
+  return { shortenedText }
 }
 
 // Cancellation check (2026-09-22, P0 fix) — see isPipelineFailed's header

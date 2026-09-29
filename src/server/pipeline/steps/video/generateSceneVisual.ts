@@ -32,6 +32,8 @@ import {
   composeSceneImagePrompt,
   composeSceneImageEditPrompt,
   composeSceneVideoPrompt,
+  appUiVideoClause,
+  sceneGuardVideoClause,
 } from '../../prompts/index'
 import type { CastBibleEntry, VideoScriptLook } from '../../prompts/types'
 import { extractVisualState, extractSceneLayer2Fields, normalizeLook, normalizeCastBible } from './generateScript'
@@ -381,7 +383,11 @@ async function runSceneImageStep(
       const layer2 = extractSceneLayer2Fields(scene.narration_intent)
       const castIds = new Set(layer2.cast_present ?? [])
       const { prompt, referenceImageUrl } = editFrom
-        ? composeSceneImageEditPrompt(BRAND_PROFILE, { ...editFrom, unitPresence: layer2.unit_presence })
+        ? composeSceneImageEditPrompt(BRAND_PROFILE, {
+            ...editFrom,
+            unitPresence: layer2.unit_presence,
+            visualDescription: scene.visual_description,
+          })
         : composeSceneImagePrompt(BRAND_PROFILE, {
             pipelineId: pipeline.id,
             sceneNumber: scene.scene_number,
@@ -391,6 +397,8 @@ async function runSceneImageStep(
             regenInstructions,
             previousVisualState: previousScene ? extractVisualState(previousScene.narration_intent) : undefined,
             unitPresence: layer2.unit_presence,
+            appPresence: layer2.app_on_screen,
+            setting: layer2.setting,
             containsFood: layer2.contains_food,
             // Only people this scene explicitly lists — an unknown/empty
             // cast_present never pulls a recurring person into the frame.
@@ -749,6 +757,8 @@ async function runSceneVideoClipStep(
           isFinalScene,
           look: plan.look,
           unitPresence: layer2.unit_presence,
+          appUiVideoClause: appUiVideoClause(BRAND_PROFILE, layer2.app_on_screen),
+          sceneGuardVideoClause: sceneGuardVideoClause(BRAND_PROFILE, layer2.unit_presence, layer2.app_on_screen),
         })
 
         console.log(`[${stepName}] NEW SUBMISSION (attempt ${attemptNumber})`)

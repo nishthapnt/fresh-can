@@ -22,6 +22,10 @@ export {
   composeSceneImagePrompt,
   composeSceneImageEditPrompt,
   composeSceneVideoPrompt,
+  appUiVideoClause,
+  sceneGuardVideoClause,
+  sceneGuardImageClause,
+  appUiImageClause,
   type ImageComposition,
   type UnitPresence,
 } from './core/compose'

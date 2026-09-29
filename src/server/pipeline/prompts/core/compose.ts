@@ -219,6 +219,51 @@ function textLayerFor(
  *   must also skip attaching any reference image (brief §8's hard rule) —
  *   this function only produces the text half of that.
  */
+export type AppPresence = 'none' | 'background' | 'featured'
+
+/** Palette clause for scenes where a person uses the brand's app. Pure
+ *  prompt text: no validation, no retry, no extra provider call. Empty for
+ *  'none'/undefined or a brand with no appUi. */
+export function appUiImageClause(brand: BrandProfile, presence: AppPresence | undefined): string {
+  if (!presence || presence === 'none' || !brand.appUi) return ''
+  // 'featured' means the phone IS a focal point of the scene, so it must
+  // actually appear — the palette rule alone only governs how it looks IF
+  // present, and a unit-featured composition otherwise crowds the phone out.
+  const mustShow =
+    presence === 'featured'
+      ? `The phone showing the ${brand.name} app must be clearly visible and in focus in the frame. `
+      : ''
+  return mustShow + brand.appUi.imageClause
+}
+
+/** The self-serve/no-vendor guard: applied whenever the unit, its interior,
+ *  or the app is in the scene, so vendor/market imagery can't creep in. */
+export function sceneGuardImageClause(
+  brand: BrandProfile,
+  unitPresence: UnitPresence | undefined,
+  appPresence: AppPresence | undefined,
+): string {
+  const relevant = (unitPresence && unitPresence !== 'none') || (appPresence && appPresence !== 'none')
+  return relevant ? (brand.sceneGuard?.image ?? '') : ''
+}
+
+export function sceneGuardVideoClause(
+  brand: BrandProfile,
+  unitPresence: UnitPresence | undefined,
+  appPresence: AppPresence | undefined,
+): string {
+  const relevant = (unitPresence && unitPresence !== 'none') || (appPresence && appPresence !== 'none')
+  return relevant ? (brand.sceneGuard?.video ?? '') : ''
+}
+
+export function appUiVideoClause(brand: BrandProfile, presence: AppPresence | undefined): string {
+  return presence && presence !== 'none' ? (brand.appUi?.videoClause ?? '') : ''
+}
+
+function interiorBlock(brand: BrandProfile): string {
+  return `${brand.unit.interior} The scene takes place INSIDE the store, never outside it.`
+}
+
 function unitBrandingBlock(brand: BrandProfile, presence: UnitPresence): string {
   if (presence === 'none') {
     return (
@@ -719,6 +764,14 @@ interface SceneImageJob {
    *  when food isn't actually present costs nothing but a few characters. */
   unitPresence?: UnitPresence
   containsFood?: boolean
+  /** THIS scene's own Layer 2 app_on_screen — is a person shown using the
+   *  brand's app. Undefined defaults to 'none' (never adds the palette
+   *  clause without a real signal). Prompt-only; never triggers a retry. */
+  appPresence?: AppPresence
+  /** THIS scene's Layer 2 setting. 'interior' (with a unit present) builds
+   *  the scene inside the store from the interior reference photos instead
+   *  of editing the exterior truck photo. Undefined behaves as before. */
+  setting?: 'exterior' | 'interior' | 'unrelated'
   /** The cast_bible entries for the people THIS scene lists in its
    *  cast_present (Layer 2, generateScript.ts) — the caller does the
    *  filtering. Spliced in as a locked physical description so a
@@ -826,6 +879,15 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   const unitPresence = job.unitPresence ?? 'none'
   const showSubject = unitPresence !== 'none'
   const containsFood = job.containsFood ?? true
+  const appClause = appUiImageClause(brand, job.appPresence)
+  let guardClause = sceneGuardImageClause(brand, job.unitPresence, job.appPresence)
+  // An interior scene must be built from the store's interior, not the
+  // exterior truck: editing the exterior reference is what kept "inside"
+  // scenes outdoors and drifting to crates-on-the-sidewalk imagery.
+  const interiorRef =
+    job.setting === 'interior' && (job.unitPresence ?? 'none') !== 'none'
+      ? pickReferenceFrom(brand.referenceImages.interior, `${job.pipelineId}:${job.sceneNumber}:interior`)
+      : undefined
   const look = sceneLookClause(job.look)
 
   // Everything below is a fixed brand/safety constraint sent in full,
@@ -843,7 +905,8 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
     showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
-    unitBrandingBlock(brand, unitPresence),
+    appClause,
+    interiorRef ? interiorBlock(brand) : unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
     showSubject ? brand.noNewTextInstruction : noTextVariantFor(brand, unitPresence),
   ].filter(Boolean)
@@ -872,7 +935,8 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     (shotNotes ? 1 + `Shot notes: ${shotNotes}.`.length : 0) +
     (cast ? 1 + cast.length : 0) +
     (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) +
-    (continuityClause ? 1 + continuityClause.length : 0)
+    (continuityClause ? 1 + continuityClause.length : 0) +
+    (guardClause ? 1 + guardClause.length : 0)
 
   let overflow = totalLen() - PROMPT_LIMITS.sceneImage
   if (overflow > 0 && continuityClause) {
@@ -881,6 +945,13 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   }
   if (overflow > 0 && regenInstructions) {
     regenInstructions = truncateToFit(regenInstructions, regenInstructions.length - overflow)
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
+  // The self-serve guard is a brand-drift safeguard on top of the unit's own
+  // structural rules (which stay on the fixed path), so it yields before any
+  // real scene content is shortened — never the other way round.
+  if (overflow > 0 && guardClause) {
+    guardClause = ''
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   if (overflow > 0 && shotNotes) {
@@ -915,6 +986,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // draw, not a trailing constraint.
     cast,
     continuityClause,
+    guardClause,
     // Same look per pipeline (not per scene) — keeps lighting/atmosphere
     // consistent across all of one video's scenes.
     look,
@@ -922,6 +994,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
     showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
+    appClause,
   ]
 
   // unitBrandingBlock covers all three presence levels (featured/
@@ -930,7 +1003,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   // true (never an empty-pool edge case the way blog/photo can have), so
   // noNewTextInstruction is always the right no-text variant here.
   let referenceImageUrl: string | undefined
-  parts.push(unitBrandingBlock(brand, unitPresence))
+  parts.push(interiorRef ? interiorBlock(brand) : unitBrandingBlock(brand, unitPresence))
   if (showSubject) {
     // REFERENCE_IS_GUIDE_NOT_COPY explicitly tells the model to build a
     // genuinely new scene around the vehicle rather than copy the
@@ -939,7 +1012,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     // that scene's actual visual_description.
     parts.push(REFERENCE_IS_GUIDE_NOT_COPY)
     parts.push(brand.noNewTextInstruction)
-    referenceImageUrl = job.characterRefUrl
+    referenceImageUrl = interiorRef ? interiorRef.url : job.characterRefUrl
   } else {
     // No reference image attached at all for a non-relevant scene — a pure
     // text-to-image generation, so edit-mode's own bias toward
@@ -960,6 +1033,9 @@ interface SceneImageEditJob {
   /** The vision gate's blocking issues for that image. */
   issues: readonly string[]
   unitPresence?: UnitPresence
+  /** The scene's own description, re-stated briefly so an edit-mode retry
+   *  can't drift away from what the scene is meant to show. */
+  visualDescription?: string
 }
 
 /**
@@ -981,16 +1057,23 @@ export function composeSceneImageEditPrompt(brand: BrandProfile, job: SceneImage
   const issues = job.issues.map((i) => truncateToFit(i, PLAN_FIELD_MAX_CHARS)).slice(0, 5)
   const parts = [
     `Edit this image to fix only ${issues.length === 1 ? 'this defect' : 'these defects'}: ${issues.join('; ')}.`,
+    job.visualDescription
+      ? `The scene must still show: ${truncateToFit(job.visualDescription, 360)}`
+      : '',
     'Keep everything else exactly as it is — the same people, faces, clothing, poses, objects, composition, ' +
       'framing, lighting, and colors. Every visible hand belongs to a person in the image, with natural anatomy.',
     unitPresence === 'none' ? noTextVariantFor(brand, 'none') : brand.noNewTextInstruction,
   ]
-  const prompt = parts.join(' ')
+  const prompt = parts.filter(Boolean).join(' ')
   assertNoContradiction(prompt, brand)
   return { prompt, referenceImageUrl: job.rejectedImageUrl }
 }
 
 interface SceneVideoJob {
+  /** Pre-resolved via appUiVideoClause(brand, appPresence); '' / omitted adds nothing. */
+  appUiVideoClause?: string
+  /** Pre-resolved via sceneGuardVideoClause(brand, unitPresence, appPresence). */
+  sceneGuardVideoClause?: string
   visualDescription: string
   shotNotes: string | null
   /** True only for the LAST scene in the video. Adds a settle-the-motion
@@ -1151,6 +1234,7 @@ const WORDMARK_LEGIBILITY_CLAUSE =
   'never distorted, mirrored, or reinterpreted.'
 
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
+  const appClause = (job.appUiVideoClause ?? '') + (job.sceneGuardVideoClause ?? '')
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
     'motion already implied by the setting — steam, smoke, wind moving hair, fabric, or leaves, water, ' +
@@ -1168,6 +1252,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +
     (job.unitPresence && job.unitPresence !== 'none' ? WORDMARK_LEGIBILITY_CLAUSE : '') +
+    appClause +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
   let visualDescription = job.visualDescription

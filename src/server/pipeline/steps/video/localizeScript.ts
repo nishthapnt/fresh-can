@@ -12,6 +12,63 @@ import {
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
 import { BRAND_PROFILE, composeLocalizeScriptSystemPrompt } from '../../prompts/index'
+import { NARRATION_WORDS_PER_SECOND, narrationWordCount } from '../../../../lib/videoNarrationBudget'
+
+// A finished video's length is the SUM of its scenes' real narration
+// lengths (renderLanguageTrack.ts sizes every scene to its audio), so a
+// scene whose narration lands far under its planned slot shrinks the whole
+// video. Real job f0df42af (36s requested): scene 1 (5s slot) got 4 words,
+// scene 2 (6s) 5 words, scene 6 (4s) 5 words — narration summed to 22.7s.
+// The system prompt already asked for fuller narration, but prose alone
+// isn't enforced; this is. MIN is the floor before a corrective rewrite;
+// MAX keeps the rewrite from overshooting (an overshoot triggers a paid
+// ElevenLabs resynthesis in transcribeAudio.ts, so never aim high).
+const MIN_FILL = 0.85
+const MAX_FILL = 1.05
+
+export function narrationWordRange(targetDurationMs: number): { min: number; max: number } {
+  const seconds = targetDurationMs / 1000
+  return {
+    min: Math.max(1, Math.ceil(seconds * NARRATION_WORDS_PER_SECOND * MIN_FILL)),
+    max: Math.max(1, Math.floor(seconds * NARRATION_WORDS_PER_SECOND * MAX_FILL)),
+  }
+}
+
+/** How far outside its word band a narration sits, in words (0 = inside).
+ *  Over-long is tolerated up to OVER_TOLERANCE x max: a slightly long scene
+ *  just lengthens the video, but a far-too-long one gets sentence-chopped by
+ *  transcribeAudio.ts's overshoot correction — which collapsed real job
+ *  8e92b381's 24-word narration for a 5s slot down to 5 words (1.6s) after
+ *  a paid synthesis. Rewriting it here, as text, is free of that cliff. */
+const OVER_TOLERANCE = 1.15
+
+function bandDistance(words: number, targetDurationMs: number): number {
+  const { min, max } = narrationWordRange(targetDurationMs)
+  if (words < min) return min - words
+  const hardMax = Math.floor(max * OVER_TOLERANCE)
+  return words > hardMax ? words - hardMax : 0
+}
+
+/** Scene numbers whose narration is far too short OR far too long for its slot. */
+export function findOffBandScenes(
+  scenes: readonly { scene_number: number; target_duration_ms: number }[],
+  localized: readonly { scene_number: number; narration_text: string }[],
+): number[] {
+  return scenes
+    .filter((scene) => {
+      const match = localized.find((l) => l.scene_number === scene.scene_number)
+      return !!match && bandDistance(narrationWordCount(match.narration_text), scene.target_duration_ms) > 0
+    })
+    .map((scene) => scene.scene_number)
+}
+
+/** Whether `candidate` is strictly closer to the slot's word band than `current`. */
+export function isBetterFit(current: string, candidate: string, targetDurationMs: number): boolean {
+  return (
+    bandDistance(narrationWordCount(candidate), targetDurationMs) <
+    bandDistance(narrationWordCount(current), targetDurationMs)
+  )
+}
 
 interface LocalizedScene {
   scene_number: number
@@ -105,6 +162,8 @@ export async function runLocalizeScript(
           scene_number: s.scene_number,
           narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
           target_duration_seconds: Math.round(s.target_duration_ms / 1000),
+          min_words: narrationWordRange(s.target_duration_ms).min,
+          max_words: narrationWordRange(s.target_duration_ms).max,
         })),
       ),
       stepName: 'localize_script',
@@ -113,7 +172,44 @@ export async function runLocalizeScript(
     if (!isValidLocalizeOutput(result.parsed, scenes.length)) {
       throw new Error('localize_script: model output did not match the required JSON shape')
     }
-    const localized = result.parsed.scenes
+    let localized = result.parsed.scenes
+
+    // One corrective text-only pass (a cheap LLM call — no ElevenLabs/KIE
+    // spend) for scenes far outside their word band (too short OR too long).
+    // Best-effort: never throws, only swaps in a rewrite that fits the band
+    // better, and a still-off result is accepted rather than failing the track.
+    const shortScenes = findOffBandScenes(scenes, localized)
+    if (shortScenes.length > 0) {
+      try {
+        const retry = await scriptGenerator.generate({
+          systemPrompt: composeLocalizeScriptSystemPrompt(BRAND_PROFILE, {
+            language: track.language === 'FR' ? 'French' : 'English',
+          }),
+          userPrompt: JSON.stringify(
+            scenes
+              .filter((s) => shortScenes.includes(s.scene_number))
+              .map((s) => ({
+                scene_number: s.scene_number,
+                narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
+                target_duration_seconds: Math.round(s.target_duration_ms / 1000),
+                min_words: narrationWordRange(s.target_duration_ms).min,
+                max_words: narrationWordRange(s.target_duration_ms).max,
+                previous_narration_off_length: localized.find((l) => l.scene_number === s.scene_number)?.narration_text,
+              })),
+          ),
+          stepName: 'localize_script',
+        })
+        if (isValidLocalizeOutput(retry.parsed, shortScenes.length)) {
+          const fixed = retry.parsed.scenes
+          localized = localized.map((l) => {
+            const f = fixed.find((x) => x.scene_number === l.scene_number)
+            return f && isBetterFit(l.narration_text, f.narration_text, scenes.find((x) => x.scene_number === l.scene_number)?.target_duration_ms ?? 0) ? f : l
+          })
+        }
+      } catch {
+        // keep the first-pass narration
+      }
+    }
 
     for (const scene of scenes) {
       const match = localized.find((l) => l.scene_number === scene.scene_number)
