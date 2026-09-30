@@ -1,18 +1,44 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { usePathname } from 'next/navigation'
 import { Menu } from 'lucide-react'
 import Sidebar from './Sidebar'
+import { Toaster } from '@/components/ui/toast'
 import VideoToast from '@/components/VideoToast'
 import type { VideoNotification } from '@/components/VideoToast'
 import { supabase } from '@/lib/supabase'
 import { LOGO_SRC } from '@/lib/brand'
 
+const COLLAPSED_KEY = 'sidebar-collapsed'
+const COLLAPSED_EVENT = 'sidebar-collapsed-change'
+
+function subscribeCollapsed(cb: () => void) {
+  window.addEventListener('storage', cb)
+  window.addEventListener(COLLAPSED_EVENT, cb)
+  return () => {
+    window.removeEventListener('storage', cb)
+    window.removeEventListener(COLLAPSED_EVENT, cb)
+  }
+}
+
+function getCollapsed() {
+  try { return localStorage.getItem(COLLAPSED_KEY) === '1' } catch { return false }
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [notification, setNotification] = useState<VideoNotification | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Desktop-only collapse, remembered per browser. useSyncExternalStore keeps
+  // the server render (expanded) and first client render identical, then
+  // switches to the stored value without a hydration mismatch.
+  const collapsed = useSyncExternalStore(subscribeCollapsed, getCollapsed, () => false)
+
+  const toggleCollapsed = () => {
+    try { localStorage.setItem(COLLAPSED_KEY, collapsed ? '0' : '1') } catch { /* storage unavailable */ }
+    window.dispatchEvent(new Event(COLLAPSED_EVENT))
+  }
 
   useEffect(() => {
     const channel = supabase
@@ -81,12 +107,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </header>
 
       {/* Sidebar — desktop fixed, mobile overlay */}
-      <Sidebar mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
 
       {/* Main content */}
-      <main className="md:pl-64">
+      <main className={`transition-[padding] duration-300 ${collapsed ? 'md:pl-16' : 'md:pl-64'}`}>
         <div className="p-4 sm:p-6 md:p-8">{children}</div>
       </main>
+
+      <Toaster />
 
       {notification && !isOnLibrary && (
         <VideoToast
