@@ -26,6 +26,7 @@ import type {
   BlogLibraryItem,
 } from '@/types/content'
 import StatusBadge from '@/components/StatusBadge'
+import { downloadFile } from '@/lib/download'
 import {
   AlertCircle,
   BookOpen,
@@ -38,7 +39,6 @@ import {
   PenLine,
   Clock,
   Download,
-  ExternalLink,
   Inbox,
   Play,
   PlusCircle,
@@ -242,11 +242,9 @@ function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Vid
                 {item.category} · {item.language}{duration ? ` · ${duration}s` : ''}
               </p>
             </div>
-            <a href={item.video_url} download={filename}>
-              <Button size="sm" variant="outline">
+            <Button size="sm" variant="outline" onClick={() => downloadFile(item.video_url, filename)}>
                 <Download className="mr-1.5 h-3.5 w-3.5" />Download
               </Button>
-            </a>
           </div>
         </DialogContent>
       </Dialog>
@@ -326,11 +324,9 @@ function MiniImageCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Ima
               )}
               <p className="mt-1.5 text-xs text-gray-500 sm:text-sm">{item.category} · {item.language}</p>
             </div>
-            <a href={item.image_url} download={filename}>
-              <Button size="sm" variant="outline">
+            <Button size="sm" variant="outline" onClick={() => downloadFile(item.image_url, filename)}>
                 <Download className="mr-1.5 h-3.5 w-3.5" />Download
               </Button>
-            </a>
           </div>
         </DialogContent>
       </Dialog>
@@ -450,16 +446,6 @@ function MiniBlogCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Blog
               ) : null}
             </div>
 
-            {/* Footer */}
-            {item.file_url && (
-              <div className="flex shrink-0 justify-end border-t p-4">
-                <a href={item.file_url} target="_blank" rel="noopener noreferrer">
-                  <Button size="sm" variant="outline">
-                    <ExternalLink className="mr-1.5 h-3.5 w-3.5" />Open Post
-                  </Button>
-                </a>
-              </div>
-            )}
           </DialogContent>
         </Dialog>
       )}

@@ -43,7 +43,6 @@ import {
   CheckCircle2,
   Clock,
   Download,
-  ExternalLink,
   Loader2,
   Play,
   RefreshCw,
@@ -58,6 +57,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { PAGE_SIZE, usePagination } from '@/lib/usePagination'
 import { clickableProps, FOCUS_RING } from '@/lib/a11y'
 import { toast } from '@/components/ui/toast'
+import { downloadFile } from '@/lib/download'
 import { RelativeTime } from '@/components/ui/relative-time'
 import { Chip } from '@/components/ui/chip'
 async function getPostedJobIds(contentType: string): Promise<Set<string>> {
@@ -671,11 +671,16 @@ function VideoCard({
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
             <div className="flex gap-1.5">
-              <a href={item.video_url} download={filename} className="flex flex-1" title="Save" aria-label="Save">
-                <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
-              </a>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-border px-0 text-muted-foreground hover:text-foreground"
+                onClick={() => downloadFile(item.video_url, filename)}
+                title="Save"
+                aria-label="Save"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -710,9 +715,7 @@ function VideoCard({
               <Button size="sm" onClick={() => { setViewOpen(false); setPostOpen(true) }}>
                 <Share2 className="mr-1.5 h-3.5 w-3.5" />Post
               </Button>
-              <a href={item.video_url} download={filename}>
-                <Button size="sm" variant="outline"><Download className="mr-1.5 h-3.5 w-3.5" />Download</Button>
-              </a>
+              <Button size="sm" variant="outline" onClick={() => downloadFile(item.video_url, filename)}><Download className="mr-1.5 h-3.5 w-3.5" />Download</Button>
             </div>
           </div>
         </DialogContent>
@@ -864,11 +867,16 @@ function ImageCard({
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
             <div className="flex gap-1.5">
-              <a href={item.image_url} download={filename} className="flex flex-1" title="Save" aria-label="Save">
-                <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
-              </a>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-border px-0 text-muted-foreground hover:text-foreground"
+                onClick={() => downloadFile(item.image_url, filename)}
+                title="Save"
+                aria-label="Save"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -914,9 +922,7 @@ function ImageCard({
                 <Button size="sm" onClick={() => { setViewOpen(false); setPostOpen(true) }}>
                   <Share2 className="mr-1.5 h-3.5 w-3.5" />Post
                 </Button>
-                <a href={item.image_url} download={filename}>
-                  <Button size="sm" variant="outline"><Download className="mr-1.5 h-3.5 w-3.5" />Download</Button>
-                </a>
+                <Button size="sm" variant="outline" onClick={() => downloadFile(item.image_url, filename)}><Download className="mr-1.5 h-3.5 w-3.5" />Download</Button>
               </div>
             </div>
           </div>
@@ -1241,13 +1247,16 @@ function BlogCard({
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
             <div className="flex gap-1.5">
-              {item.file_url && (
-                <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="flex flex-1" title="Open link" aria-label="Open link">
-                  <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                </a>
-              )}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-border px-0 text-muted-foreground hover:text-foreground"
+                onClick={() => setReadOpen(true)}
+                title="Preview"
+                aria-label="Preview"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -1327,13 +1336,6 @@ function BlogCard({
               <Button size="sm" onClick={() => { setReadOpen(false); setPostOpen(true) }}>
                 <Share2 className="mr-1.5 h-3.5 w-3.5" />Post This
               </Button>
-              {item.file_url && (
-                <a href={item.file_url} target="_blank" rel="noopener noreferrer">
-                  <Button size="sm" variant="outline">
-                    <ExternalLink className="mr-1.5 h-3.5 w-3.5" />Open Published Post
-                  </Button>
-                </a>
-              )}
             </div>
           </DialogContent>
         </Dialog>

@@ -1886,3 +1886,8 @@
 
 ### 2026-09-30 — Sidebar Library icon
 - Library icon LayoutGrid → FolderOpen (it looked too similar to the Dashboard's LayoutDashboard).
+
+### 2026-09-30 — Real downloads for image/video; blog "Open link" no longer downloads
+- Image/video Save + Download buttons (library cards, library view dialogs, dashboard dialogs) used `<a download>`, which browsers ignore for cross-origin URLs (Supabase Storage), so the file opened instead. New `src/lib/download.ts` `downloadFile(url, filename)` fetches the file and saves it as a blob (Supabase serves CORS `*`); failures show an error toast.
+- Blog: `generated_content.file_url` is the KIE temp hero image, served with `Content-Disposition: attachment`, so "Open link" / "Open Published Post" / "Open Post" always downloaded it (there is no published-post URL in the data). The library card button is now "Preview" (opens the existing read dialog); the two dialog-footer link buttons were removed since those dialogs are already the preview.
+- `tsc --noEmit` clean; not verified in a browser.
