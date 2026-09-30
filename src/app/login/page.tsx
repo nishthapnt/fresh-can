@@ -4,7 +4,6 @@ import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { LOGO_SRC } from '@/lib/brand'
 
 function LoginForm() {
   const router = useRouter()
@@ -44,16 +43,16 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-white p-8">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-primary-subtle px-4 py-10">
+      <div className="w-full max-w-sm overflow-hidden rounded-lg border border-border border-t-4 border-t-primary bg-white p-8">
         <div className="mb-6 flex flex-col items-center text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={LOGO_SRC}
+            src="/freshcan-logo-favicon.png"
             alt="Fresh-CAN"
-            className="mb-3 h-9 w-auto max-w-[220px] object-contain"
+            className="mb-3 h-20 w-20 object-contain"
           />
-          <h1 className="text-lg font-bold text-gray-900">Content Studio</h1>
+          <h1 className="text-lg font-bold text-foreground">Content Studio</h1>
           <p className="mt-1 text-sm text-gray-500">Sign in to continue</p>
         </div>
 
@@ -89,7 +88,7 @@ function LoginForm() {
           </div>
 
           {error && (
-            <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+            <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
