@@ -1847,3 +1847,42 @@
 ### 2026-09-30 — Logo optimization + favicon
 - Favicon now uses the square leaf+wordmark: `public/freshcan-logo-favicon.png` (512×512), `public/apple-touch-icon.png` (180×180, opaque white), and `src/app/favicon.ico` regenerated (16/32/48) so Next's auto `/favicon.ico` agrees with the metadata icons.
 - Sizes: wordmark 263 KB → 7 KB (trimmed, 720px wide, 128-color PNG, still 2× the largest 220px slot); favicon 375 KB → 11 KB; favicon.ico 26 KB → 5 KB. Originals moved to `design-src/` (not served). `proxy.ts` matcher excludes the new static icon files.
+
+### 2026-09-30 — Library card action hierarchy + sticky filter bar
+- Video/Image/Blog cards: Post is the single filled (maroon) full-width button; Save, Delete (and Link on blog) are icon-only with `title`/`aria-label`. The Watch/View/Read buttons were removed — clicking the preview opens the same modal (already wired on all three). Removed unused `ImageIcon` import.
+- `FilterBar` is sticky (`top-14` under the mobile header, `top-0` from `md`), edge-to-edge with a border and translucent background, so search/category/language/sort stay reachable across paged grids.
+- `tsc --noEmit` clean; not verified visually. Touch devices have no hover play-overlay, so preview-tap discoverability is worth a look.
+
+### 2026-09-30 — Collapsible sidebar (desktop)
+- `Sidebar.tsx`: `collapsed` / `onToggleCollapse` props. Collapsed = 64px icon rail (md+ only; the mobile drawer is always full width): favicon leaf replaces the wordmark, nav shows icons with `title` tooltips, KIE credits shrink to the bolt icon (tooltip has the balance), logout icon-only, brand box hidden. Collapse/Expand toggle at the top of the footer (`aria-expanded`). Width animates (`transition-[transform,width]`).
+- `DashboardLayout.tsx`: state persisted in localStorage via `useSyncExternalStore` (server render = expanded, no hydration mismatch, lint-clean); `<main>` padding switches `md:pl-64` ↔ `md:pl-16`.
+- `tsc --noEmit` clean, no eslint findings in `components/layout`; not verified visually.
+
+### 2026-09-30 — Sidebar collapse handle moved to the edge
+- Replaced the footer "Collapse" button with a round chevron handle straddling the sidebar's right border at header height (md+ only): 32×32 hit area around a 24px visible circle, `aria-expanded`/`aria-label`/`title`, visible focus ring. Same position in both states. `tsc --noEmit` clean, no eslint findings in `components/layout`; not verified visually.
+
+### 2026-09-30 — KIE credits box links to KIE billing
+- The sidebar KIE credits box is now an external link (new tab, `noopener noreferrer`) to `https://kie.ai/billing` (URL taken from kie.ai's own nav). Sign-in for signed-out users is handled by KIE on landing. Works in all states (loading/error/ready) and in the collapsed rail (tooltip shows balance). Small external-link icon + hover state added. Frontend only; the credits API route is untouched.
+
+### 2026-09-30 — UI batch: toasts, job progress, subtitles, validation, a11y, dates, chips, login
+- **Toasts:** `components/ui/toast.tsx` — dependency-free store (`toast.success/error/info`) + `<Toaster />` mounted in `DashboardLayout`. Wired to library delete (success/error) and post-queued.
+- **In-progress jobs:** `components/JobProgressList.tsx` on the dashboard (under the existing ActiveGenerationBanner) — 4-step stepper (Drafting → Review → Generating → Ready) derived from `content_jobs.status` via the existing `getRecentJobs`; failures only shown for 24h. No backend/schema changes.
+- **Page headers:** `TopBar` gains an optional `description`; added to Dashboard, Library, Posted, Job and Social pages.
+- **New-content form:** inline per-field errors (topic, scene idea) with `aria-invalid`/`aria-describedby`, focus moves to the first bad field; helper text under the disabled submit when no content type is picked.
+- **Keyboard access:** `lib/a11y.ts` `clickableProps` + `FOCUS_RING` — library previews, dashboard mini cards and `ContentCard` are now `role="button"`, tabbable, Enter/Space-activated with a visible focus ring.
+- **Dates/chips:** `ui/relative-time.tsx` ("2h ago", full date on hover) on card bodies (library + dashboard); `ui/chip.tsx` shared chip for category/language/duration/read-time. Status badges unchanged.
+- **Login:** brand-tinted page, maroon top accent on the card, leaf+wordmark mark, `role="alert"` on errors.
+- `tsc --noEmit` clean; no new eslint findings (remaining are pre-existing). Not verified visually/in a browser.
+
+### 2026-09-30 — Favicon re-optimized from the new artwork
+- User replaced `public/freshcan-logo-favicon.png` with new art (maroon wordmark, transparent, 1254², 336 KB). Kept it as the source in `design-src/`, then rebuilt from it: favicon PNG 256×256 / 64 colors (336 KB → 4.3 KB, content re-centered in a square), `apple-touch-icon.png` 180² on white (6 KB), `src/app/favicon.ico` 16/32/48 (4 KB). 256px still covers the largest use (login mark, 80px, at 2×).
+
+### 2026-09-30 — In-app confirm dialog replaces window.confirm
+- New `components/ui/confirm-dialog.tsx` (`useConfirm()` → `await confirm({...})` + `{confirmDialog}`): promise-based, built on the existing `Dialog`, Cancel auto-focused, Escape/outside-click = cancel, destructive (red) or primary confirm.
+- Replaced all 5 `window.confirm` calls: job page Stop generation (video / blog / image post) and New Content page cancel + "Start New". Stop handlers now also show a "Generation stopped" toast. Stop/cancel logic and API calls unchanged. `tsc --noEmit` clean; not verified in a browser.
+
+### 2026-09-30 — Dialog close button visible on any background
+- `ui/dialog.tsx`: the shared close button is now a solid white circle with a bold black cross, ring + shadow, 32px, `z-10` — previously a ghost icon that vanished over the black video player (and photos). Applies to every dialog.
+
+### 2026-09-30 — Sidebar Library icon
+- Library icon LayoutGrid → FolderOpen (it looked too similar to the Dashboard's LayoutDashboard).
