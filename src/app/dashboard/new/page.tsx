@@ -31,6 +31,7 @@ import { useNewContentStore } from '@/stores/newContentStore'
 import type { ContentType, ScriptType, Language, ImageStyle, ContentAngle, AspectRatio } from '@/stores/newContentStore'
 import { VIDEO_VOICES } from '@/lib/videoVoices'
 import { getJobGenerationState, type JobGenerationState } from '@/lib/jobGenerationState'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 // Maps a content_type to its cancel route's URL segment (image_post's route
 // lives under /image, not /image_post).
@@ -243,8 +244,11 @@ function VoiceCardGroup({
 
 export default function NewContentPage() {
   const router = useRouter()
+  const { confirm, confirmDialog } = useConfirm()
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
+  // Inline, per-field validation (shown under the field, focus moves to the first bad one).
+  const [fieldErrors, setFieldErrors] = useState<{ topic?: string; scene_notes?: string }>({})
 
   const {
     topic, category, target_audience, script_type, video_duration,
@@ -381,8 +385,14 @@ export default function NewContentPage() {
     e.preventDefault()
     setError(null)
 
-    if (!topic.trim())              return setError('Topic is required')
-    if (!scene_notes.trim())        return setError('Your Scene Idea is required')
+    const nextErrors: { topic?: string; scene_notes?: string } = {}
+    if (!topic.trim())       nextErrors.topic = 'Enter a topic so the AI knows what to write about.'
+    if (!scene_notes.trim()) nextErrors.scene_notes = 'Describe the scene or story idea — everything is built around it.'
+    setFieldErrors(nextErrors)
+    if (nextErrors.topic || nextErrors.scene_notes) {
+      document.getElementById(nextErrors.topic ? 'topic' : 'scene_notes')?.focus()
+      return
+    }
     if (content_types.length === 0) return setError('Select at least one content type')
 
     setPhase('creating')
@@ -572,7 +582,13 @@ export default function NewContentPage() {
 
   const handleCancel = async () => {
     if (status === 'pending') {
-      const ok = window.confirm('Content is being generated. Cancel and lose all progress?')
+      const ok = await confirm({
+        title: 'Cancel generation?',
+        description: 'Content is being generated. Cancelling will lose all progress.',
+        confirmLabel: 'Cancel generation',
+        cancelLabel: 'Keep generating',
+        destructive: true,
+      })
       if (!ok) return
       if (pendingJobId && pendingGenState === 'pending') {
         await cancelAllPipelines(pendingJobId, content_types)
@@ -584,6 +600,7 @@ export default function NewContentPage() {
 
   return (
     <div className="mx-auto max-w-[600px] py-6">
+      {confirmDialog}
 
       {/* ── Clarifying questions step — shown only after image_post job creation ── */}
       {phase === 'awaiting_questions' && pendingImageJob && (
@@ -690,11 +707,14 @@ export default function NewContentPage() {
               type="button"
               disabled={cancellingPending}
               onClick={async () => {
-                const ok = window.confirm(
-                  pendingGenState === 'failed'
-                    ? 'Start a new request?'
-                    : 'Cancel this generation and start a new request?',
-                )
+                const failed = pendingGenState === 'failed'
+                const ok = await confirm({
+                  title: failed ? 'Start a new request?' : 'Cancel this generation?',
+                  description: failed ? undefined : 'This cancels the current generation so you can start a new request.',
+                  confirmLabel: failed ? 'Start new' : 'Cancel and start new',
+                  cancelLabel: failed ? 'Cancel' : 'Keep generating',
+                  destructive: !failed,
+                })
                 if (!ok) return
                 if (pendingGenState === 'pending') {
                   setCancellingPending(true)
@@ -738,10 +758,13 @@ export default function NewContentPage() {
               <Input
                 id="topic"
                 value={topic}
-                onChange={(e) => setField('topic', e.target.value)}
+                onChange={(e) => { setField('topic', e.target.value); if (fieldErrors.topic) setFieldErrors((f) => ({ ...f, topic: undefined })) }}
                 placeholder="e.g. Food Deserts in Calgary"
                 disabled={isSubmitting}
+                aria-invalid={!!fieldErrors.topic}
+                aria-describedby={fieldErrors.topic ? 'topic-error' : undefined}
               />
+              {fieldErrors.topic && <p id="topic-error" role="alert" className="text-xs text-destructive">{fieldErrors.topic}</p>}
             </div>
 
             <div className="space-y-1.5">
@@ -836,11 +859,14 @@ export default function NewContentPage() {
               <Textarea
                 id="scene_notes"
                 value={scene_notes}
-                onChange={(e) => setField('scene_notes', e.target.value)}
+                onChange={(e) => { setField('scene_notes', e.target.value); if (fieldErrors.scene_notes) setFieldErrors((f) => ({ ...f, scene_notes: undefined })) }}
+                aria-invalid={!!fieldErrors.scene_notes}
+                aria-describedby={fieldErrors.scene_notes ? 'scene_notes-error' : undefined}
                 placeholder="e.g. Show a senior who can't reach the food bank during a heatwave, then Fresh-CAN arrives with cold groceries..."
                 disabled={isSubmitting}
                 rows={4}
               />
+              {fieldErrors.scene_notes && <p id="scene_notes-error" role="alert" className="text-xs text-destructive">{fieldErrors.scene_notes}</p>}
               <p className="text-xs text-gray-400">
                 This is the creative brief the Image Post photo, the Blog post&apos;s angle and images, and the
                 Video&apos;s story and scenes are all built around. Fresh-CAN&apos;s own brand details only shape
@@ -1010,6 +1036,9 @@ export default function NewContentPage() {
             </>
           )}
         </Button>
+        {content_types.length === 0 && !isSubmitting && (
+          <p className="text-center text-xs text-muted-foreground">Pick at least one content type above to continue.</p>
+        )}
 
         {/* Cancel */}
         <div className="text-center">

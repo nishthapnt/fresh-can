@@ -29,6 +29,8 @@ import {
   StopCircle,
   Save,
 } from 'lucide-react'
+import { useConfirm } from '@/components/ui/confirm-dialog'
+import { toast } from '@/components/ui/toast'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1493,6 +1495,7 @@ export default function JobDetailPage() {
 
   const { addJob, updateJob } = useContentJobStore()
   const { clearAfterApproval, clearOnCancel } = useNewContentStore()
+  const { confirm, confirmDialog } = useConfirm()
 
   const [loading, setLoading]     = useState(true)
   const [job, setJob]             = useState<ContentJob | null>(null)
@@ -1567,9 +1570,12 @@ export default function JobDetailPage() {
   const [videoCancelError, setVideoCancelError] = useState<string | null>(null)
 
   const handleVideoCancel = useCallback(async () => {
-    if (!window.confirm('Stop generating this video? Progress so far is kept, but nothing further will be generated.')) {
-      return
-    }
+    if (!(await confirm({
+      title: 'Stop generating this video?',
+      description: 'Progress so far is kept, but nothing further will be generated.',
+      confirmLabel: 'Stop generation',
+      destructive: true,
+    }))) return
     setVideoCancelling(true)
     setVideoCancelError(null)
     const res = await fetch(`/api/jobs/${job_id}/video/cancel`, { method: 'POST' })
@@ -1586,7 +1592,8 @@ export default function JobDetailPage() {
     // — cancelling here never touched that page's session state, only this
     // job's own pipeline/track rows.
     clearOnCancel(job_id)
-  }, [job_id, loadVideoStatus, clearOnCancel])
+    toast.success('Generation stopped', 'Progress so far is kept.')
+  }, [job_id, loadVideoStatus, clearOnCancel, confirm])
 
   // Blog/image_post have no equivalent of videoStatus today (see that
   // state's own doc comment) — this is the minimal slice of it (just the
@@ -1663,7 +1670,12 @@ export default function JobDetailPage() {
   }
 
   const handleBlogCancel = useCallback(async () => {
-    if (!window.confirm('Stop generating this blog post? Progress so far is kept, but nothing further will be generated.')) return
+    if (!(await confirm({
+      title: 'Stop generating this blog post?',
+      description: 'Progress so far is kept, but nothing further will be generated.',
+      confirmLabel: 'Stop generation',
+      destructive: true,
+    }))) return
     setBlogCancelling(true)
     setBlogCancelError(null)
     const res = await fetch(`/api/jobs/${job_id}/blog/cancel`, { method: 'POST' })
@@ -1676,13 +1688,19 @@ export default function JobDetailPage() {
     await loadBlogStatus()
     setBlogCancelling(false)
     clearOnCancel(job_id)
-  }, [job_id, loadBlogStatus, clearOnCancel])
+    toast.success('Generation stopped', 'Progress so far is kept.')
+  }, [job_id, loadBlogStatus, clearOnCancel, confirm])
 
   const [imageCancelling, setImageCancelling] = useState(false)
   const [imageCancelError, setImageCancelError] = useState<string | null>(null)
 
   const handleImageCancel = useCallback(async () => {
-    if (!window.confirm('Stop generating this image post? Progress so far is kept, but nothing further will be generated.')) return
+    if (!(await confirm({
+      title: 'Stop generating this image post?',
+      description: 'Progress so far is kept, but nothing further will be generated.',
+      confirmLabel: 'Stop generation',
+      destructive: true,
+    }))) return
     setImageCancelling(true)
     setImageCancelError(null)
     const res = await fetch(`/api/jobs/${job_id}/image/cancel`, { method: 'POST' })
@@ -1695,7 +1713,8 @@ export default function JobDetailPage() {
     await loadImageStatus()
     setImageCancelling(false)
     clearOnCancel(job_id)
-  }, [job_id, loadImageStatus, clearOnCancel])
+    toast.success('Generation stopped', 'Progress so far is kept.')
+  }, [job_id, loadImageStatus, clearOnCancel, confirm])
 
   // Timeout for long-running generation
   const [timedOut, setTimedOut] = useState(false)
@@ -2455,6 +2474,7 @@ export default function JobDetailPage() {
       <div className="space-y-6">
         <TopBar
           title={job.topic}
+          description="Review drafts, approve, and track generation."
           breadcrumbs={[
             { label: 'Dashboard', href: '/dashboard' },
             { label: job.topic.length > 32 ? job.topic.slice(0, 32) + '…' : job.topic },
@@ -2507,9 +2527,11 @@ export default function JobDetailPage() {
 
   return (
     <div className="space-y-6 pb-28">
+      {confirmDialog}
 
       <TopBar
         title={job.topic}
+        description="Review drafts, approve, and track generation."
         breadcrumbs={[
           { label: 'Dashboard', href: '/dashboard' },
           { label: job.topic.length > 32 ? job.topic.slice(0, 32) + '…' : job.topic },
