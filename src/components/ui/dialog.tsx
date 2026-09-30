@@ -65,13 +65,14 @@ function DialogContent({
             render={
               <Button
                 variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
+                // Solid white disc + black cross with a ring/shadow: stays visible on
+                // any background, including the black video player and photos.
+                className="absolute top-3 right-3 z-10 rounded-full bg-white text-black shadow-md ring-1 ring-black/20 hover:bg-gray-100 hover:text-black focus-visible:ring-2 focus-visible:ring-primary"
+                size="icon"
               />
             }
           >
-            <XIcon
-            />
+            <XIcon className="size-4 stroke-[2.5]" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         )}
