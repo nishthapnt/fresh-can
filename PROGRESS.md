@@ -1811,3 +1811,39 @@
 
 **⭐ Next steps**
 - Manual pass with 17+ items per tab; consider server-side pagination only if the library grows to thousands of rows.
+
+### 2026-09-30 — Kinetix-inspired UI, Phase 1 (tokens + primitives, frontend only)
+**✅ Completed**
+- `globals.css`: Kinetix-style tokens with **brand maroon `#6b1a1a`** as the single accent (`--primary`, hover/subtle, `--surface`, success/warning/info), Kinetix neutrals (`#dedee5` border, `#101114` text, `#686b82` muted), `--radius` 12px, maroon focus ring. Workflow status colors are untouched (still per-component, per CLAUDE.md).
+- **Font fix:** `--font-sans` was self-referential (`var(--font-sans)`) so it never resolved and browsers fell back to a serif. Now Geist via `next/font/google` (`--font-geist-sans`) with a system-sans fallback stack.
+- `ui/card.tsx` flat (border, no ring); inputs/selects 40px, textarea taller; badge radius 6px. Dialog/select popovers keep their floating ring/shadow.
+- No backend/API/service/Inngest files touched. `tsc --noEmit` clean, `next build` passes.
+
+**⚠️ Not verified visually** — expect default `Button`/`Badge` (primary) to now be maroon instead of near-black; explicit `bg-gray-900` buttons (card Post buttons etc.) are restyled in Phase 4.
+
+**⭐ Next steps:** Phase 2 restyle sidebar (kept, not replaced) + TopBar; Phase 3 dashboard; Phase 4 library cards/pagination; Phase 5 remaining pages.
+
+### 2026-09-30 — Kinetix-inspired UI, Phases 2–4 (partial; frontend only)
+- Hard-coded brand greens → maroon tokens: sidebar, dashboard/toast CTAs. Workflow status colors untouched; Approve buttons in DraftEditor/job page/SocialApprovalCard still green (Phase 5 decision).
+- Sidebar (kept, restyled): border tokens, calm active state (`bg-primary-subtle text-primary`), no icon hover-scale. TopBar title uses `text-foreground`.
+- Cards flat: dropped `shadow-sm`/`hover:shadow-md` for `hover:border-primary/40` on KPICard, ContentCard, dashboard cards, library cards; skeletons 12px flat. Library Post buttons + language toggle use primary.
+- `tsc --noEmit` clean. Not verified visually. Remaining: Pagination restyle, new-content form, job/draft/social pages, login.
+
+### 2026-09-30 — Kinetix-inspired UI, Phase 4/5 (pagination, new-content form, login, flat cards)
+- `ui/pagination.tsx` restyled to Kinetix square 32px buttons (active = maroon fill); range label and `aria-current` kept.
+- `/dashboard/new`: selected-state greens, black submit buttons and chips → maroon primary; flat cards, 12px radius. Content-type icon colors and red error banners unchanged.
+- `/login` card flat/12px; remaining `border bg-white shadow-sm` cards flattened repo-wide. Approve buttons (DraftEditor, job page, SocialApprovalCard) still green pending decision. `tsc --noEmit` clean; not verified visually.
+
+### 2026-09-30 — Kinetix-inspired UI, job pages
+- Job detail page: black primary buttons → maroon; panels `rounded-xl/2xl` → `rounded-lg` (12px), shadow dropped. Social page: same radius/shadow cleanup (preview media keeps its own rounding look at 12px). Semantic greens (success/ready/approve) left as-is. `tsc --noEmit` clean; not verified visually.
+
+### 2026-09-30 — Icon refresh (lucide-react only)
+- Dashboard KPIs: Layers (Total Jobs), PenLine (Drafts Pending), PackageCheck (Ready to Post), Megaphone (Posted Today). Dashboard section headers + library tabs/empty states: Clapperboard (Videos), Images (Images), Newspaper (Blog Posts). Sidebar: Sparkles (New Content), LayoutGrid (Library), Megaphone (Posted). Action-button icons (Play, Download, Trash2, Share2 on Post) unchanged. Removed now-unused imports.
+
+### 2026-09-30 — New logo
+- `public/freshcan-logo.png` = transparent-trimmed copy of `public/freshcan-logo-new.png` (1921×350; original had ~35% empty margin). Shared constant `src/lib/brand.ts` `LOGO_SRC`; replaced the 5 hard-coded Supabase `freshcan-logo-white.jpeg` URLs (sidebar, mobile header, login, favicon/apple icons). Logo heights retuned for the wide wordmark.
+- `src/proxy.ts` matcher: added `freshcan-logo.png` to the excluded paths so the logo loads on `/login` before sign-in (only change to auth code; gating logic untouched).
+
+### 2026-09-30 — Logo optimization + favicon
+- Favicon now uses the square leaf+wordmark: `public/freshcan-logo-favicon.png` (512×512), `public/apple-touch-icon.png` (180×180, opaque white), and `src/app/favicon.ico` regenerated (16/32/48) so Next's auto `/favicon.ico` agrees with the metadata icons.
+- Sizes: wordmark 263 KB → 7 KB (trimmed, 720px wide, 128-color PNG, still 2× the largest 220px slot); favicon 375 KB → 11 KB; favicon.ico 26 KB → 5 KB. Originals moved to `design-src/` (not served). `proxy.ts` matcher excludes the new static icon files.

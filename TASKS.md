@@ -38,6 +38,8 @@
 - [x] /dashboard/jobs/[job_id]/social — Social caption + platform approval
 - [x] /dashboard/library — Videos / Images / Blogs grid
 - [x] Library pagination — 16 grouped cards/page per tab (Videos / Images / Blogs), in-memory page state (2026-09-30)
+- [x] Kinetix-inspired UI Phase 1 — maroon tokens, Geist font fix, flat cards/inputs (2026-09-30)
+- [ ] Kinetix-inspired UI Phases 2–5 — sidebar/TopBar, dashboard, library cards, remaining pages
 - [ ] /dashboard/jobs/[job_id] — Show generated content preview when ready
 - [ ] Toast notifications for save/approve/post actions
 
