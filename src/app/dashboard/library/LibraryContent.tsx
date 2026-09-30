@@ -54,6 +54,8 @@ import {
   Tag,
   Trash2,
 } from 'lucide-react'
+import { Pagination } from '@/components/ui/pagination'
+import { PAGE_SIZE, usePagination } from '@/lib/usePagination'
 async function getPostedJobIds(contentType: string): Promise<Set<string>> {
   const { data } = await supabase
     .from('social_posts')
@@ -443,14 +445,12 @@ function EmptyState({
 }
 
 function LoadingSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
-  const count  = type === 'blog' ? 6 : 8
+  const count  = PAGE_SIZE
   // Video/image cards are always square now, regardless of the underlying
   // clip's own aspect ratio — the preview crops to fit (object-cover)
   // rather than the card stretching to match.
   const aspect = type === 'video' || type === 'image' ? 'aspect-square' : 'h-28'
-  const cols   = type === 'blog'
-    ? 'sm:grid-cols-2 lg:grid-cols-3'
-    : 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+  const cols   = 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
   return (
     <div className={`mt-4 grid grid-cols-1 gap-4 ${cols}`}>
       {Array.from({ length: count }).map((_, i) => (
@@ -1395,7 +1395,12 @@ export function PostedSection() {
     </div>
   )
 }
-function VideoSection() {
+interface PagedSectionProps {
+  page: number
+  onPageChange: (page: number) => void
+}
+
+function VideoSection({ page: pageState, onPageChange }: PagedSectionProps) {
   const router = useRouter()
   const [items, setItems]       = useState<VideoLibraryItem[]>([])
   const [loading, setLoading]   = useState(true)
@@ -1462,30 +1467,44 @@ function VideoSection() {
     setItems((prev) => prev.filter((v) => v.id !== id))
   }, [])
 
+  const { page, totalPages, pageItems, goToPage, offset } = usePagination(grouped, {
+    page: pageState, onPageChange, ready: !loading && !error,
+  })
+  const topRef = useRef<HTMLDivElement>(null)
+  const changePage = useCallback((p: number) => {
+    goToPage(p)
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [goToPage])
+  // Any filter/search/sort change starts over at page 1.
+  const resetPage = useCallback(() => onPageChange(1), [onPageChange])
+
   if (loading) return <LoadingSkeleton type="video" />
   if (error) return <ErrorBanner message={error} onRetry={load} />
 
   return (
-    <div className="space-y-4 pt-4">
+    <div ref={topRef} className="scroll-mt-4 space-y-4 pt-4">
       {items.length > 0 && (
-        <FilterBar search={search} setSearch={setSearch} category={category} setCategory={setCategory} lang={lang} setLang={setLang} sort={sort} setSort={setSort} />
+        <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
         <EmptyState icon={FileVideo} message="Approve a video script to generate your first video" onAction={() => router.push('/dashboard')} actionLabel="Go to Content Jobs →" />
             ) : grouped.length === 0 ? (
-        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all') }} />
+        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {grouped.map((g, i) => (
-            <VideoCard
-              key={g.jobId}
-              variants={g.variants}
-              isLatest={i === 0 && sort === 'desc'}
-              isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
-              onDeleted={handleDeleted}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {pageItems.map((g, i) => (
+              <VideoCard
+                key={g.jobId}
+                variants={g.variants}
+                isLatest={offset + i === 0 && sort === 'desc'}
+                isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
+                onDeleted={handleDeleted}
+              />
+            ))}
+          </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={grouped.length} pageSize={PAGE_SIZE} onPageChange={changePage} />
+        </>
       )}
     </div>
   )
@@ -1493,7 +1512,7 @@ function VideoSection() {
 
 // ─── ImageSection ─────────────────────────────────────────────────────────────
 
-function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
+function ImageSection({ highlightJobId, page: pageState, onPageChange }: PagedSectionProps & { highlightJobId?: string }) {
   const router = useRouter()
   const [items, setItems]       = useState<ImageLibraryItem[]>([])
   const [loading, setLoading]   = useState(true)
@@ -1518,11 +1537,10 @@ function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
 
   useEffect(() => { load() }, [load])
 
-  useEffect(() => {
-    if (!loading && highlightJobId && highlightRef.current) {
-      highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }, [loading, highlightJobId])
+  // The highlighted card may sit on a later page: jump to its page once
+  // (after the first load), then scroll to it once it has rendered.
+  const highlightPaged   = useRef(false)
+  const highlightScrolled = useRef(false)
 
   useEffect(() => {
     const ch = supabase
@@ -1570,35 +1588,62 @@ function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
     setItems((prev) => prev.filter((v) => v.id !== id))
   }, [])
 
+  const { page, totalPages, pageItems, goToPage, offset } = usePagination(grouped, {
+    page: pageState, onPageChange, ready: !loading && !error,
+  })
+  const topRef = useRef<HTMLDivElement>(null)
+  const changePage = useCallback((p: number) => {
+    goToPage(p)
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [goToPage])
+  // Any filter/search/sort change starts over at page 1.
+  const resetPage = useCallback(() => onPageChange(1), [onPageChange])
+  useEffect(() => {
+    if (loading || !highlightJobId || highlightPaged.current) return
+    const idx = grouped.findIndex((g) => g.jobId === highlightJobId)
+    if (idx < 0) return
+    highlightPaged.current = true
+    onPageChange(Math.floor(idx / PAGE_SIZE) + 1)
+  }, [loading, highlightJobId, grouped, onPageChange])
+
+  useEffect(() => {
+    if (loading || !highlightJobId || highlightScrolled.current || !highlightRef.current) return
+    highlightScrolled.current = true
+    highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [loading, highlightJobId, page])
+
   if (loading) return <LoadingSkeleton type="image" />
   if (error) return <ErrorBanner message={error} onRetry={load} />
 
   return (
-    <div className="space-y-4 pt-4">
+    <div ref={topRef} className="scroll-mt-4 space-y-4 pt-4">
       {items.length > 0 && (
-        <FilterBar search={search} setSearch={setSearch} category={category} setCategory={setCategory} lang={lang} setLang={setLang} sort={sort} setSort={setSort} />
+        <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
         <EmptyState icon={ImageIcon} message="Submit an image post request to generate your first image" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
       ) : grouped.length === 0 ? (
-        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all') }} />
+        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {grouped.map((g, i) => {
-            const isHighlighted = !!highlightJobId && g.jobId === highlightJobId
-            return (
-              <div key={g.jobId} ref={isHighlighted ? highlightRef : undefined}>
-                <ImageCard
-                  variants={g.variants}
-                  isLatest={i === 0 && sort === 'desc'}
-                  isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
-                  isHighlighted={isHighlighted}
-                  onDeleted={handleDeleted}
-                />
-              </div>
-            )
-          })}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {pageItems.map((g, i) => {
+              const isHighlighted = !!highlightJobId && g.jobId === highlightJobId
+              return (
+                <div key={g.jobId} ref={isHighlighted ? highlightRef : undefined}>
+                  <ImageCard
+                    variants={g.variants}
+                    isLatest={offset + i === 0 && sort === 'desc'}
+                    isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
+                    isHighlighted={isHighlighted}
+                    onDeleted={handleDeleted}
+                  />
+                </div>
+              )
+            })}
+          </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={grouped.length} pageSize={PAGE_SIZE} onPageChange={changePage} />
+        </>
       )}
     </div>
   )
@@ -1606,7 +1651,7 @@ function ImageSection({ highlightJobId }: { highlightJobId?: string }) {
 
 // ─── BlogSection ──────────────────────────────────────────────────────────────
 
-function BlogSection() {
+function BlogSection({ page: pageState, onPageChange }: PagedSectionProps) {
   const router = useRouter()
   const [items, setItems]       = useState<BlogLibraryItem[]>([])
   const [loading, setLoading]   = useState(true)
@@ -1674,30 +1719,44 @@ function BlogSection() {
     setItems((prev) => prev.filter((v) => v.id !== id))
   }, [])
 
+  const { page, totalPages, pageItems, goToPage, offset } = usePagination(grouped, {
+    page: pageState, onPageChange, ready: !loading && !error,
+  })
+  const topRef = useRef<HTMLDivElement>(null)
+  const changePage = useCallback((p: number) => {
+    goToPage(p)
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [goToPage])
+  // Any filter/search/sort change starts over at page 1.
+  const resetPage = useCallback(() => onPageChange(1), [onPageChange])
+
   if (loading) return <LoadingSkeleton type="blog" />
   if (error) return <ErrorBanner message={error} onRetry={load} />
 
   return (
-    <div className="space-y-4 pt-4">
+    <div ref={topRef} className="scroll-mt-4 space-y-4 pt-4">
       {items.length > 0 && (
-        <FilterBar search={search} setSearch={setSearch} category={category} setCategory={setCategory} lang={lang} setLang={setLang} sort={sort} setSort={setSort} />
+        <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
         <EmptyState icon={FileText} message="Submit a blog post request to generate your first article" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
       ) : grouped.length === 0 ? (
-        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all') }} />
+        <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {grouped.map((g, i) => (
-            <BlogCard
-              key={g.jobId}
-              variants={g.variants}
-              isLatest={i === 0 && sort === 'desc'}
-              isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
-              onDeleted={handleDeleted}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {pageItems.map((g, i) => (
+              <BlogCard
+                key={g.jobId}
+                variants={g.variants}
+                isLatest={offset + i === 0 && sort === 'desc'}
+                isNew={Object.values(g.variants).some((v) => v && newIds.has(v.id))}
+                onDeleted={handleDeleted}
+              />
+            ))}
+          </div>
+          <Pagination page={page} totalPages={totalPages} totalItems={grouped.length} pageSize={PAGE_SIZE} onPageChange={changePage} />
+        </>
       )}
     </div>
   )
@@ -1838,6 +1897,11 @@ export default function LibraryContent() {
 
   const [activeTab,    setActiveTab]    = useState(initialTab)
   const [trackJobId,   setTrackJobId]   = useState<string | undefined>(trackParam)
+  // Page numbers live here, not in the sections: Base UI unmounts inactive
+  // tab panels, so section-local state would reset on every tab switch.
+  const [videoPage, setVideoPage] = useState(1)
+  const [imagePage, setImagePage] = useState(1)
+  const [blogPage,  setBlogPage]  = useState(1)
 
   const handleTabChange = (value: string) => {
     setActiveTab(value)
@@ -1881,9 +1945,9 @@ export default function LibraryContent() {
           </TabsTrigger>
                   </TabsList>
 
-        <TabsContent value="videos"><VideoSection /></TabsContent>
-        <TabsContent value="images"><ImageSection highlightJobId={highlight} /></TabsContent>
-               <TabsContent value="blogs"><BlogSection /></TabsContent>
+        <TabsContent value="videos"><VideoSection page={videoPage} onPageChange={setVideoPage} /></TabsContent>
+        <TabsContent value="images"><ImageSection highlightJobId={highlight} page={imagePage} onPageChange={setImagePage} /></TabsContent>
+               <TabsContent value="blogs"><BlogSection page={blogPage} onPageChange={setBlogPage} /></TabsContent>
       </Tabs>
 
       

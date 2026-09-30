@@ -37,6 +37,7 @@
 - [x] /dashboard/jobs/[job_id] — Draft editor with tabs + realtime
 - [x] /dashboard/jobs/[job_id]/social — Social caption + platform approval
 - [x] /dashboard/library — Videos / Images / Blogs grid
+- [x] Library pagination — 16 grouped cards/page per tab (Videos / Images / Blogs), in-memory page state (2026-09-30)
 - [ ] /dashboard/jobs/[job_id] — Show generated content preview when ready
 - [ ] Toast notifications for save/approve/post actions
 

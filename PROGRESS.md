@@ -1798,3 +1798,16 @@
 - `localizeScript.ts`: corrective text-only rewrite now covers too-long as well as too-short (`findOffBandScenes`, swaps in a rewrite only if `isBetterFit`).
 - `transcribeAudio.ts` `computeNarrationCorrection`: no longer accepts a cut that would leave the slot <70% filled unless the original overshoots ≥1.8x. Regression tests added.
 - Character-ref timeout fix worked in this job (1 timeout, resumed, no resubmission).
+
+### 2026-09-30 — Library pagination (16 cards/page, Videos / Images / Blogs)
+**✅ Completed**
+- New `src/components/ui/pagination.tsx` (Prev / page numbers / ellipsis / Next, `Showing 1–16 of N`, `aria-current="page"`, hidden at ≤1 page) and `src/lib/usePagination.ts` (`PAGE_SIZE = 16`, slice + clamp).
+- `LibraryContent.tsx`: each section paginates the final `grouped` cards (after filter → posted exclusion → sort → job_id grouping), so an EN+FR pair is 1 card. Client-side only; fetching unchanged.
+- Page numbers live in `LibraryContent` (not the sections) because Base UI unmounts inactive tab panels — section-local state would reset on tab switch. Filters/search/sort change → page 1; delete/posted shrink → clamped to last page; realtime INSERT reloads without touching the page; page change scrolls to the section top.
+- "Latest" badge now keys off the global index (page 1, first card), not each page's first card. Image `?highlight=` jumps to the highlighted card's page once, then scrolls to it.
+- Skeletons render 16 placeholders. `tsc --noEmit` clean; eslint unchanged vs. baseline (18 pre-existing findings in this file, none new).
+
+**⚠️ Not verified:** no browser/UI run and no component tests — the behaviours above are from code reading only.
+
+**⭐ Next steps**
+- Manual pass with 17+ items per tab; consider server-side pagination only if the library grows to thousands of rows.
