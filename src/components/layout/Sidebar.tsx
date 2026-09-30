@@ -5,14 +5,15 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard,
-  PlusCircle,
-  Library,
-  Share2,
+  Sparkles,
+  LayoutGrid,
+  Megaphone,
   LogOut,
   X,
   Zap,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { LOGO_SRC } from '@/lib/brand'
 
 interface SidebarProps {
   mobileOpen?: boolean
@@ -29,19 +30,19 @@ const navItems = [
   {
     href: '/dashboard/new',
     label: 'New Content',
-    icon: PlusCircle,
+    icon: Sparkles,
     exact: false,
   },
   {
     href: '/dashboard/library',
     label: 'Library',
-    icon: Library,
+    icon: LayoutGrid,
     exact: false,
   },
   {
     href: '/dashboard/posted',
     label: 'Posted',
-    icon: Share2,
+    icon: Megaphone,
     exact: false,
   },
 ]
@@ -102,7 +103,7 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
       {/* Sidebar panel */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-gray-200 bg-white',
+          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-background',
           'transition-transform duration-300 ease-in-out',
           // Mobile: slide in/out
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
@@ -111,13 +112,13 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         )}
       >
         {/* Brand */}
-        <div className="flex h-16 flex-shrink-0 items-center justify-between border-b border-gray-200 px-4">
+        <div className="flex h-16 flex-shrink-0 items-center justify-between border-b border-border px-4">
           <div className="min-w-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/assets/freshcan-logo-white.jpeg"
+              src={LOGO_SRC}
               alt="Fresh-CAN"
-              className="h-9 w-auto max-w-[140px] rounded-md object-contain"
+              className="h-7 w-auto max-w-[180px] object-contain"
             />
             <p className="mt-0.5 pl-0.5 text-[10px] text-gray-400">Content Studio</p>
           </div>
@@ -146,14 +147,14 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
                 className={cn(
                   'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
                   active
-                    ? 'bg-green-600 text-white shadow-sm'
-                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+                    ? 'bg-primary-subtle font-semibold text-primary'
+                    : 'text-muted-foreground hover:bg-surface hover:text-foreground',
                 )}
               >
                 <Icon
                   className={cn(
-                    'h-4 w-4 flex-shrink-0 transition-transform group-hover:scale-110',
-                    active ? 'text-white' : 'text-gray-400 group-hover:text-gray-600',
+                    'h-4 w-4 flex-shrink-0',
+                    active ? 'text-primary' : 'text-gray-400 group-hover:text-foreground',
                   )}
                 />
                 {label}
@@ -162,7 +163,7 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           })}
 
           {/* KIE credits — live balance only; KIE.ai's API has no "total" concept */}
-          <div className="mt-3 flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2.5">
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5">
             <Zap className="h-4 w-4 flex-shrink-0 text-amber-500" />
             {kieCredits.status === 'loading' && (
               <div className="h-3.5 w-24 animate-pulse rounded bg-gray-200" />
@@ -182,17 +183,17 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         </nav>
 
         {/* Footer */}
-        <div className="flex-shrink-0 space-y-2 border-t border-gray-200 p-4">
+        <div className="flex-shrink-0 space-y-2 border-t border-border p-4">
           <button
             onClick={handleLogout}
-            className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-all hover:bg-gray-100 hover:text-gray-900"
+            className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
           >
             <LogOut className="h-4 w-4 flex-shrink-0 text-gray-400 group-hover:text-gray-600" />
             Log out
           </button>
-          <div className="rounded-lg bg-green-50 px-3 py-2.5">
-            <p className="text-xs font-semibold text-green-700">Fresh-CAN Brand</p>
-            <p className="mt-0.5 text-[10px] text-green-600">AI Content Automation v1.0</p>
+          <div className="rounded-lg bg-primary-subtle px-3 py-2.5">
+            <p className="text-xs font-semibold text-primary">Fresh-CAN Brand</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">AI Content Automation v1.0</p>
           </div>
         </div>
       </aside>

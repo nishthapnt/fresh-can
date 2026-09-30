@@ -37,12 +37,13 @@ import {
   AlertCircle,
   ArrowUpDown,
   BookOpen,
+  Clapperboard,
+  Images,
+  Newspaper,
   CheckCircle2,
   Clock,
   Download,
   ExternalLink,
-  FileText,
-  FileVideo,
   Image as ImageIcon,
   Loader2,
   Play,
@@ -452,9 +453,9 @@ function LoadingSkeleton({ type }: { type: 'video' | 'image' | 'blog' }) {
   const aspect = type === 'video' || type === 'image' ? 'aspect-square' : 'h-28'
   const cols   = 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
   return (
-    <div className={`mt-4 grid grid-cols-1 gap-4 ${cols}`}>
+    <div className={`mt-4 grid grid-cols-2 gap-3 sm:gap-4 ${cols}`}>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="overflow-hidden rounded-xl border bg-white shadow-sm">
+        <div key={i} className="overflow-hidden rounded-lg border bg-white">
           <div className={`animate-pulse bg-gray-100 ${aspect}`} />
           <div className="space-y-2 p-4">
             <div className="h-4 w-3/4 animate-pulse rounded bg-gray-100" />
@@ -505,7 +506,7 @@ function FilterBar({ search, setSearch, category, setCategory, lang, setLang, so
             key={l}
             onClick={() => setLang(l)}
             className={`px-3 py-1.5 text-sm transition-colors ${
-              lang === l ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              lang === l ? 'bg-primary text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
             }`}
           >
             {l === 'all' ? 'All' : l}
@@ -615,7 +616,7 @@ function VideoCard({
 
   return (
     <>
-      <Card className="overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md">
+      <Card className="gap-0 overflow-hidden border bg-white py-0 transition-colors hover:border-primary/40">
         <div
           className="group relative aspect-square cursor-pointer overflow-hidden bg-black"
           onClick={() => setViewOpen(true)}
@@ -639,7 +640,7 @@ function VideoCard({
           )}
         </div>
 
-        <CardContent className="space-y-3 p-4">
+        <CardContent className="space-y-3 p-3 sm:p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
             <LanguagePicker className="mt-1.5" />
@@ -656,26 +657,26 @@ function VideoCard({
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-            <Button size="sm" variant="outline" className="text-xs" onClick={() => setViewOpen(true)}>
+          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
+            <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setViewOpen(true)}>
               <Play className="mr-1 h-3 w-3" />Watch
             </Button>
             <Button
               size="sm"
-              className="bg-gray-900 text-xs hover:bg-gray-800 text-white"
+              className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white"
               onClick={() => setPostOpen(true)}
             >
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
-            <a href={item.video_url} download={filename}>
-              <Button size="sm" variant="outline" className="w-full text-xs">
+            <a href={item.video_url} download={filename} className="block">
+              <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
                 <Download className="mr-1 h-3 w-3" />Save
               </Button>
             </a>
             <Button
               size="sm"
               variant="outline"
-              className="text-xs text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2 className="mr-1 h-3 w-3" />Delete
@@ -802,7 +803,7 @@ function ImageCard({
 
   return (
     <>
-      <Card className={`overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md${isHighlighted ? ' ring-2 ring-green-500 ring-offset-2' : ''}`}>
+      <Card className={`gap-0 overflow-hidden border bg-white py-0 transition-colors hover:border-primary/40${isHighlighted ? ' ring-2 ring-green-500 ring-offset-2' : ''}`}>
         <div
           className="group relative aspect-square cursor-pointer overflow-hidden bg-gray-100"
           onClick={() => setViewOpen(true)}
@@ -816,7 +817,7 @@ function ImageCard({
           <Badges isLatest={isLatest} isNew={isNew} />
         </div>
 
-        <CardContent className="space-y-3 p-4">
+        <CardContent className="space-y-3 p-3 sm:p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
             <LanguagePicker className="mt-1.5" />
@@ -846,26 +847,26 @@ function ImageCard({
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-            <Button size="sm" variant="outline" className="text-xs" onClick={() => setViewOpen(true)}>
+          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
+            <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setViewOpen(true)}>
               <ImageIcon className="mr-1 h-3 w-3" />View
             </Button>
             <Button
               size="sm"
-              className="bg-gray-900 text-xs hover:bg-gray-800 text-white"
+              className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white"
               onClick={() => setPostOpen(true)}
             >
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
-            <a href={item.image_url} download={filename}>
-              <Button size="sm" variant="outline" className="w-full text-xs">
+            <a href={item.image_url} download={filename} className="block">
+              <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
                 <Download className="mr-1 h-3 w-3" />Save
               </Button>
             </a>
             <Button
               size="sm"
               variant="outline"
-              className="text-xs text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2 className="mr-1 h-3 w-3" />Delete
@@ -1159,7 +1160,7 @@ function BlogCard({
 
   return (
     <>
-      <Card className="overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md">
+      <Card className="gap-0 overflow-hidden border bg-white py-0 transition-colors hover:border-primary/40">
         {/* Hero thumbnail */}
         {validHero && !heroError ? (
           <div
@@ -1182,7 +1183,7 @@ function BlogCard({
           </div>
         )}
 
-        <CardContent className="space-y-3 p-4">
+        <CardContent className="space-y-3 p-3 sm:p-4">
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{title}</h3>
             <LanguagePicker className="mt-1.5" />
@@ -1221,18 +1222,18 @@ function BlogCard({
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
             {canRead ? (
-              <Button size="sm" variant="outline" className="text-xs" onClick={() => setReadOpen(true)}>
+              <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setReadOpen(true)}>
                 <BookOpen className="mr-1 h-3 w-3" />Read
               </Button>
             ) : <div />}
-            <Button size="sm" className="bg-gray-900 text-xs hover:bg-gray-800 text-white" onClick={() => setPostOpen(true)}>
+            <Button size="sm" className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white" onClick={() => setPostOpen(true)}>
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
             {item.file_url ? (
-              <a href={item.file_url} target="_blank" rel="noopener noreferrer">
-                <Button size="sm" variant="outline" className="w-full text-xs">
+              <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="block">
+                <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
                   <ExternalLink className="mr-1 h-3 w-3" />Link
                 </Button>
               </a>
@@ -1240,7 +1241,7 @@ function BlogCard({
             <Button
               size="sm"
               variant="outline"
-              className="text-xs text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2 className="mr-1 h-3 w-3" />Delete
@@ -1487,12 +1488,12 @@ function VideoSection({ page: pageState, onPageChange }: PagedSectionProps) {
         <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
-        <EmptyState icon={FileVideo} message="Approve a video script to generate your first video" onAction={() => router.push('/dashboard')} actionLabel="Go to Content Jobs →" />
+        <EmptyState icon={Clapperboard} message="Approve a video script to generate your first video" onAction={() => router.push('/dashboard')} actionLabel="Go to Content Jobs →" />
             ) : grouped.length === 0 ? (
         <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {pageItems.map((g, i) => (
               <VideoCard
                 key={g.jobId}
@@ -1621,12 +1622,12 @@ function ImageSection({ highlightJobId, page: pageState, onPageChange }: PagedSe
         <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
-        <EmptyState icon={ImageIcon} message="Submit an image post request to generate your first image" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
+        <EmptyState icon={Images} message="Submit an image post request to generate your first image" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
       ) : grouped.length === 0 ? (
         <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {pageItems.map((g, i) => {
               const isHighlighted = !!highlightJobId && g.jobId === highlightJobId
               return (
@@ -1739,12 +1740,12 @@ function BlogSection({ page: pageState, onPageChange }: PagedSectionProps) {
         <FilterBar search={search} setSearch={(v) => { setSearch(v); resetPage() }} category={category} setCategory={(v) => { setCategory(v); resetPage() }} lang={lang} setLang={(v) => { setLang(v); resetPage() }} sort={sort} setSort={(v) => { setSort(v); resetPage() }} />
       )}
       {items.length === 0 ? (
-        <EmptyState icon={FileText} message="Submit a blog post request to generate your first article" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
+        <EmptyState icon={Newspaper} message="Submit a blog post request to generate your first article" onAction={() => router.push('/dashboard/new')} actionLabel="Create New Content →" />
       ) : grouped.length === 0 ? (
         <NoFilterResults onClear={() => { setSearch(''); setCategory('all'); setLang('all'); resetPage() }} />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {pageItems.map((g, i) => (
               <BlogCard
                 key={g.jobId}
@@ -1935,13 +1936,13 @@ export default function LibraryContent() {
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="videos">
-            <FileVideo className="mr-1.5 h-4 w-4" />Videos
+            <Clapperboard className="mr-1.5 h-4 w-4" />Videos
           </TabsTrigger>
           <TabsTrigger value="images">
-            <ImageIcon className="mr-1.5 h-4 w-4" />Images
+            <Images className="mr-1.5 h-4 w-4" />Images
           </TabsTrigger>
                    <TabsTrigger value="blogs">
-            <BookOpen className="mr-1.5 h-4 w-4" />Blog Posts
+            <Newspaper className="mr-1.5 h-4 w-4" />Blog Posts
           </TabsTrigger>
                   </TabsList>
 

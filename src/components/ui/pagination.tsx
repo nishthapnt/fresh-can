@@ -1,6 +1,9 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+
+const arrowCls =
+  'flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent'
 
 interface PaginationProps {
   page: number
@@ -30,44 +33,47 @@ function Pagination({ page, totalPages, totalItems, pageSize, onPageChange }: Pa
 
   return (
     <div className="flex flex-col items-center justify-between gap-3 pt-2 sm:flex-row">
-      <p className="text-sm text-gray-500" aria-live="polite">
+      <p className="text-sm text-muted-foreground" aria-live="polite">
         Showing {from}–{to} of {totalItems}
       </p>
-      <nav aria-label="Pagination" className="flex items-center gap-1">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page === 1}
+      <nav aria-label="Pagination" className="flex items-center gap-1.5">
+        <button
+          type="button"
           onClick={() => onPageChange(page - 1)}
+          disabled={page === 1}
           aria-label="Previous page"
+          className={cn(arrowCls)}
         >
-          <ChevronLeft /> Prev
-        </Button>
+          <ChevronLeft className="h-4 w-4" />
+        </button>
         {pageList(page, totalPages).map((p) =>
           typeof p === 'string' ? (
-            <span key={p} className="px-1.5 text-sm text-gray-400" aria-hidden="true">…</span>
+            <span key={p} className="flex h-8 w-8 items-center justify-center text-xs text-muted-foreground" aria-hidden="true">…</span>
           ) : (
-            <Button
+            <button
               key={p}
-              variant={p === page ? 'default' : 'outline'}
-              size="sm"
+              type="button"
               onClick={() => onPageChange(p)}
               aria-current={p === page ? 'page' : undefined}
               aria-label={`Page ${p}`}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition-colors',
+                p === page ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-surface hover:text-foreground',
+              )}
             >
               {p}
-            </Button>
+            </button>
           ),
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page === totalPages}
+        <button
+          type="button"
           onClick={() => onPageChange(page + 1)}
+          disabled={page === totalPages}
           aria-label="Next page"
+          className={cn(arrowCls)}
         >
-          Next <ChevronRight />
-        </Button>
+          <ChevronRight className="h-4 w-4" />
+        </button>
       </nav>
     </div>
   )

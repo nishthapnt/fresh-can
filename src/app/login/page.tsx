@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { LOGO_SRC } from '@/lib/brand'
 
 function LoginForm() {
   const router = useRouter()
@@ -44,13 +45,13 @@ function LoginForm() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-white p-8">
         <div className="mb-6 flex flex-col items-center text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/assets/freshcan-logo-white.jpeg"
+            src={LOGO_SRC}
             alt="Fresh-CAN"
-            className="mb-3 h-10 w-auto max-w-[160px] rounded object-contain"
+            className="mb-3 h-9 w-auto max-w-[220px] object-contain"
           />
           <h1 className="text-lg font-bold text-gray-900">Content Studio</h1>
           <p className="mt-1 text-sm text-gray-500">Sign in to continue</p>

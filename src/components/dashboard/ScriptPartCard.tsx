@@ -70,7 +70,7 @@ export default function ScriptPartCard({
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length
 
   return (
-    <Card className="border bg-white shadow-sm">
+    <Card className="border bg-white">
       <CardContent className="space-y-4 p-5">
 
         {/* Header */}

@@ -461,7 +461,7 @@ function WaitingCard({
   if (terminalError) {
     const isCancelled = terminalError === 'Cancelled by user'
     return (
-      <Card className="border bg-white shadow-sm">
+      <Card className="border bg-white">
         <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
           <div className={`flex h-16 w-16 items-center justify-center rounded-full ${isCancelled ? 'bg-gray-100' : 'bg-red-50'}`}>
             {isCancelled
@@ -479,7 +479,7 @@ function WaitingCard({
             </p>
           </div>
           {onRetryWithInput && (
-            <Button onClick={onRetryWithInput} className="bg-gray-900 hover:bg-gray-800 text-white">
+            <Button onClick={onRetryWithInput} className="bg-primary hover:bg-primary-hover text-white">
               <RefreshCw className="mr-2 h-4 w-4" />
               Retry with Instructions
             </Button>
@@ -490,7 +490,7 @@ function WaitingCard({
   }
   if (timedOut) {
     return (
-      <Card className="border bg-white shadow-sm">
+      <Card className="border bg-white">
         <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-50">
             <AlertCircle className="h-8 w-8 text-amber-400" />
@@ -513,7 +513,7 @@ function WaitingCard({
             {onRetryWithInput && (
               <Button
                 onClick={onRetryWithInput}
-                className="bg-gray-900 hover:bg-gray-800 text-white"
+                className="bg-primary hover:bg-primary-hover text-white"
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Retry with Instructions
@@ -534,7 +534,7 @@ function WaitingCard({
   const { title, sub } = messages[type]
 
   return (
-    <Card className="border bg-white shadow-sm">
+    <Card className="border bg-white">
       <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-50">
           <Clock className="h-8 w-8 text-amber-400" />
@@ -750,7 +750,7 @@ function VideoTabContent({
   return (
     <div className="space-y-4">
       {approveError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <div>
@@ -763,7 +763,7 @@ function VideoTabContent({
       )}
 
       {draftData && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
           <div className="flex flex-wrap items-center gap-3">
             <Chip label="Duration" value={draftData.duration_seconds ? `${draftData.duration_seconds}s` : '—'} />
             <div className="h-4 w-px bg-gray-300" />
@@ -787,7 +787,7 @@ function VideoTabContent({
       )}
 
       {cancelError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <p className="text-xs text-red-700">{cancelError}</p>
@@ -814,7 +814,7 @@ function VideoTabContent({
             </Card>
           )}
           {scriptSaveError && (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
               <div className="flex items-start gap-3">
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
                 <p className="text-xs text-red-700">{scriptSaveError}</p>
@@ -952,7 +952,7 @@ function ImageTabContent({
   return (
     <div className="space-y-4 pb-4">
       {approveError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <div>
@@ -966,7 +966,7 @@ function ImageTabContent({
 
       {/* Generated image */}
       {imageUrl && (
-        <div className="overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
+        <div className="overflow-hidden rounded-lg border border-border">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imageUrl} alt={altText || 'Generated image'} className="w-full object-cover" />
         </div>
@@ -1086,7 +1086,7 @@ function BlogTabContent({
     <div className="space-y-4 pb-28">
       {/* Error */}
       {approveError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <div>
@@ -1099,7 +1099,7 @@ function BlogTabContent({
       )}
 
       {saveError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
             <p className="text-xs text-red-700">{saveError}</p>
@@ -1127,7 +1127,7 @@ function BlogTabContent({
           {editState.images.hero.url && (
             <div>
               <p className="mb-1 text-xs text-gray-400">Hero image</p>
-              <div className="overflow-hidden rounded-xl border border-gray-200">
+              <div className="overflow-hidden rounded-lg border border-gray-200">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={editState.images.hero.url} alt={editState.images.hero.alt} className={imagePreviewClassName} />
               </div>
@@ -1136,7 +1136,7 @@ function BlogTabContent({
           {editState.images.inline.url && (
             <div>
               <p className="mb-1 text-xs text-gray-400">Inline image</p>
-              <div className="overflow-hidden rounded-xl border border-gray-200">
+              <div className="overflow-hidden rounded-lg border border-gray-200">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={editState.images.inline.url} alt={editState.images.inline.alt} className={imagePreviewClassName} />
               </div>
@@ -1146,7 +1146,7 @@ function BlogTabContent({
       )}
 
       {/* Post Title */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5">
+      <div className="rounded-lg border border-gray-200 bg-white p-5">
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">Post Title</p>
         <input
           className="w-full text-xl font-bold text-gray-900 outline-none placeholder:text-gray-300"
@@ -2411,10 +2411,10 @@ export default function JobDetailPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-14 w-full animate-pulse rounded-xl bg-gray-100" />
+        <div className="h-14 w-full animate-pulse rounded-lg bg-gray-100" />
         <div className="h-8 w-48 animate-pulse rounded-lg bg-gray-100" />
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-48 w-full animate-pulse rounded-xl bg-gray-100" />
+          <div key={i} className="h-48 w-full animate-pulse rounded-lg bg-gray-100" />
         ))}
       </div>
     )
@@ -2519,7 +2519,7 @@ export default function JobDetailPage() {
 
       {/* Video generating banner — only when video is actually one of the content types */}
       {isGenerating && (job.content_types as ContentType[]).includes('video') && (
-        <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4">
+        <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
           <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-blue-500" />
           <div>
             <p className="text-sm font-semibold text-blue-800">Generating video…</p>
@@ -2625,7 +2625,7 @@ export default function JobDetailPage() {
                     : handleContentApprove(activeTab as 'image_post' | 'blog')
                 }
                 disabled={approving === activeTab}
-                className="bg-gray-900 hover:bg-gray-800"
+                className="bg-primary hover:bg-primary-hover"
               >
                 {approving === activeTab ? (
                   <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Approving…</>

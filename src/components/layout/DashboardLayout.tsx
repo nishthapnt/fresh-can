@@ -7,6 +7,7 @@ import Sidebar from './Sidebar'
 import VideoToast from '@/components/VideoToast'
 import type { VideoNotification } from '@/components/VideoToast'
 import { supabase } from '@/lib/supabase'
+import { LOGO_SRC } from '@/lib/brand'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -63,20 +64,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen bg-gray-50">
 
       {/* ── Mobile top header (hidden on md+) ──────────────────────── */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4 md:hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="https://jbrktjnscnzmhwupojiu.supabase.co/storage/v1/object/public/assets/freshcan-logo-white.jpeg"
-          alt="Fresh-CAN"
-          className="h-7 w-auto max-w-[120px] rounded object-contain"
-        />
+      <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-gray-200 bg-white px-4 md:hidden">
         <button
           onClick={() => setSidebarOpen(true)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 active:bg-gray-100"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 active:bg-gray-100"
           aria-label="Open navigation menu"
         >
           <Menu className="h-5 w-5" />
         </button>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={LOGO_SRC}
+          alt="Fresh-CAN"
+          className="h-6 w-auto max-w-[150px] object-contain"
+        />
       </header>
 
       {/* Sidebar — desktop fixed, mobile overlay */}

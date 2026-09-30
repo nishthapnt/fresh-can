@@ -191,9 +191,9 @@ function VoiceCardGroup({
           return (
             <label
               key={v.id}
-              className={`flex cursor-pointer flex-col gap-2 rounded-xl border-2 p-3 transition-all ${
+              className={`flex cursor-pointer flex-col gap-2 rounded-lg border-2 p-3 transition-all ${
                 selected
-                  ? 'border-green-500 bg-green-50/50'
+                  ? 'border-primary bg-primary-subtle'
                   : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
               } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
             >
@@ -208,7 +208,7 @@ function VoiceCardGroup({
               <div className="flex items-center justify-between">
                 <span
                   className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
-                    selected ? 'border-green-500 bg-green-500' : 'border-gray-300'
+                    selected ? 'border-primary bg-primary' : 'border-gray-300'
                   }`}
                 >
                   {selected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
@@ -589,7 +589,7 @@ export default function NewContentPage() {
       {phase === 'awaiting_questions' && pendingImageJob && (
         <div className="mb-6 space-y-5">
           <div className="mb-2">
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
               A few quick questions
             </h1>
             <p className="mt-1 text-sm text-gray-500">
@@ -598,7 +598,7 @@ export default function NewContentPage() {
           </div>
 
           {pendingImageJob.questions.map((q) => (
-            <Card key={q.id} className="border bg-white shadow-sm">
+            <Card key={q.id} className="border bg-white">
               <CardContent className="space-y-3 pt-5">
                 <p className="text-sm font-medium text-gray-800">{q.question}</p>
                 <div className="flex flex-wrap gap-2">
@@ -609,7 +609,7 @@ export default function NewContentPage() {
                       onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
                       className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                         answers[q.id] === opt
-                          ? 'border-gray-900 bg-gray-900 text-white'
+                          ? 'border-primary bg-primary text-white'
                           : 'border-gray-200 text-gray-600 hover:border-gray-300'
                       }`}
                     >
@@ -638,7 +638,7 @@ export default function NewContentPage() {
             onClick={handleAnswersSubmit}
             disabled={(phase as string) === 'triggering'}
             size="lg"
-            className="w-full bg-gray-900 py-6 text-base font-semibold hover:bg-gray-800"
+            className="w-full bg-primary py-6 text-base font-semibold hover:bg-primary-hover"
           >
             {(phase as string) === 'triggering' ? (
               <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Generating…</>
@@ -713,7 +713,7 @@ export default function NewContentPage() {
 
       {/* Page header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">
           Generate New Content
         </h1>
         <p className="mt-1 text-sm text-gray-500">
@@ -724,7 +724,7 @@ export default function NewContentPage() {
       <form onSubmit={handleSubmit} className="space-y-5">
 
         {/* ── Section 1: Content Details ─────────────────────────────── */}
-        <Card className="border bg-white shadow-sm">
+        <Card className="border bg-white">
           <CardHeader className="border-b py-4">
             <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-800">
               <Sparkles className="h-4 w-4 text-amber-500" />
@@ -853,7 +853,7 @@ export default function NewContentPage() {
         </Card>
 
         {/* ── Section 2: What to Generate ────────────────────────────── */}
-        <Card className="border bg-white shadow-sm">
+        <Card className="border bg-white">
           <CardHeader className="border-b py-4">
             <CardTitle className="text-sm font-semibold text-gray-800">
               What to Generate
@@ -868,9 +868,9 @@ export default function NewContentPage() {
               return (
                 <label
                   key={id}
-                  className={`flex cursor-pointer items-center gap-4 rounded-xl border-2 p-4 transition-all ${
+                  className={`flex cursor-pointer items-center gap-4 rounded-lg border-2 p-4 transition-all ${
                     checked
-                      ? 'border-green-500 bg-green-50/50'
+                      ? 'border-primary bg-primary-subtle'
                       : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                   }`}
                 >
@@ -993,7 +993,7 @@ export default function NewContentPage() {
           type="submit"
           disabled={isSubmitting || content_types.length === 0}
           size="lg"
-          className="w-full bg-gray-900 py-6 text-base font-semibold hover:bg-gray-800 disabled:opacity-50"
+          className="w-full bg-primary py-6 text-base font-semibold hover:bg-primary-hover disabled:opacity-50"
         >
           {phase === 'creating' ? (
             <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Creating job…</>

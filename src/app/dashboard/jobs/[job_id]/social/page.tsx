@@ -56,7 +56,7 @@ function ContentPreview({
 }) {
   if (!generated?.file_url) {
     return (
-      <div className="flex h-48 flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 text-center">
+      <div className="flex h-48 flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 text-center">
         <div className="text-2xl mb-2">🎬</div>
         <p className="text-sm text-gray-400">Content not yet generated</p>
       </div>
@@ -69,7 +69,7 @@ function ContentPreview({
         src={generated.file_url}
         controls
         poster={generated.thumbnail_url ?? undefined}
-        className="w-full rounded-xl shadow-sm"
+        className="w-full rounded-lg shadow-sm"
       />
     )
   }
@@ -80,7 +80,7 @@ function ContentPreview({
       <img
         src={generated.file_url}
         alt="Generated image"
-        className="w-full rounded-xl object-cover shadow-sm"
+        className="w-full rounded-lg object-cover shadow-sm"
       />
     )
   }
@@ -90,7 +90,7 @@ function ContentPreview({
       href={generated.file_url}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex items-center gap-2.5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-100"
+      className="flex items-center gap-2.5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-100"
     >
       <FileText className="h-4 w-4" />
       Open Blog Post →
@@ -244,7 +244,7 @@ export default function SocialPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-14 w-full animate-pulse rounded-xl bg-gray-100" />
+        <div className="h-14 w-full animate-pulse rounded-lg bg-gray-100" />
         <div className="h-10 w-64 animate-pulse rounded-lg bg-gray-100" />
         <SocialPageSkeleton />
       </div>
@@ -355,7 +355,7 @@ export default function SocialPage() {
                         (platformLogs[socialPost.id] ?? []).map((log) => (
                           <div
                             key={log.id}
-                            className="rounded-lg border bg-white px-3 py-2.5 text-xs shadow-sm"
+                            className="rounded-lg border bg-white px-3 py-2.5 text-xs"
                           >
                             <div className="flex items-center justify-between">
                               <span className="font-medium capitalize text-gray-700">

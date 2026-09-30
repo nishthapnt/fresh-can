@@ -49,7 +49,7 @@ export default function TopBar({
             ))}
           </nav>
         )}
-        <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">
           {title}
         </h1>
       </div>

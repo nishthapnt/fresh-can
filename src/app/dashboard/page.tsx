@@ -26,19 +26,20 @@ import { formatDateTime } from '@/lib/dateUtils'
 import {
   AlertCircle,
   BookOpen,
-  Briefcase,
-  CheckCircle,
+  Clapperboard,
+  Images,
+  Layers,
+  Megaphone,
+  Newspaper,
+  PackageCheck,
+  PenLine,
   Clock,
   Download,
   ExternalLink,
-  FileText,
-  FileVideo,
-  Image as ImageIcon,
   Inbox,
   Play,
   PlusCircle,
   RefreshCw,
-  Share2,
   Tag,
 } from 'lucide-react'
 
@@ -167,7 +168,7 @@ function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Vid
   return (
     <>
       <Card
-        className="group cursor-pointer overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md"
+        className="group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40"
         onClick={() => setOpen(true)}
       >
         <div className="relative aspect-square overflow-hidden bg-black">
@@ -265,7 +266,7 @@ function MiniImageCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Ima
   return (
     <>
       <Card
-        className="group cursor-pointer overflow-hidden border bg-white shadow-sm transition-all hover:shadow-md"
+        className="group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40"
         onClick={() => setOpen(true)}
       >
         <div className="relative aspect-square overflow-hidden bg-gray-100">
@@ -359,7 +360,7 @@ function MiniBlogCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Blog
   return (
     <>
       <Card
-        className={`relative border bg-white shadow-sm transition-all hover:shadow-md${hasContent ? ' cursor-pointer' : ''}`}
+        className={`relative border bg-white transition-colors hover:border-primary/40${hasContent ? ' cursor-pointer' : ''}`}
         onClick={() => { if (hasContent) setOpen(true) }}
       >
         {available.length > 1 && (
@@ -560,7 +561,7 @@ export default function DashboardPage() {
         actions={
           <Button
             onClick={() => router.push('/dashboard/new')}
-            className="w-full bg-green-600 hover:bg-green-700 sm:w-auto"
+            className="w-full bg-primary hover:bg-primary-hover sm:w-auto"
             size="sm"
           >
             <PlusCircle className="mr-2 h-4 w-4" />
@@ -580,7 +581,7 @@ export default function DashboardPage() {
           <KPICard
             title="Total Jobs"
             value={kpi?.total_jobs ?? 0}
-            icon={Briefcase}
+            icon={Layers}
             iconBg="bg-blue-50"
             iconColor="text-blue-600"
             trendLabel="all time"
@@ -588,7 +589,7 @@ export default function DashboardPage() {
           <KPICard
             title="Drafts Pending"
             value={kpi?.drafts_pending ?? 0}
-            icon={FileText}
+            icon={PenLine}
             iconBg="bg-amber-50"
             iconColor="text-amber-600"
             trendLabel="awaiting review"
@@ -596,7 +597,7 @@ export default function DashboardPage() {
           <KPICard
             title="Ready to Post"
             value={kpi?.ready_to_post ?? 0}
-            icon={CheckCircle}
+            icon={PackageCheck}
             iconBg="bg-green-50"
             iconColor="text-green-600"
             trendLabel="generated, not yet posted"
@@ -604,7 +605,7 @@ export default function DashboardPage() {
           <KPICard
             title="Posted Today"
             value={kpi?.posted_today ?? 0}
-            icon={Share2}
+            icon={Megaphone}
             iconBg="bg-purple-50"
             iconColor="text-purple-600"
             trendLabel="social posts sent today"
@@ -632,7 +633,7 @@ export default function DashboardPage() {
         {/* ── Videos ── */}
         <div className="space-y-3">
           <SectionHeader
-            icon={FileVideo}
+            icon={Clapperboard}
             title="Recent Videos"
             count={videoGroups.length}
             color="bg-blue-50 text-blue-600"
@@ -655,7 +656,7 @@ export default function DashboardPage() {
         {/* ── Images ── */}
         <div className="space-y-3">
           <SectionHeader
-            icon={ImageIcon}
+            icon={Images}
             title="Recent Images"
             count={imageGroups.length}
             color="bg-pink-50 text-pink-600"
@@ -678,7 +679,7 @@ export default function DashboardPage() {
         {/* ── Blogs ── */}
         <div className="space-y-3">
           <SectionHeader
-            icon={BookOpen}
+            icon={Newspaper}
             title="Recent Blog Posts"
             count={blogGroups.length}
             color="bg-amber-50 text-amber-600"
@@ -709,7 +710,7 @@ export default function DashboardPage() {
               Submit your first topic and Fresh-CAN will generate videos, images, and blog posts simultaneously.
             </p>
             <Button
-              className="mt-6 bg-green-600 hover:bg-green-700"
+              className="mt-6 bg-primary hover:bg-primary-hover"
               onClick={() => router.push('/dashboard/new')}
             >
               <PlusCircle className="mr-2 h-4 w-4" />

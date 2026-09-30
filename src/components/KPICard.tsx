@@ -37,12 +37,12 @@ export default function KPICard({
   const TrendIcon = isPositive ? TrendingUp : isNegative ? TrendingDown : Minus
 
   return (
-    <Card className="border bg-white shadow-sm transition-shadow hover:shadow-md">
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-gray-500">{title}</p>
-            <p className="mt-1 text-3xl font-bold tracking-tight text-gray-900">
+    <Card className="gap-0 py-0 border bg-white transition-colors hover:border-primary/40">
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div className="order-2 min-w-0 flex-1 sm:order-1">
+            <p className="text-sm font-medium leading-tight text-gray-500 sm:truncate">{title}</p>
+            <p className="mt-1 text-2xl font-bold sm:text-3xl tracking-tight text-gray-900">
               {value.toLocaleString()}
             </p>
             {hasTrend && (
@@ -56,13 +56,13 @@ export default function KPICard({
               </div>
             )}
             {!hasTrend && (
-              <p className="mt-2 flex items-center gap-1 text-xs text-gray-400">
+              <p className="mt-2 flex items-center gap-1 text-[11px] leading-tight text-gray-400 sm:text-xs">
                 <Minus className="h-3 w-3" />
                 No comparison data
               </p>
             )}
           </div>
-          <div className={cn('ml-4 flex-shrink-0 rounded-xl p-3', iconBg)}>
+          <div className={cn('order-1 w-fit flex-shrink-0 rounded-lg p-2 sm:order-2 sm:p-2.5', iconBg)}>
             <Icon className={cn('h-5 w-5', iconColor)} />
           </div>
         </div>

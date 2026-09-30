@@ -13,7 +13,7 @@ interface ContentCardProps {
 export default function ContentCard({ job, onClick }: ContentCardProps) {
   return (
     <Card
-      className="cursor-pointer border bg-white shadow-sm transition-shadow hover:shadow-md"
+      className="cursor-pointer border bg-white transition-colors hover:border-primary/40"
       onClick={onClick}
     >
       <CardContent className="p-5">

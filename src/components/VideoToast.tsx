@@ -52,7 +52,7 @@ export default function VideoToast({ notification, onDismiss }: VideoToastProps)
       <div className="px-4 pb-4">
         <Button
           size="sm"
-          className="w-full bg-green-600 hover:bg-green-700"
+          className="w-full bg-primary hover:bg-primary-hover"
           onClick={handleViewLibrary}
         >
           <Library className="mr-2 h-4 w-4" />
