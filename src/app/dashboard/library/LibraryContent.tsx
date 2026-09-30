@@ -44,7 +44,6 @@ import {
   Clock,
   Download,
   ExternalLink,
-  Image as ImageIcon,
   Loader2,
   Play,
   RefreshCw,
@@ -57,6 +56,10 @@ import {
 } from 'lucide-react'
 import { Pagination } from '@/components/ui/pagination'
 import { PAGE_SIZE, usePagination } from '@/lib/usePagination'
+import { clickableProps, FOCUS_RING } from '@/lib/a11y'
+import { toast } from '@/components/ui/toast'
+import { RelativeTime } from '@/components/ui/relative-time'
+import { Chip } from '@/components/ui/chip'
 async function getPostedJobIds(contentType: string): Promise<Set<string>> {
   const { data } = await supabase
     .from('social_posts')
@@ -169,6 +172,7 @@ function PostModal({
         throw new Error((b as { error?: string }).error ?? `HTTP ${res.status}`)
       }
       setPhase('success')
+      toast.success('Post queued', platforms.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(', '))
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : 'Unknown error')
       setPhase('error')
@@ -192,7 +196,7 @@ function PostModal({
                   .join(', ')}
               </p>
             </div>
-            <Button className="mt-2 bg-gray-900 hover:bg-gray-800" onClick={onClose}>
+            <Button className="mt-2" onClick={onClose}>
               Done
             </Button>
           </div>
@@ -479,7 +483,7 @@ interface FilterBarProps {
 
 function FilterBar({ search, setSearch, category, setCategory, lang, setLang, sort, setSort }: FilterBarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="sticky top-14 z-20 -mx-4 flex flex-wrap items-center gap-3 border-b border-border bg-gray-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:top-0 md:-mx-8 md:px-8">
       <div className="relative w-60">
         <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
         <Input
@@ -607,8 +611,10 @@ function VideoCard({
       }
       setDeleteOpen(false)
       onDeleted(item.id)
+      toast.success('Deleted', item.topic)
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'Failed to delete')
+      toast.error('Delete failed', e instanceof Error ? e.message : undefined)
     } finally {
       setDeleting(false)
     }
@@ -618,8 +624,8 @@ function VideoCard({
     <>
       <Card className="gap-0 overflow-hidden border bg-white py-0 transition-colors hover:border-primary/40">
         <div
-          className="group relative aspect-square cursor-pointer overflow-hidden bg-black"
-          onClick={() => setViewOpen(true)}
+          className={`group relative aspect-square cursor-pointer overflow-hidden bg-black ${FOCUS_RING}`}
+          {...clickableProps(() => setViewOpen(true), `Watch ${item.topic}`)}
         >
           <video
             src={item.video_url}
@@ -644,43 +650,43 @@ function VideoCard({
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
             <LanguagePicker className="mt-1.5" />
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-              <span>{item.category}</span>
-              <span className="text-gray-300">·</span>
-              <span>{item.language}</span>
-              {duration && <><span className="text-gray-300">·</span><span>{duration}s</span></>}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <Chip tone="primary">{item.category}</Chip>
+              <Chip>{item.language}</Chip>
+              {duration && <Chip>{duration}s</Chip>}
             </div>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <Clock className="h-3 w-3 shrink-0" />
-            <span>{formatDateTime(item.completed_at)}</span>
+            <RelativeTime value={item.completed_at} />
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
-            <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setViewOpen(true)}>
-              <Play className="mr-1 h-3 w-3" />Watch
-            </Button>
+          <div className="space-y-1.5 pt-0.5">
             <Button
               size="sm"
-              className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white"
+              className="w-full bg-primary text-xs text-white hover:bg-primary-hover"
               onClick={() => setPostOpen(true)}
             >
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
-            <a href={item.video_url} download={filename} className="block">
-              <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
-                <Download className="mr-1 h-3 w-3" />Save
+            <div className="flex gap-1.5">
+              <a href={item.video_url} download={filename} className="flex flex-1" title="Save" aria-label="Save">
+                <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </a>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-red-200 px-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                onClick={() => setDeleteOpen(true)}
+                title="Delete"
+                aria-label="Delete"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
-            </a>
-            <Button
-              size="sm"
-              variant="outline"
-              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="mr-1 h-3 w-3" />Delete
-            </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -794,8 +800,10 @@ function ImageCard({
       }
       setDeleteOpen(false)
       onDeleted(item.id)
+      toast.success('Deleted', item.topic)
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'Failed to delete')
+      toast.error('Delete failed', e instanceof Error ? e.message : undefined)
     } finally {
       setDeleting(false)
     }
@@ -805,8 +813,8 @@ function ImageCard({
     <>
       <Card className={`gap-0 overflow-hidden border bg-white py-0 transition-colors hover:border-primary/40${isHighlighted ? ' ring-2 ring-green-500 ring-offset-2' : ''}`}>
         <div
-          className="group relative aspect-square cursor-pointer overflow-hidden bg-gray-100"
-          onClick={() => setViewOpen(true)}
+          className={`group relative aspect-square cursor-pointer overflow-hidden bg-gray-100 ${FOCUS_RING}`}
+          {...clickableProps(() => setViewOpen(true), `View ${item.topic}`)}
         >
           <img
             src={item.image_url}
@@ -821,9 +829,9 @@ function ImageCard({
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{item.topic}</h3>
             <LanguagePicker className="mt-1.5" />
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-              <span>{item.category}</span>
-              {item.language && <><span className="text-gray-300">·</span><span>{item.language}</span></>}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <Chip tone="primary">{item.category}</Chip>
+              {item.language && <Chip>{item.language}</Chip>}
             </div>
           </div>
 
@@ -843,34 +851,35 @@ function ImageCard({
 
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <Clock className="h-3 w-3 shrink-0" />
-            <span>{formatDateTime(item.completed_at)}</span>
+            <RelativeTime value={item.completed_at} />
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
-            <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setViewOpen(true)}>
-              <ImageIcon className="mr-1 h-3 w-3" />View
-            </Button>
+          <div className="space-y-1.5 pt-0.5">
             <Button
               size="sm"
-              className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white"
+              className="w-full bg-primary text-xs text-white hover:bg-primary-hover"
               onClick={() => setPostOpen(true)}
             >
               <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
-            <a href={item.image_url} download={filename} className="block">
-              <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
-                <Download className="mr-1 h-3 w-3" />Save
+            <div className="flex gap-1.5">
+              <a href={item.image_url} download={filename} className="flex flex-1" title="Save" aria-label="Save">
+                <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </a>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-red-200 px-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                onClick={() => setDeleteOpen(true)}
+                title="Delete"
+                aria-label="Delete"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
-            </a>
-            <Button
-              size="sm"
-              variant="outline"
-              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="mr-1 h-3 w-3" />Delete
-            </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1094,8 +1103,10 @@ function BlogCard({
       }
       setDeleteOpen(false)
       onDeleted(item.id)
+      toast.success('Deleted', item.topic)
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'Failed to delete')
+      toast.error('Delete failed', e instanceof Error ? e.message : undefined)
     } finally {
       setDeleting(false)
     }
@@ -1164,8 +1175,8 @@ function BlogCard({
         {/* Hero thumbnail */}
         {validHero && !heroError ? (
           <div
-            className="relative aspect-video cursor-pointer overflow-hidden bg-gray-100"
-            onClick={() => canRead && setReadOpen(true)}
+            className={`relative aspect-video cursor-pointer overflow-hidden bg-gray-100 ${FOCUS_RING}`}
+            {...clickableProps(() => canRead && setReadOpen(true), `Read ${item.topic}`)}
           >
             <img
               src={validHero}
@@ -1187,12 +1198,11 @@ function BlogCard({
           <div>
             <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-gray-900">{title}</h3>
             <LanguagePicker className="mt-1.5" />
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-              <span>{item.category}</span>
-              <span className="text-gray-300">·</span>
-              <span>{item.language}</span>
-              {readTime && <><span className="text-gray-300">·</span><span>{readTime}</span></>}
-              {wordCount && <><span className="text-gray-300">·</span><span>{wordCount.toLocaleString()} words</span></>}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <Chip tone="primary">{item.category}</Chip>
+              <Chip>{item.language}</Chip>
+              {readTime && <Chip>{readTime}</Chip>}
+              {wordCount && <Chip>{wordCount.toLocaleString()} words</Chip>}
             </div>
           </div>
 
@@ -1218,34 +1228,37 @@ function BlogCard({
 
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <Clock className="h-3 w-3 shrink-0" />
-            <span>{formatDateTime(item.completed_at)}</span>
+            <RelativeTime value={item.completed_at} />
           </div>
 
           {/* Actions */}
-          <div className="grid grid-cols-2 gap-1 pt-0.5 sm:gap-1.5">
-            {canRead ? (
-              <Button size="sm" variant="outline" className="px-1.5 text-xs sm:px-2.5" onClick={() => setReadOpen(true)}>
-                <BookOpen className="mr-1 h-3 w-3" />Read
-              </Button>
-            ) : <div />}
-            <Button size="sm" className="bg-gray-900 px-1.5 text-xs sm:px-2.5 hover:bg-gray-800 text-white" onClick={() => setPostOpen(true)}>
-              <Share2 className="mr-1 h-3 w-3" />Post
-            </Button>
-            {item.file_url ? (
-              <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="block">
-                <Button size="sm" variant="outline" className="w-full px-1.5 text-xs sm:px-2.5">
-                  <ExternalLink className="mr-1 h-3 w-3" />Link
-                </Button>
-              </a>
-            ) : <div />}
+          <div className="space-y-1.5 pt-0.5">
             <Button
               size="sm"
-              variant="outline"
-              className="px-1.5 text-xs sm:px-2.5 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-              onClick={() => setDeleteOpen(true)}
+              className="w-full bg-primary text-xs text-white hover:bg-primary-hover"
+              onClick={() => setPostOpen(true)}
             >
-              <Trash2 className="mr-1 h-3 w-3" />Delete
+              <Share2 className="mr-1 h-3 w-3" />Post
             </Button>
+            <div className="flex gap-1.5">
+              {item.file_url && (
+                <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="flex flex-1" title="Open link" aria-label="Open link">
+                  <Button size="sm" variant="outline" className="h-8 w-full border-border px-0 text-muted-foreground hover:text-foreground">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                </a>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 border-red-200 px-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                onClick={() => setDeleteOpen(true)}
+                title="Delete"
+                aria-label="Delete"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1919,6 +1932,7 @@ export default function LibraryContent() {
     <div className="space-y-6">
       <TopBar
         title="Content Library"
+        description="Videos, images and blog posts ready to review, post or download."
         breadcrumbs={[
           { label: 'Dashboard', href: '/dashboard' },
           { label: 'Library' },

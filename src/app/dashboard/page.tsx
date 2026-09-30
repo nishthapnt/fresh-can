@@ -9,20 +9,23 @@ import KPICard from '@/components/KPICard'
 import TopBar from '@/components/layout/TopBar'
 import { KPIRowSkeleton } from '@/components/skeletons/Skeleton'
 import ActiveGenerationBanner from '@/components/ActiveGenerationBanner'
+import { RelativeTime } from '@/components/ui/relative-time'
+import JobProgressList, { selectInProgressJobs } from '@/components/JobProgressList'
 import {
   getKPIData,
+  getRecentJobs,
   getVideoLibrary,
   getImageLibrary,
   getBlogLibrary,
 } from '@/services/contentService'
 import type {
+  ContentJob,
   KPIData,
   VideoLibraryItem,
   ImageLibraryItem,
   BlogLibraryItem,
 } from '@/types/content'
 import StatusBadge from '@/components/StatusBadge'
-import { formatDateTime } from '@/lib/dateUtils'
 import {
   AlertCircle,
   BookOpen,
@@ -42,6 +45,7 @@ import {
   RefreshCw,
   Tag,
 } from 'lucide-react'
+import { clickableProps, FOCUS_RING } from '@/lib/a11y'
 
 // ─── Blog HTML styles ─────────────────────────────────────────────────────────
 
@@ -168,8 +172,8 @@ function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Vid
   return (
     <>
       <Card
-        className="group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40"
-        onClick={() => setOpen(true)}
+        className={`group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40 ${FOCUS_RING}`}
+        {...clickableProps(() => setOpen(true), `Open ${item.topic}`)}
       >
         <div className="relative aspect-square overflow-hidden bg-black">
           <video
@@ -199,7 +203,7 @@ function MiniVideoCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Vid
             {item.topic}
           </p>
           <p className="mt-1 flex items-center gap-1 text-[10px] text-gray-400">
-            <Clock className="h-2.5 w-2.5" />{formatDateTime(item.completed_at)}
+            <Clock className="h-2.5 w-2.5" /><RelativeTime value={item.completed_at} />
           </p>
         </div>
       </Card>
@@ -266,8 +270,8 @@ function MiniImageCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Ima
   return (
     <>
       <Card
-        className="group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40"
-        onClick={() => setOpen(true)}
+        className={`group cursor-pointer overflow-hidden border bg-white transition-colors hover:border-primary/40 ${FOCUS_RING}`}
+        {...clickableProps(() => setOpen(true), `Open ${item.topic}`)}
       >
         <div className="relative aspect-square overflow-hidden bg-gray-100">
           <img
@@ -287,7 +291,7 @@ function MiniImageCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Ima
             {item.topic}
           </p>
           <p className="mt-1 flex items-center gap-1 text-[10px] text-gray-400">
-            <Clock className="h-2.5 w-2.5" />{formatDateTime(item.completed_at)}
+            <Clock className="h-2.5 w-2.5" /><RelativeTime value={item.completed_at} />
           </p>
         </div>
       </Card>
@@ -360,8 +364,8 @@ function MiniBlogCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Blog
   return (
     <>
       <Card
-        className={`relative border bg-white transition-colors hover:border-primary/40${hasContent ? ' cursor-pointer' : ''}`}
-        onClick={() => { if (hasContent) setOpen(true) }}
+        className={`relative border bg-white transition-colors hover:border-primary/40 ${FOCUS_RING}${hasContent ? ' cursor-pointer' : ''}`}
+        {...(hasContent ? clickableProps(() => setOpen(true), `Open ${title}`) : {})}
       >
         {available.length > 1 && (
           <span className="absolute right-2 top-2 rounded bg-gray-900/70 px-1 py-0.5 text-[10px] font-medium text-white">
@@ -390,7 +394,7 @@ function MiniBlogCard({ variants }: { variants: Partial<Record<'EN' | 'FR', Blog
             </div>
           )}
           <p className="flex items-center gap-1 text-[10px] text-gray-400">
-            <Clock className="h-2.5 w-2.5" />{formatDateTime(item.completed_at)}
+            <Clock className="h-2.5 w-2.5" /><RelativeTime value={item.completed_at} />
           </p>
         </CardContent>
       </Card>
@@ -472,6 +476,7 @@ export default function DashboardPage() {
   const [videos, setVideos] = useState<VideoLibraryItem[]>([])
   const [images, setImages] = useState<ImageLibraryItem[]>([])
   const [blogs, setBlogs]   = useState<BlogLibraryItem[]>([])
+  const [jobs, setJobs]     = useState<ContentJob[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
 
@@ -479,13 +484,15 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      const [kpiData, vids, imgs, blgs] = await Promise.all([
+      const [kpiData, vids, imgs, blgs, recentJobs] = await Promise.all([
         getKPIData(),
         getVideoLibrary(),
         getImageLibrary(),
         getBlogLibrary(),
+        getRecentJobs(30),
       ])
       setKpi(kpiData)
+      setJobs(recentJobs)
       // Grouped by job_id below (videoGroups/imageGroups/blogGroups) so a
       // BOTH-language job renders as one card with a toggle instead of two —
       // sliced to the newest 4 there, not here, since slicing raw EN/FR rows
@@ -557,6 +564,7 @@ export default function DashboardPage() {
     <div className="space-y-6 sm:space-y-8">
       <TopBar
         title="Dashboard"
+        description="Track what's generating and review your latest content."
         breadcrumbs={[{ label: 'Fresh-CAN Studio' }, { label: 'Dashboard' }]}
         actions={
           <Button
@@ -572,6 +580,9 @@ export default function DashboardPage() {
 
       {/* Active generation banner */}
       <ActiveGenerationBanner />
+
+      {/* Jobs still moving through the pipeline (from content_jobs.status) */}
+      {!loading && <JobProgressList jobs={selectInProgressJobs(jobs)} />}
 
       {/* KPI Cards */}
       {loading ? (

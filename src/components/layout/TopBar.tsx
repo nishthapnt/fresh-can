@@ -11,6 +11,8 @@ export interface BreadcrumbItem {
 
 interface TopBarProps {
   title: string
+  /** One-line subtitle under the title. */
+  description?: string
   breadcrumbs?: BreadcrumbItem[]
   actions?: React.ReactNode
   className?: string
@@ -18,6 +20,7 @@ interface TopBarProps {
 
 export default function TopBar({
   title,
+  description,
   breadcrumbs,
   actions,
   className,
@@ -52,6 +55,7 @@ export default function TopBar({
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
           {title}
         </h1>
+        {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && (
         <div className="flex flex-shrink-0 items-center gap-2">{actions}</div>

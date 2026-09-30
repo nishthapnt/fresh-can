@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import StatusBadge from './StatusBadge'
 import type { ContentJob } from '@/types/content'
 import { formatDistanceToNow } from '@/lib/dateUtils'
+import { clickableProps, FOCUS_RING } from '@/lib/a11y'
 
 interface ContentCardProps {
   job: ContentJob
@@ -13,8 +14,8 @@ interface ContentCardProps {
 export default function ContentCard({ job, onClick }: ContentCardProps) {
   return (
     <Card
-      className="cursor-pointer border bg-white transition-colors hover:border-primary/40"
-      onClick={onClick}
+      className={`cursor-pointer border bg-white transition-colors hover:border-primary/40 ${FOCUS_RING}`}
+      {...clickableProps(onClick, `Open ${job.topic}`)}
     >
       <CardContent className="p-5">
         <div className="mb-3 flex items-start justify-between gap-2">

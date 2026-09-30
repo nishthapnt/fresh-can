@@ -8,6 +8,7 @@ export default function PostedPage() {
     <div className="space-y-6">
       <TopBar
         title="Posted"
+        description="Content that has already been published to social."
         breadcrumbs={[
           { label: 'Dashboard', href: '/dashboard' },
           { label: 'Posted' },

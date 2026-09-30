@@ -277,6 +277,7 @@ export default function SocialPage() {
     <div className="space-y-6">
       <TopBar
         title="Social Approval"
+        description="Review captions and choose platforms before posting."
         breadcrumbs={[
           { label: 'Dashboard', href: '/dashboard' },
           { label: 'Jobs', href: `/dashboard/jobs/${job_id}` },
