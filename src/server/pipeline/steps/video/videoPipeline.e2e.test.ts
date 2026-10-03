@@ -1222,14 +1222,25 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     fresh = (await client.from('content_language_tracks').select('*').eq('id', track.id).single()).data as TrackRow
     expect(fresh.status).toBe('awaiting_shared')
 
+    // Snapshot after the first pass: localize_script may legitimately make a
+    // corrective-rewrite call for off-band narration, so the exact count isn't
+    // the point — the second pass adding NONE is.
+    const firstPass = {
+      script: scriptGen.generate.mock.calls.length,
+      voice: voice.synthesize.mock.calls.length,
+      transcribe: transcription.submit.mock.calls.length,
+    }
+
     // Second pass — should be entirely a no-op.
     await runLocalizeScript(client, fresh, approved.id, scriptGen)
     await runSynthesizeVoice(client, fresh, approved.id, jobId, voice, uploader)
     await runTranscribeAudio(client, fresh, approved.id, transcription)
 
-    expect(scriptGen.generate).toHaveBeenCalledTimes(2) // generate_script + localize_script, not re-called
-    expect(voice.synthesize).toHaveBeenCalledTimes(2) // one per scene, not re-called
-    expect(transcription.submit).toHaveBeenCalledTimes(2) // one per scene, not re-called
+    expect(scriptGen.generate).toHaveBeenCalledTimes(firstPass.script)
+    expect(voice.synthesize).toHaveBeenCalledTimes(firstPass.voice)
+    expect(transcription.submit).toHaveBeenCalledTimes(firstPass.transcribe)
+    expect(voice.synthesize).toHaveBeenCalledTimes(2) // one per scene
+    expect(transcription.submit).toHaveBeenCalledTimes(2) // one per scene
   })
 
   it('a track stuck at "generating" after transcribe_captions already succeeded catches up to "awaiting_shared" instead of being stranded forever', async () => {

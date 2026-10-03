@@ -1909,3 +1909,6 @@
 - Settings routes (list, save, reset, upload-post info) now `console.error` a prefixed message with only the error message (never key material) before returning their generic errors.
 - Known, unchanged: throttle is per-process (soft guard on multi-instance hosting); in-flight social-post check isn't locked against the save; `updatedBy` is the constant `'session'`; no unit test for `GET /api/settings/upload-post`.
 - 17 settings route tests pass; `tsc` clean.
+
+### 2026-10-03 — Fix stale M3 video e2e test
+- `videoPipeline.e2e.test.ts` "M3: re-running … calls no provider again" failed (also on the pre-Settings commit `d73fc82`). Cause: the test, not the pipeline. `localize_script` makes a corrective-rewrite generator call for off-band narration, and the mock's ~5-word narration for a 10s slot triggers it, so the first pass already makes 3 calls, not the hard-coded 2. The test now snapshots call counts after the first pass and asserts the second pass adds none. All 23 tests in the file pass; `tsc` clean.
