@@ -1,3 +1,4 @@
+import { getApiKey } from '@/server/pipeline/credentials'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { BRAND_PROFILE } from '@/server/pipeline/prompts/index'
@@ -100,9 +101,13 @@ export async function POST(
     return NextResponse.json({ error: 'Job not found' }, { status: 404 })
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    return NextResponse.json({ error: 'OPENAI_API_KEY is not configured' }, { status: 500 })
+  // Job-pinned: this is the first credential use for an image job, so it also
+  // fixes which account the rest of the job runs on (see credentials.ts).
+  let apiKey: string
+  try {
+    apiKey = await getApiKey('openai', { jobId })
+  } catch {
+    return NextResponse.json({ error: 'OpenAI credentials are not configured' }, { status: 500 })
   }
 
   try {

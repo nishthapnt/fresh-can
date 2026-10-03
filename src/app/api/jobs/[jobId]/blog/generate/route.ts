@@ -1,3 +1,4 @@
+import { pinJobCredentials } from '@/server/pipeline/credentials'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { inngest } from '@/inngest/client'
@@ -51,6 +52,11 @@ export async function POST(
   if (jobErr || !job) {
     return NextResponse.json({ error: 'Job not found' }, { status: 404 })
   }
+
+  // Fix which API accounts this job runs on at job start. Best-effort: the
+  // resolver also pins lazily on first credential use, so a failure here must
+  // not block generation.
+  await pinJobCredentials(jobId).catch(() => undefined)
 
   let body: { requestedLanguages?: unknown } = {}
   try {

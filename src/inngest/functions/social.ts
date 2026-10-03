@@ -19,7 +19,7 @@ import { inngest } from '../client'
 import { createServiceClient, getPostingSocialPlatformLogGroups } from '../../server/pipeline/db'
 import { runSubmitSocialPosts, runPollSocialPosts } from '../../server/pipeline/steps/social/publishPost'
 import { UploadPostSocialPublisher } from '../../server/pipeline/adapters/socialPublisher'
-import { env } from '../../server/pipeline/env'
+import { getActiveCredentialRef, getApiKey, getUploadPostProfile } from '../../server/pipeline/credentials'
 
 const client = createServiceClient()
 
@@ -40,12 +40,19 @@ export const socialPublish = inngest.createFunction(
     concurrency: { limit: 1 },
   },
   async ({ step }) => {
-    if (!env.UPLOAD_POST_PROFILE) {
+    // Social is account-level, not job-level (one publisher drains every
+    // approved post), so it can't use a job's pins. Pin this RUN instead: the
+    // step returns only the non-secret credential id (never the key — step
+    // output is persisted by Inngest), so submit and every poll replay below
+    // talk to the same upload-post account even if Settings changes mid-run.
+    const credentialRef = await step.run('pin-upload-post-credential', () => getActiveCredentialRef('upload_post'))
+    const profile = await getUploadPostProfile({ ref: credentialRef })
+    if (!profile) {
       // Mirrors worker/src/index.ts's main() guard — social posting is
       // optional infrastructure, not required for blog/image/video.
       return { status: 'skipped', reason: 'UPLOAD_POST_PROFILE not configured' }
     }
-    const publisher = new UploadPostSocialPublisher(env.UPLOAD_POST_API_KEY, env.UPLOAD_POST_PROFILE)
+    const publisher = new UploadPostSocialPublisher(await getApiKey('upload_post', { ref: credentialRef }), profile)
 
     await step.run('submit', () => runSubmitSocialPosts(client, publisher))
 

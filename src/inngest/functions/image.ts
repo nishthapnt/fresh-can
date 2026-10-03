@@ -32,6 +32,8 @@ import { SupabasePhotoStorageUploader } from '../../server/pipeline/adapters/sto
 import { BRAND_PROFILE, composePhotoPrompt, type ImageStyle } from '../../server/pipeline/prompts/index'
 import { parseAdCopy, deriveHeadline } from '../../server/pipeline/lib/adCopy'
 import { env } from '../../server/pipeline/env'
+import { getApiKey } from '../../server/pipeline/credentials'
+import { failJobOnCredentialUnavailable } from '../credentialFailure'
 
 type Step = GetStepTools<typeof inngest>
 
@@ -175,11 +177,12 @@ export const imageGenerate = inngest.createFunction(
   {
     id: 'image-generate',
     triggers: [{ event: 'content/image.generate' }],
+    onFailure: failJobOnCredentialUnavailable,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
     const { pipelineId, jobId } = event.data as { pipelineId: string; jobId: string }
-    const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
+    const scriptGenerator = new OpenAIScriptGenerator(await getApiKey('openai', { jobId }))
     // PERMANENT as of 2026-09-23: nano-banana-2 (NanoBananaImageGenerator)
     // is the permanent image model regardless of imageStyle, not a
     // temporary test-cost measure — matches blog and video, which made
@@ -192,7 +195,7 @@ export const imageGenerate = inngest.createFunction(
     // real KIE credits. Never set in production.
     const nanoBananaGenerator: ImageGenerator = env.KIE_FAKE_MODE
       ? new FakeKieImageGenerator()
-      : new NanoBananaImageGenerator(env.KIE_API_KEY)
+      : new NanoBananaImageGenerator(await getApiKey('kie', { jobId }))
     const uploader = new SupabasePhotoStorageUploader(client)
 
     let pipeline = await step.run('fetch-pipeline', () => fetchPipeline(pipelineId))
@@ -308,6 +311,7 @@ export const imageTrackProcess = inngest.createFunction(
   {
     id: 'image-track-process',
     triggers: [{ event: 'content/image.track.process' }],
+    onFailure: failJobOnCredentialUnavailable,
     concurrency: { key: 'event.data.trackId', limit: 1 },
   },
   async ({ event, step }) => {
@@ -316,7 +320,7 @@ export const imageTrackProcess = inngest.createFunction(
       pipelineId: string
       jobId: string
     }
-    const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
+    const scriptGenerator = new OpenAIScriptGenerator(await getApiKey('openai', { jobId }))
 
     let track = await step.run('fetch-track', () => fetchTrack(trackId))
     const pipeline = await step.run('fetch-pipeline', () => fetchPipeline(pipelineId))

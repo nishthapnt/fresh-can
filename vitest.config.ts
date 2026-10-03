@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config'
+import { resolve } from 'node:path'
 
 export default defineConfig({
+  resolve: { alias: { '@': resolve(__dirname, 'src') } },
   test: {
     environment: 'node',
-    include: ['src/server/pipeline/**/*.test.ts'],
+    include: ['src/server/pipeline/**/*.test.ts', 'src/app/api/settings/**/*.test.ts', 'src/inngest/**/*.test.ts'],
     // Live integration/e2e tests do many real Supabase round trips per test
     // (the busiest does ~20+) with real, variable network latency — 5s was
     // too tight, and even 20s flaked under latency variance across runs.

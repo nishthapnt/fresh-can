@@ -8,6 +8,7 @@ import {
   Sparkles,
   FolderOpen,
   Megaphone,
+  Settings,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -48,6 +49,12 @@ const navItems = [
     href: '/dashboard/posted',
     label: 'Posted',
     icon: Megaphone,
+    exact: false,
+  },
+  {
+    href: '/dashboard/settings',
+    label: 'Settings',
+    icon: Settings,
     exact: false,
   },
 ]

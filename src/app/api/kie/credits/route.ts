@@ -1,14 +1,19 @@
 import { NextResponse } from 'next/server'
+import { getApiKey } from '@/server/pipeline/credentials'
 
 // KIE.ai's own dashboard only reports credits, not a purchased/plan "total" —
 // its API mirrors that (a single live balance figure, no total field), so
 // this route only ever returns "remaining" (see docs.kie.ai; no total-credits
-// endpoint exists). KIE_API_KEY must stay server-side — never exposed to the
+// endpoint exists). The API key must stay server-side — never exposed to the
 // client, hence this proxy route instead of calling api.kie.ai from Sidebar.
 export async function GET() {
-  const apiKey = process.env.KIE_API_KEY
-  if (!apiKey) {
-    return NextResponse.json({ error: 'KIE_API_KEY is not configured' }, { status: 500 })
+  // Active credential (custom if set in Settings, else KIE_API_KEY) — this
+  // is the account NEW jobs will use.
+  let apiKey: string
+  try {
+    apiKey = await getApiKey('kie')
+  } catch {
+    return NextResponse.json({ error: 'KIE.ai credentials are not configured' }, { status: 500 })
   }
 
   let res: Response

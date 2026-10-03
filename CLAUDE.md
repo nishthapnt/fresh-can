@@ -101,6 +101,9 @@ KIE_API_KEY=<from kie.ai>
 ELEVENLABS_API_KEY=<from elevenlabs.io — video narration>
 ASSEMBLYAI_API_KEY=<from assemblyai.com — video caption timing>
 UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render + social posting>
+# Settings → API Keys: custom keys saved in the dashboard override the keys above
+# (encrypted with this; generate via `openssl rand -base64 32`). Server-only.
+CREDENTIALS_ENCRYPTION_KEY=<32 random bytes, base64>
 ```
 
 ---
@@ -114,6 +117,7 @@ UPLOAD_POST_API_KEY=<from upload-post.com — video FFmpeg render + social posti
 | `generated_content` | Final file URLs |
 | `social_posts` | Caption + hashtags + platforms |
 | `social_platform_logs` | Per-platform post results |
+| `api_credentials` | Custom encrypted provider keys (Settings → API Keys); versioned, service-role only |
 
 ### Status Colors (NEVER deviate)
 | Status | Color |

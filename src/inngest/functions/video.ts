@@ -68,6 +68,8 @@ import { AssemblyAITranscriptionService } from '../../server/pipeline/adapters/a
 import { UploadPostAVMerger } from '../../server/pipeline/adapters/avMerger'
 import { BRAND_PROFILE, composeCharacterRefPrompt, type CreativeBrief } from '../../server/pipeline/prompts/index'
 import { env } from '../../server/pipeline/env'
+import { getApiKey } from '../../server/pipeline/credentials'
+import { failJobOnCredentialUnavailable } from '../credentialFailure'
 
 type Step = GetStepTools<typeof inngest>
 type AspectRatio = '9:16' | '1:1' | '16:9'
@@ -105,20 +107,23 @@ const client = createServiceClient()
 // no documented prompt-length limit — the existing budgets are kept as a
 // conservative ceiling regardless, not loosened just because the new
 // model may not enforce one.
-function characterRefGenerator(): ImageGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(env.KIE_API_KEY)
+//
+// API keys are resolved per job (getApiKey's `jobId`) so the account a job
+// started on never changes mid-job — see credentials.ts.
+async function characterRefGenerator(jobId: string): Promise<ImageGenerator> {
+  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(await getApiKey('kie', { jobId }))
 }
-function sceneImageGenerator(): ImageGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(env.KIE_API_KEY)
+async function sceneImageGenerator(jobId: string): Promise<ImageGenerator> {
+  return env.KIE_FAKE_MODE ? new FakeKieImageGenerator() : new NanoBananaImageGenerator(await getApiKey('kie', { jobId }))
 }
-function sceneVideoGenerator(): VideoGenerator {
-  return env.KIE_FAKE_MODE ? new FakeKieVideoGenerator() : new KieVideoGenerator(env.KIE_API_KEY)
+async function sceneVideoGenerator(jobId: string): Promise<VideoGenerator> {
+  return env.KIE_FAKE_MODE ? new FakeKieVideoGenerator() : new KieVideoGenerator(await getApiKey('kie', { jobId }))
 }
 // Real vision QA gate always, even in KIE_FAKE_MODE — it's a separate
 // OpenAI call, not a KIE one, and there is no fake counterpart (same as
 // OpenAIScriptGenerator above, which KIE_FAKE_MODE never gates either).
-function sceneImageValidator() {
-  return new OpenAIImageValidator(env.OPENAI_API_KEY)
+async function sceneImageValidator(jobId: string) {
+  return new OpenAIImageValidator(await getApiKey('openai', { jobId }))
 }
 
 async function fetchPipeline(pipelineId: string): Promise<PipelineRow> {
@@ -171,11 +176,12 @@ export const videoGenerate = inngest.createFunction(
   {
     id: 'video-generate',
     triggers: [{ event: 'content/video.generate' }],
+    onFailure: failJobOnCredentialUnavailable,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
     const { pipelineId, jobId } = event.data as { pipelineId: string; jobId: string }
-    const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
+    const scriptGenerator = new OpenAIScriptGenerator(await getApiKey('openai', { jobId }))
 
     const job = await step.run('fetch-job', () => fetchVideoJobFields(jobId))
 
@@ -233,12 +239,13 @@ export const videoGenerate = inngest.createFunction(
  */
 async function runCharacterRefUntilSettled(
   step: Step,
+  jobId: string,
   pipelineId: string,
   prompt: string,
   referenceImageUrl: string | undefined,
   aspectRatio: AspectRatio | undefined,
 ): Promise<{ status: 'ready' | 'failed'; characterRefUrl: string | null }> {
-  const generator = characterRefGenerator()
+  const generator = await characterRefGenerator(jobId)
   const uploader = new SupabaseVideoStorageUploader(client)
 
   for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
@@ -270,15 +277,16 @@ async function runCharacterRefUntilSettled(
  */
 async function runSceneVisualsUntilSettled(
   step: Step,
+  jobId: string,
   pipelineId: string,
   characterRefUrl: string,
   aspectRatio: AspectRatio | undefined,
 ): Promise<PipelineRow> {
-  const imageGen = sceneImageGenerator()
-  const videoGen = sceneVideoGenerator()
+  const imageGen = await sceneImageGenerator(jobId)
+  const videoGen = await sceneVideoGenerator(jobId)
   const uploader = new SupabaseVideoStorageUploader(client)
-  const scaler = new UploadPostAVMerger(env.UPLOAD_POST_API_KEY)
-  const imageValidator = sceneImageValidator()
+  const scaler = new UploadPostAVMerger(await getApiKey('upload_post', { jobId }))
+  const imageValidator = await sceneImageValidator(jobId)
 
   let pipeline = await fetchPipeline(pipelineId)
   for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
@@ -308,6 +316,7 @@ export const videoApprove = inngest.createFunction(
   {
     id: 'video-approve',
     triggers: [{ event: 'content/video.approve' }],
+    onFailure: failJobOnCredentialUnavailable,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
@@ -324,6 +333,7 @@ export const videoApprove = inngest.createFunction(
 
     const characterRef = await runCharacterRefUntilSettled(
       step,
+      jobId,
       pipelineId,
       characterRefPrompt.prompt,
       characterRefPrompt.referenceImageUrl,
@@ -333,7 +343,7 @@ export const videoApprove = inngest.createFunction(
       return { status: 'failed', stage: 'generate_character_ref' }
     }
 
-    const finalPipeline = await runSceneVisualsUntilSettled(step, pipelineId, characterRef.characterRefUrl, aspectRatio)
+    const finalPipeline = await runSceneVisualsUntilSettled(step, jobId, pipelineId, characterRef.characterRefUrl, aspectRatio)
     return { status: finalPipeline.status }
   },
 )
@@ -349,6 +359,7 @@ export const videoTrackRender = inngest.createFunction(
   {
     id: 'video-track-render',
     triggers: [{ event: 'content/video.track.render' }],
+    onFailure: failJobOnCredentialUnavailable,
     concurrency: { key: 'event.data.trackId', limit: 1 },
     // Added 2026-09-21 — this file's own header ("the Inngest route's
     // maxDuration must be set high enough to cover a realistic render")
@@ -371,10 +382,10 @@ export const videoTrackRender = inngest.createFunction(
       pipelineId: string
       jobId: string
     }
-    const scriptGenerator = new OpenAIScriptGenerator(env.OPENAI_API_KEY)
-    const voiceSynthesizer = new ElevenLabsVoiceSynthesizer(env.ELEVENLABS_API_KEY)
-    const transcriptionService = new AssemblyAITranscriptionService(env.ASSEMBLYAI_API_KEY)
-    const avMerger = new UploadPostAVMerger(env.UPLOAD_POST_API_KEY)
+    const scriptGenerator = new OpenAIScriptGenerator(await getApiKey('openai', { jobId }))
+    const voiceSynthesizer = new ElevenLabsVoiceSynthesizer(await getApiKey('elevenlabs', { jobId }))
+    const transcriptionService = new AssemblyAITranscriptionService(await getApiKey('assemblyai', { jobId }))
+    const avMerger = new UploadPostAVMerger(await getApiKey('upload_post', { jobId }))
     const videoUploader = new SupabaseVideoStorageUploader(client)
 
     let track = await step.run('fetch-track', () => fetchTrack(trackId))

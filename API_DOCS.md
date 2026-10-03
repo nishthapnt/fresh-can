@@ -149,6 +149,29 @@ Status: 404 / 500 / 502
 
 ---
 
+### Settings — API Keys
+
+All three routes require a session (`proxy.ts` **and** an in-route check → `401` without one). Responses never contain a key, the encrypted value, or the env default; only `provider`, `label`, `source` (`custom` | `default`), `last4`, `updatedAt`, `profile` (upload_post only, not secret) and `defaultConfigured`. Providers: `openai`, `kie`, `elevenlabs`, `assemblyai`, `upload_post` (anything else → `404`). Requires `CREDENTIALS_ENCRYPTION_KEY` to save. New keys apply to jobs started afterwards; a job keeps the credential version it pinned at start. Resetting/replacing retires the old version (kept until no unfinished job uses it).
+
+#### `GET /api/settings/keys`
+**Response:** `{ "success": true, "keys": [{ "provider": "openai", "label": "OpenAI", "source": "custom", "last4": "1234", "updatedAt": "…", "profile": null, "defaultConfigured": true }] }` (default providers have `source: "default"`, `last4: null`).
+
+#### `PUT /api/settings/keys/[provider]`
+**Request Body:** `{ "value": "api key", "profile": "upload-post profile (upload_post only, required)" }`
+**Description:** Test & Save — the key is checked server-side with a cheap authenticated read against the provider (no generation, no credits); only if valid is it encrypted (AES-256-GCM) and saved. On any failure nothing changes (an existing custom key stays active).
+**Response (success):** `{ "success": true, "key": { …status } }`
+**Errors:** `400` malformed key/profile · `409` (upload_post) social posts currently publishing · `422` provider rejected the key / profile not found · `429` provider rate limit or >10 writes/min · `502` provider unreachable · `503` encryption secret not configured · `500`. Error text never echoes the key.
+
+#### `DELETE /api/settings/keys/[provider]`
+**Description:** Reset to default (env key). Idempotent.
+**Response:** `{ "success": true, "removed": true|false, "key": { …status } }`
+
+#### `GET /api/settings/upload-post`
+**Description:** Plan, profile limit and connected platforms of the *active* upload-post account (custom key if set, else env). Non-secret fields only.
+**Response:** `{ "success": true, "info": { "plan": "default", "profileLimit": 2, "profileCount": 1, "connectedPlatforms": ["instagram"] } }` — `info` is `null` if the provider is unreachable.
+
+---
+
 ### Jobs — Video
 
 #### `POST /api/jobs/[jobId]/video/script`
@@ -243,3 +266,5 @@ These are fired from the frontend — documented here for reference.
 | 2026-09-14 | Created (replaces n8n `image_questions` webhook) | POST /api/jobs/[jobId]/image/questions |
 | 2026-09-24 | Created | POST /api/jobs/[jobId]/video/script |
 | 2026-09-24 | Created | POST /api/jobs/[jobId]/blog/draft |
+| 2026-10-01 | Created | GET /api/settings/keys, PUT/DELETE /api/settings/keys/[provider] |
+| 2026-10-01 | Created | GET /api/settings/upload-post |
