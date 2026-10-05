@@ -4,6 +4,7 @@ import StatusBadge from '@/components/StatusBadge'
 import { RelativeTime } from '@/components/ui/relative-time'
 import { cn } from '@/lib/utils'
 import type { ContentJob, JobStatus } from '@/types/content'
+import type { JobProblem } from '@/services/contentService'
 
 const STEPS = ['Drafting', 'Review', 'Generating', 'Ready'] as const
 
@@ -56,7 +57,7 @@ function Stepper({ status }: { status: JobStatus }) {
   )
 }
 
-export default function JobProgressList({ jobs }: { jobs: ContentJob[] }) {
+export default function JobProgressList({ jobs, problems = {} }: { jobs: ContentJob[]; problems?: Record<string, JobProblem[]> }) {
   if (jobs.length === 0) return null
   return (
     <section aria-label="Jobs in progress" className="space-y-3">
@@ -80,6 +81,12 @@ export default function JobProgressList({ jobs }: { jobs: ContentJob[] }) {
                 <StatusBadge status={job.status} />
               </div>
               <Stepper status={job.status} />
+              {job.status === 'failed' && problems[job.id]?.[0] && (
+                <p className="line-clamp-2 text-xs text-red-600" title={problems[job.id][0].message}>
+                  {problems[job.id][0].message}
+                  {problems[job.id].length > 1 ? ` (+${problems[job.id].length - 1} more)` : ''}
+                </p>
+              )}
             </Link>
           </li>
         ))}

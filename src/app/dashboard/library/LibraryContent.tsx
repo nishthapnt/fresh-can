@@ -20,6 +20,7 @@ import { supabase } from '@/lib/supabase'
 import {
   getVideoLibrary,
   getImageLibrary,
+  isImageApproved,
   getBlogLibrary,
   getPostedContent,
   getSocialConnectionStatus,
@@ -1804,9 +1805,9 @@ function GenerationTracker({
     const checks = await Promise.all(typeList.map(async (t) => {
       let found = false
       if (t === 'image_post') {
-        const { data } = await supabase.from('generated_content').select('id')
-          .eq('job_id', jobId).eq('content_type', 'image_post').eq('status', 'completed').maybeSingle()
-        found = !!data
+        const { data } = await supabase.from('generated_content').select('id, content_language_tracks ( status )')
+          .eq('job_id', jobId).eq('content_type', 'image_post').eq('status', 'completed')
+        found = (data ?? []).some((r) => isImageApproved(r.content_language_tracks))
       } else if (t === 'video') {
         const { data } = await supabase.from('generated_content').select('id')
           .eq('job_id', jobId).eq('content_type', 'video').not('file_url', 'is', null).maybeSingle()

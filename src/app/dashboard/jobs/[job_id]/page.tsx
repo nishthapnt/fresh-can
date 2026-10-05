@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import TopBar from '@/components/layout/TopBar'
+import JobProblems from '@/components/JobProblems'
 import StatusBadge from '@/components/StatusBadge'
 import LanguageToggle, { LANG_LABELS } from '@/components/LanguageToggle'
 import type { ScriptPart } from '@/components/dashboard/ScriptPartCard'
@@ -2481,6 +2482,7 @@ export default function JobDetailPage() {
           ]}
           actions={<StatusBadge status={job.status} />}
         />
+        <JobProblems jobId={job_id} />
         <Card className="border-green-200 bg-green-50">
           <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
@@ -2538,6 +2540,8 @@ export default function JobDetailPage() {
         ]}
         actions={<StatusBadge status={job.status} />}
       />
+
+      <JobProblems jobId={job_id} />
 
       {/* Video generating banner — only when video is actually one of the content types */}
       {isGenerating && (job.content_types as ContentType[]).includes('video') && (

@@ -69,7 +69,7 @@ import { UploadPostAVMerger } from '../../server/pipeline/adapters/avMerger'
 import { BRAND_PROFILE, composeCharacterRefPrompt, type CreativeBrief } from '../../server/pipeline/prompts/index'
 import { env } from '../../server/pipeline/env'
 import { getApiKey } from '../../server/pipeline/credentials'
-import { failJobOnCredentialUnavailable } from '../credentialFailure'
+import { failJobOnRunFailure } from '../runFailure'
 
 type Step = GetStepTools<typeof inngest>
 type AspectRatio = '9:16' | '1:1' | '16:9'
@@ -176,7 +176,7 @@ export const videoGenerate = inngest.createFunction(
   {
     id: 'video-generate',
     triggers: [{ event: 'content/video.generate' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
@@ -316,7 +316,7 @@ export const videoApprove = inngest.createFunction(
   {
     id: 'video-approve',
     triggers: [{ event: 'content/video.approve' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
@@ -359,7 +359,7 @@ export const videoTrackRender = inngest.createFunction(
   {
     id: 'video-track-render',
     triggers: [{ event: 'content/video.track.render' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.trackId', limit: 1 },
     // Added 2026-09-21 — this file's own header ("the Inngest route's
     // maxDuration must be set high enough to cover a realistic render")

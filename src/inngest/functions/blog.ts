@@ -40,7 +40,7 @@ import {
 import { parseAdCopy, deriveHeadline } from '../../server/pipeline/lib/adCopy'
 import { env } from '../../server/pipeline/env'
 import { getApiKey } from '../../server/pipeline/credentials'
-import { failJobOnCredentialUnavailable } from '../credentialFailure'
+import { failJobOnRunFailure } from '../runFailure'
 
 type Step = GetStepTools<typeof inngest>
 
@@ -196,7 +196,7 @@ export const blogGenerate = inngest.createFunction(
   {
     id: 'blog-generate',
     triggers: [{ event: 'content/blog.generate' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     // Belt-and-suspenders alongside claimPipeline's own CAS (db.ts) — see
     // docs/IMPLEMENTATION_PLAN.md's "Concurrency & idempotency" section for
     // why both are kept.
@@ -363,7 +363,7 @@ export const blogTrackProcess = inngest.createFunction(
   {
     id: 'blog-track-process',
     triggers: [{ event: 'content/blog.track.process' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.trackId', limit: 1 },
   },
   async ({ event, step }) => {

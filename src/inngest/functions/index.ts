@@ -1,6 +1,7 @@
 import { blogGenerate, blogTrackProcess } from './blog'
 import { imageGenerate, imageTrackProcess } from './image'
 import { socialPublish } from './social'
+import { sweepStalledWork } from './sweeper'
 import { videoGenerate, videoApprove, videoTrackRender } from './video'
 
 export const functions = [
@@ -12,4 +13,5 @@ export const functions = [
   videoGenerate,
   videoApprove,
   videoTrackRender,
+  sweepStalledWork,
 ]

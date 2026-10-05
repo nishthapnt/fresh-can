@@ -33,7 +33,7 @@ import { BRAND_PROFILE, composePhotoPrompt, type ImageStyle } from '../../server
 import { parseAdCopy, deriveHeadline } from '../../server/pipeline/lib/adCopy'
 import { env } from '../../server/pipeline/env'
 import { getApiKey } from '../../server/pipeline/credentials'
-import { failJobOnCredentialUnavailable } from '../credentialFailure'
+import { failJobOnRunFailure } from '../runFailure'
 
 type Step = GetStepTools<typeof inngest>
 
@@ -177,7 +177,7 @@ export const imageGenerate = inngest.createFunction(
   {
     id: 'image-generate',
     triggers: [{ event: 'content/image.generate' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.pipelineId', limit: 1 },
   },
   async ({ event, step }) => {
@@ -311,7 +311,7 @@ export const imageTrackProcess = inngest.createFunction(
   {
     id: 'image-track-process',
     triggers: [{ event: 'content/image.track.process' }],
-    onFailure: failJobOnCredentialUnavailable,
+    onFailure: failJobOnRunFailure,
     concurrency: { key: 'event.data.trackId', limit: 1 },
   },
   async ({ event, step }) => {

@@ -240,6 +240,16 @@ function resolveHashtags(row: Record<string, unknown>): string[] {
   return []
 }
 
+// An image_post's generated_content row is written the moment generation
+// finishes (track 'draft_ready'); the track only reaches 'ready' when the
+// user approves it. Library/dashboard visibility is gated on that approval,
+// matching blog (whose row is only written on approve). Rows with no track
+// are pre-pipeline legacy content and stay visible.
+export function isImageApproved(track: { status: string } | { status: string }[] | null | undefined): boolean {
+  const t = Array.isArray(track) ? track[0] : track
+  return !t || t.status === 'ready'
+}
+
 export async function getImageLibrary(): Promise<ImageLibraryItem[]> {
   // Select all columns — the worker (worker/src/db.ts upsertImageGeneratedContent) writes
   // image_url / caption / hashtags as both direct columns and inside output_data
@@ -247,6 +257,7 @@ export async function getImageLibrary(): Promise<ImageLibraryItem[]> {
     .from('generated_content')
     .select(`
       *,
+      content_language_tracks ( status ),
       content_jobs!inner (
         topic,
         category,
@@ -261,7 +272,7 @@ export async function getImageLibrary(): Promise<ImageLibraryItem[]> {
   if (error) throw new Error(error.message)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data ?? []).map((row: any) => {
+  return (data ?? []).filter((row: any) => isImageApproved(row.content_language_tracks)).map((row: any) => {
     const r = row as Record<string, unknown>
     const od = (r.output_data ?? {}) as Record<string, unknown>
 
@@ -501,4 +512,52 @@ export async function getPostedContent() {
       ?? null,
     platform_logs: logs?.filter(l => l.job_id === post.job_id) ?? [],
   }))
+}
+// ─── Job problems ─────────────────────────────────────────────────────────────
+
+export interface JobProblem {
+  contentType: string
+  language: string | null
+  message: string
+}
+
+/**
+ * Why jobs failed or stalled: the `last_error` of every failed pipeline and
+ * language track (written by the pipeline steps, the Inngest onFailure
+ * handler and the stalled-work sweeper). Keyed by job id; jobs with no
+ * problems are absent. Cancellations are user-initiated, not problems.
+ */
+export async function getJobProblems(jobIds: string[]): Promise<Record<string, JobProblem[]>> {
+  if (jobIds.length === 0) return {}
+  const { data: pipelines, error } = await supabase
+    .from('content_pipelines')
+    .select('id, job_id, content_type, status, last_error')
+    .in('job_id', jobIds)
+  if (error) throw new Error(error.message)
+  if (!pipelines || pipelines.length === 0) return {}
+
+  const { data: tracks, error: tErr } = await supabase
+    .from('content_language_tracks')
+    .select('content_pipeline_id, language, status, last_error')
+    .in('content_pipeline_id', pipelines.map((p) => p.id))
+    .eq('status', 'failed')
+  if (tErr) throw new Error(tErr.message)
+
+  const isReal = (m: string | null): m is string => !!m && m !== 'Cancelled by user'
+  const out: Record<string, JobProblem[]> = {}
+  const add = (jobId: string, p: JobProblem) => { (out[jobId] ??= []).push(p) }
+
+  for (const p of pipelines) {
+    if (p.status === 'failed' && isReal(p.last_error)) {
+      add(p.job_id, { contentType: p.content_type, language: null, message: p.last_error })
+    }
+  }
+  for (const t of tracks ?? []) {
+    const p = pipelines.find((x) => x.id === t.content_pipeline_id)
+    // A shared-pipeline failure also fails its tracks with a "Shared pipeline
+    // failed: …" copy of the same reason — don't list it twice.
+    if (!p || !isReal(t.last_error) || t.last_error.startsWith('Shared pipeline failed:')) continue
+    add(p.job_id, { contentType: p.content_type, language: t.language, message: t.last_error })
+  }
+  return out
 }

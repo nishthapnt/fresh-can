@@ -1912,3 +1912,16 @@
 
 ### 2026-10-03 — Fix stale M3 video e2e test
 - `videoPipeline.e2e.test.ts` "M3: re-running … calls no provider again" failed (also on the pre-Settings commit `d73fc82`). Cause: the test, not the pipeline. `localize_script` makes a corrective-rewrite generator call for off-band narration, and the mock's ~5-word narration for a 10s slot triggers it, so the first pass already makes 3 calls, not the hard-coded 2. The test now snapshots call counts after the first pass and asserts the second pass adds none. All 23 tests in the file pass; `tsc` clean.
+
+### 2026-10-05 — Stalled-run error mechanism
+- Cause: a video render claimed its track (`rendering`) then the process running it died silently; no step row, no `last_error`, and Inngest's `onFailure` never fired, so the job read `generating` for ~11h.
+- New `src/inngest/runFailure.ts` (`failJobOnRunFailure`, replaces `credentialFailure.ts`): on ANY terminal Inngest run failure (retries exhausted, timeout, throw) the in-flight track/pipeline is failed with `Run stopped (<function>): <reason>`; credential messages stay verbatim; rows already `ready`/`failed` (e.g. user cancel) are left alone. Wired on all blog/image/video functions.
+- New `src/inngest/functions/sweeper.ts` (`sweep-stalled-work`, cron every 10 min): fails tracks (`generating`/`rendering`) and pipelines (`generating`) untouched for 45 min with `Stalled: … no progress for N min … Use Retry to resume.` plus any prior `last_error`. The job page already renders `last_error` on failed tracks/pipelines and has Retry.
+- Tests: `runFailure.test.ts` (4); `tsc` clean. Sweeper not exercised against a live Inngest cron.
+- Finding (no change made): image_post and video write `generated_content` automatically, blog only on approve; the image Approve route just flips the track to `ready`, so it has no effect on library visibility.
+
+### 2026-10-05 — Image library gated on approval + errors shown to the user
+- `getImageLibrary` now hides image rows whose language track is still `draft_ready` (new `isImageApproved`; rows with no track are legacy and stay visible). Live data had 19 unapproved + 8 approved + 55 legacy image rows. The library's per-job "done" check applies the same gate.
+- New `getJobProblems` (contentService) + `components/JobProblems.tsx`: red banner on the job page (both layouts) listing every failed pipeline/track `last_error` per content type/language, polled every 10s; cancellations excluded. Dashboard "In progress" failed cards show the first reason (+N more).
+- `tsc` clean; 577 unit tests pass (non-e2e). Not checked in a browser.
+- Correction to the entry above: `image_draft_approved` in `job_overview` reads `content_drafts`, which image has no row in, so it's always false — it doesn't reflect the image track's approval.

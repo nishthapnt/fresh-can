@@ -14,6 +14,8 @@ import JobProgressList, { selectInProgressJobs } from '@/components/JobProgressL
 import {
   getKPIData,
   getRecentJobs,
+  getJobProblems,
+  type JobProblem,
   getVideoLibrary,
   getImageLibrary,
   getBlogLibrary,
@@ -465,6 +467,7 @@ export default function DashboardPage() {
   const [jobs, setJobs]     = useState<ContentJob[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [problems, setProblems] = useState<Record<string, JobProblem[]>>({})
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -479,6 +482,9 @@ export default function DashboardPage() {
       ])
       setKpi(kpiData)
       setJobs(recentJobs)
+      // Failure reasons are a nicety — never let them fail the dashboard load.
+      const failedIds = selectInProgressJobs(recentJobs).filter((j) => j.status === 'failed').map((j) => j.id)
+      getJobProblems(failedIds).then(setProblems).catch(() => setProblems({}))
       // Grouped by job_id below (videoGroups/imageGroups/blogGroups) so a
       // BOTH-language job renders as one card with a toggle instead of two —
       // sliced to the newest 4 there, not here, since slicing raw EN/FR rows
@@ -568,7 +574,7 @@ export default function DashboardPage() {
       <ActiveGenerationBanner />
 
       {/* Jobs still moving through the pipeline (from content_jobs.status) */}
-      {!loading && <JobProgressList jobs={selectInProgressJobs(jobs)} />}
+      {!loading && <JobProgressList jobs={selectInProgressJobs(jobs)} problems={problems} />}
 
       {/* KPI Cards */}
       {loading ? (
