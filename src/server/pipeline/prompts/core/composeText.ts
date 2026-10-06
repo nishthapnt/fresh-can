@@ -655,7 +655,7 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '      "beat": string (this scene\'s narrative job — e.g. "hook", "build", "turn", "payoff", "close", or ' +
     'another word that fits better),\n' +
     '      "visual_description": string (what the camera shows — the subject\'s own action plus any natural ' +
-    'ambient motion already implied by the setting, e.g. steam rising, wind moving leaves or fabric, light ' +
+    'ambient motion already implied by the setting, e.g. wind moving leaves or fabric, light ' +
     'shifting — specific enough to generate an image from. Ground it in this scene\'s own story beat and ' +
     'purpose from your planning above: what specifically happens, in what environment, and how it connects to ' +
     'the scene immediately before it — never a generic or purposeless shot),\n' +

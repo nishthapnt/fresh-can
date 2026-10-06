@@ -860,7 +860,7 @@ describe('composeSceneImagePrompt', () => {
       'A family unloading groceries from the Fresh-CAN truck at dusk, warm light spilling from the open rear ' +
       'doors, the parents carrying reusable bags while their two children run ahead toward the front porch, ' +
       'a neighbour waving hello from across the quiet residential street as the golden evening light catches ' +
-      'the steam rising gently from a nearby chimney'
+      'the lights glowing in a nearby window'
     const shotNotes = 'Slow push-in, shallow depth of field, warm handheld camera movement following the family'
     const scene = composeSceneImagePrompt(BRAND_PROFILE, {
       pipelineId: 'pipeline-realism-3',
@@ -951,7 +951,7 @@ describe('composeSceneVideoPrompt', () => {
   it('animates subject action, ambient environmental motion, and camera motion as three distinct layers, never camera as a substitute for scene action', () => {
     const prompt = composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })
     expect(prompt).toContain('three distinct layers')
-    expect(prompt).toContain('steam, smoke, wind moving hair, fabric, or leaves, water, shifting light')
+    expect(prompt).toContain('wind moving hair, fabric, or leaves, water, shifting light')
     expect(prompt).toContain('Camera movement is never a substitute for actual subject or environmental motion')
   })
 

@@ -1120,11 +1120,11 @@ interface SceneVideoJob {
  *  wording ("any natural ambient motion already implied by the setting...
  *  so the environment never freezes into a still backdrop") actively
  *  pressured the model to find SOMETHING to animate whenever a scene had
- *  no steam/wind/fabric of its own, and solid objects sitting in frame
+ *  no wind/fabric of its own, and solid objects sitting in frame
  *  (produce, packaged goods) were the most visually salient thing left to
  *  move — this is the video-motion equivalent of the image prompt's
  *  SCENE_CONTENTS_RULE plausibility constraint, which has no counterpart here.
- *  Now explicitly scopes which motion is allowed (steam, smoke, wind on
+ *  Now explicitly scopes which motion is allowed (wind on
  *  hair/fabric/leaves, water, shifting light — all passive/environmental)
  *  and states the rule a static object must pass before it's allowed to
  *  move at all (a real, visible cause), rather than leaving "ambient
@@ -1199,23 +1199,12 @@ const VIDEO_VISUAL_QUALITY_STYLE =
   'textures, natural skin and lighting, natural motion blur — polished commercial quality, never ' +
   'oversaturated, over-sharpened, or CGI-looking.'
 
-// Added 2026-09-26 after real Seedance renders showed two failure modes the
-// ambient-motion/reference-frame-authority clauses above didn't fully close:
-// (1) a smoke column rising from a landfill scene with no fire, flare, or
-// heat source anywhere in frame — the old ambient-motion wording permitted
-// "steam, smoke... " for every scene regardless of whether the scene's own
-// content plausibly involves one, so the model had positive license to add
-// it purely for atmosphere; (2) a background pedestrian rendered floating,
-// detached from the ground, in an otherwise ordinary street shot. Both are
-// judgment calls the model makes at animation time, not something a fixed
-// per-scene schema field could gate any more reliably — so both are closed
-// the same way the rest of this function's guardrails already are: a short,
-// explicit textual rule the model checks itself against, self-referencing
-// the very scene description it was just given (no new plan field, no new
-// LLM call, no extra provider spend).
+// Added 2026-09-26 after a real Seedance render showed a background pedestrian
+// floating, detached from the ground, in an otherwise ordinary street shot.
+// Closed with a short, explicit textual rule the model checks itself against
+// (no new plan field, no new LLM call, no extra provider spend).
 const NO_PHANTOM_EFFECTS_CLAUSE =
-  ' Only animate smoke, steam, or fire when the description above names a real source for it — never invent ' +
-  'unexplained smoke or fire. Add no extra people or figures anywhere in frame beyond who the reference frame ' +
+  ' Add no extra people or figures anywhere in frame beyond who the reference frame ' +
   'shows; every person and object stays grounded, never floating or detached.'
 
 // Added 2026-09-26 alongside NO_PHANTOM_EFFECTS_CLAUSE — a real render's
@@ -1237,7 +1226,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const appClause = (job.appUiVideoClause ?? '') + (job.sceneGuardVideoClause ?? '')
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
-    'motion already implied by the setting — steam, smoke, wind moving hair, fabric, or leaves, water, ' +
+    'motion already implied by the setting — wind moving hair, fabric, or leaves, water, ' +
     'shifting light — so the environment never freezes into a still backdrop, but never motion with no real ' +
     'cause: produce, packaged goods, and other solid objects at rest must stay completely still unless a ' +
     'visible hand, wind, or other real force is actually moving them; and camera motion as a separate layer ' +

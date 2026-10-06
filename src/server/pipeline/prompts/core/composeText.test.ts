@@ -480,7 +480,7 @@ describe('composeVideoScriptSystemPrompt', () => {
 
   it('asks visual_description to include ambient environmental motion, not just the subject', () => {
     const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
-    expect(prompt).toContain('steam rising, wind moving leaves or fabric, light shifting')
+    expect(prompt).toContain('wind moving leaves or fabric, light shifting')
   })
 
   it('tells the model to creatively expand a brief idea instead of leaving it thin, without inventing unrelated content', () => {
