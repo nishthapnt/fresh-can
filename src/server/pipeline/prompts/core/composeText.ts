@@ -726,7 +726,11 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'omit only if the video has no cast_bible or genuinely no cast_bible person is shown in this scene),\n' +
     '      "props_present": string[] (visually significant objects this scene establishes or carries forward),\n' +
     `      "unit_presence": "none" | "background" | "featured" (is ${brand.name}'s physical unit the ` +
-    'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default),\n' +
+    'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default. ' +
+    'Choose "background" or "featured" for every scene that shows a person arriving at, shopping in, or heading away ' +
+    'from the unit with their groceries: the scene is drawn from the unit\'s reference image, and a scene marked ' +
+    '"none" has no vehicle reference, so the image model invents its own vehicle. Choose "none" for scenes where the ' +
+    'unit plays no part in what is shown, such as a home kitchen or a phone screen),\n' +
     '      "unit_presence_rationale": string (one sentence, honest and specific to this scene, never ' +
     'boilerplate — why you chose that unit_presence value; omit only if unit_presence is "none"),\n' +
     `      "app_on_screen": "none" | "background" | "featured" (is a person shown using the ${brand.name} app on a ` +

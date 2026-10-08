@@ -787,3 +787,16 @@ describe('Track C script-planning rules', () => {
     expect(SCENE_VISUAL_FIDELITY_RULE).toContain('no readable text')
   })
 })
+
+describe('unit_presence guidance for arrive/shop/leave scenes (job 65b08e09 scene 5 drew a pickup truck)', () => {
+  const prompt = () => composeVideoScriptSystemPrompt(testBrand, { scriptType: 'x', targetDurationSeconds: 30 } as never)
+
+  it('tells the planner a scene about arriving at, shopping in, or leaving the unit needs the unit reference', () => {
+    expect(prompt()).toContain('arriving at, shopping in, or heading away from the unit with their groceries')
+    expect(prompt()).toContain('has no vehicle reference, so the image model invents its own vehicle')
+  })
+
+  it('reserves "none" for scenes where the unit plays no part', () => {
+    expect(prompt()).toContain('Choose "none" for scenes where the unit plays no part in what is shown')
+  })
+})
