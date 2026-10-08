@@ -1925,3 +1925,20 @@
 - New `getJobProblems` (contentService) + `components/JobProblems.tsx`: red banner on the job page (both layouts) listing every failed pipeline/track `last_error` per content type/language, polled every 10s; cancellations excluded. Dashboard "In progress" failed cards show the first reason (+N more).
 - `tsc` clean; 577 unit tests pass (non-e2e). Not checked in a browser.
 - Correction to the entry above: `image_draft_approved` in `job_overview` reads `content_drafts`, which image has no row in, so it's always false — it doesn't reflect the image track's approval.
+
+---
+
+## 🔎 2026-10-08 — Video audit (no code changed)
+
+Audited the 3 real video jobs from 2026-10-08 (790b8771 44.2s, e4a83ec0 39.1s, 5d2dd9a2 33.2s; all requested 36s) against 12 older renders. Findings: resolution/bitrate unchanged (not a regression); final length == sum of narration audio (voice runs 2.4–2.7 wps vs the 3.1 the prompt assumes, correction pass skips 1.4–1.5x overshoots); unit design drifts between scenes/clip vs still; garbled logo/packaging text; cast/wardrobe drift; narration still says "enters/walks out" while the new NO_ENTRY_EXIT rule forbids showing it. Fixes pending user go-ahead.
+
+### 2026-10-08 — Implemented A1–A4, B1–B2 (timing + narration/visual contradiction)
+
+- `generateScript.ts`: `fitSceneDurations` forces planned scene durations to sum exactly to the request (4–11s/scene, whole seconds); script prompt now asks for an EXACT total.
+- `videoNarrationBudget.ts` / `db.getMeasuredWordsPerSecond` / `localizeScript.ts`: word bands use the voice's own measured rate (fallback 2.65 wps, was 3.1); localize prompt states that same rate and says never exceed `max_words`.
+- `transcribeAudio.ts`: hard tolerance 1.15→1.08, soft 1.05→1.03; a cut must fill ≥85% of the slot else the narration is rewritten (text-only LLM call) to a word count; no more bare mid-phrase chop; tolerance tightens to 1.02 once the running total is >5% over; logs when a track is still >5% over.
+- B1/B2: `NO_ENTRY_EXIT_NARRATION_RULE` in script + localize prompts; `localizeScript.ts` lints narration (EN/FR) for entering/exiting and does one targeted rewrite.
+- Also committed the earlier entry/exit prompt rule (`NO_ENTRY_EXIT_RULE`, brand truths, scene-video clause).
+- Verified by `tsc --noEmit` + full vitest (659 tests); no paid generation runs.
+- ⚠️ The e2e suite writes real "E2E … DELETE ME" rows into Supabase and does not clean them up.
+- ⭐ Next: Track C (unit consistency, garbled text, wardrobe, cast fidelity), D2.

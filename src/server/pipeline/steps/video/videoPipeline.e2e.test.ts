@@ -1131,12 +1131,24 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     })
     const transcription = { submit, poll } satisfies TranscriptionService
 
+    // The over-budget narration ("English text for scene 1") has no sentence
+    // or comma to cut at, and a bare word chop would stop mid-phrase, so the
+    // correction is a text-only LLM rewrite to a word count (2026-10-08).
+    const rewriteGen = {
+      generate: vi.fn(async () => ({
+        parsed: { scenes: [{ scene_number: 1, narration_text: 'Short text.' }] },
+        raw: '',
+      })),
+    } as unknown as ScriptGenerator
+
     await runTranscribeAudio(client, afterSynthesize as TrackRow, approved.id, transcription, undefined, {
       voiceSynthesizer: voice,
       uploader,
       jobId,
+      scriptGenerator: rewriteGen,
     })
 
+    expect(rewriteGen.generate).toHaveBeenCalledTimes(1) // scene 1 only
     expect(submit).toHaveBeenCalledTimes(3) // scene 1 original + scene 1 retry + scene 2 original
     expect(voice.synthesize).toHaveBeenCalledTimes(3) // +1 correction retry for scene 1 only
 

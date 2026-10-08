@@ -396,7 +396,7 @@ export const videoTrackRender = inngest.createFunction(
     for (let attempt = 0; attempt < MAX_RETRY_LOOP_ITERATIONS; attempt++) {
       track = await step.run(`localize-${attempt}`, async () => {
         const current = await fetchTrack(trackId)
-        await runLocalizeScript(client, current, pipelineId, scriptGenerator)
+        await runLocalizeScript(client, current, pipelineId, scriptGenerator, undefined, { voiceId: voiceIdOverride })
         return fetchTrack(trackId)
       })
       const localizeDone = await step.run(`check-localize-done-${attempt}`, () =>
@@ -430,6 +430,7 @@ export const videoTrackRender = inngest.createFunction(
           voiceSynthesizer,
           uploader: videoUploader,
           jobId,
+          scriptGenerator,
           voiceId: voiceIdOverride,
         })
         return fetchTrack(trackId)

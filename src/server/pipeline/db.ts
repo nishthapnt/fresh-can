@@ -983,6 +983,74 @@ export async function getVideoSceneAudioRows(
   return (data ?? []) as VideoSceneAudioRow[]
 }
 
+/** Minimum number of measured scenes before a voice's own rate is trusted
+ *  over the fleet-wide fallback — a single short job is too noisy. */
+const MIN_RATE_SAMPLE_SCENES = 6
+
+/**
+ * The words-per-second a given ElevenLabs voice has actually spoken at in
+ * past jobs (total narration words / total measured audio duration, over
+ * its most recent finished scenes), or null when there isn't enough history.
+ * Real narration speed varies per voice (2.4-2.9 wps across recent jobs), so
+ * budgeting every voice at one fixed rate is what made finished videos land
+ * 20% over their requested length. Best-effort: any query error returns
+ * null (the caller falls back to the default rate) rather than failing the
+ * track.
+ */
+export async function getMeasuredWordsPerSecond(
+  client: SupabaseClient,
+  voiceId: string,
+  language: 'EN' | 'FR',
+): Promise<number | null> {
+  try {
+    const voiceColumn = language === 'FR' ? 'voice_id_fr' : 'voice_id_en'
+    const { data: jobs, error: jobsError } = await client
+      .from('content_jobs')
+      .select('id')
+      .eq(voiceColumn, voiceId)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    if (jobsError || !jobs || jobs.length === 0) return null
+
+    const { data: pipelines, error: pipelinesError } = await client
+      .from('content_pipelines')
+      .select('id')
+      .eq('content_type', 'video')
+      .in('job_id', jobs.map((j: { id: string }) => j.id))
+    if (pipelinesError || !pipelines || pipelines.length === 0) return null
+
+    const { data: tracks, error: tracksError } = await client
+      .from('content_language_tracks')
+      .select('id')
+      .eq('language', language)
+      .in('content_pipeline_id', pipelines.map((p: { id: string }) => p.id))
+    if (tracksError || !tracks || tracks.length === 0) return null
+
+    const { data: rows, error: rowsError } = await client
+      .from('video_scene_audio')
+      .select('narration_text, duration_ms')
+      .eq('status', 'ready')
+      .not('duration_ms', 'is', null)
+      .in('content_language_track_id', tracks.map((t: { id: string }) => t.id))
+    if (rowsError || !rows) return null
+
+    let words = 0
+    let seconds = 0
+    let scenes = 0
+    for (const row of rows as { narration_text: string | null; duration_ms: number | null }[]) {
+      const count = (row.narration_text ?? '').trim().split(/\s+/).filter(Boolean).length
+      if (count === 0 || !row.duration_ms || row.duration_ms <= 0) continue
+      words += count
+      seconds += row.duration_ms / 1000
+      scenes += 1
+    }
+    if (scenes < MIN_RATE_SAMPLE_SCENES || seconds <= 0) return null
+    return words / seconds
+  } catch {
+    return null
+  }
+}
+
 export interface VideoCaptionRow {
   id: string
   content_language_track_id: string

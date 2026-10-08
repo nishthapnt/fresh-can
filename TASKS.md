@@ -111,6 +111,20 @@
 
 ---
 
+## 🎬 Video quality fixes (2026-10-08 audit)
+
+- [x] A1 — script scene durations forced to sum exactly to the requested length (`fitSceneDurations`)
+- [x] A2 — narration budget uses the voice's measured words/sec (default 2.65, was 3.1)
+- [x] A3 — over-budget narration: tolerance 1.08, cuts must fill >=85% of slot, else LLM rewrite to a word count
+- [x] A4 — running-total tolerance tightens once the video is >5% over plan
+- [x] B1 — narration prompts forbid describing entering/exiting the unit
+- [x] B2 — narration lint + one targeted rewrite for entry/exit wording
+- [ ] C1-C7 — unit consistency, garbled text, wardrobe, cast fidelity, collage guard (prompt/reference changes)
+- [ ] D2 — final encode bitrate headroom
+- Skipped by decision: QA retries, 1080p, restoring smoke/steam guard
+
+---
+
 ## 🔴 BLOCKED
 
 _None currently._

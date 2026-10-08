@@ -1,7 +1,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { applyScriptEdits, buildScriptSummary } from './updateScript'
-import { maxNarrationWords, NARRATION_WORDS_PER_SECOND } from '../../../../lib/videoNarrationBudget'
+import { maxNarrationWords, NARRATION_WORDS_PER_SECOND, resolveWordsPerSecond } from '../../../../lib/videoNarrationBudget'
 import { composeLocalizeScriptSystemPrompt, BRAND_PROFILE } from '../../prompts/index'
 import type { VideoSceneRow } from '../../db'
 
@@ -125,5 +125,25 @@ describe('buildScriptSummary', () => {
       { scene_number: 2, narrationText: '   ' },
     ])
     expect(summary).toBe('First.')
+  })
+})
+
+describe('resolveWordsPerSecond', () => {
+  it('uses a plausible measured rate as-is (rounded to 2dp)', () => {
+    expect(resolveWordsPerSecond(2.4412)).toBe(2.44)
+  })
+
+  it('falls back to the fleet default for missing, non-finite or implausible measurements', () => {
+    for (const bad of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, 0.4, 9]) {
+      expect(resolveWordsPerSecond(bad as number | null | undefined)).toBe(NARRATION_WORDS_PER_SECOND)
+    }
+  })
+
+  it('the fleet default is the re-measured ~2.65, not the old 3.1', () => {
+    expect(NARRATION_WORDS_PER_SECOND).toBe(2.65)
+  })
+
+  it('maxNarrationWords honours a voice-specific rate', () => {
+    expect(maxNarrationWords(10_000, 2.44)).toBeLessThan(maxNarrationWords(10_000, 3.1))
   })
 })

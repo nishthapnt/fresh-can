@@ -1,3 +1,4 @@
+import { NARRATION_WORDS_PER_SECOND } from '../../../../lib/videoNarrationBudget'
 import { describe, it, expect } from 'vitest'
 import {
   composeIntentSystemPrompt,
@@ -9,6 +10,8 @@ import {
   composeAdCopySystemPrompt,
   composeVideoScriptSystemPrompt,
   composeLocalizeScriptSystemPrompt,
+  NO_ENTRY_EXIT_RULE,
+  NO_ENTRY_EXIT_NARRATION_RULE,
 } from './composeText'
 import type { BrandProfile, CreativeBrief } from '../types'
 
@@ -386,7 +389,7 @@ describe('composeVideoScriptSystemPrompt', () => {
   it('includes brand context and the target duration', () => {
     const prompt = composeVideoScriptSystemPrompt(testBrand, baseOpts)
     expect(prompt).toContain('TEST MISSION STATEMENT')
-    expect(prompt).toContain('approximately 36')
+    expect(prompt).toContain('sum to EXACTLY 36 seconds')
   })
 
   it('requires the scene plan JSON shape generateScript.ts depends on', () => {
@@ -717,10 +720,17 @@ describe('composeLocalizeScriptSystemPrompt', () => {
   // the "aim for the full budget" framing that replaced the old upper-
   // bound-only "fitting comfortably within" wording, which gave the model
   // no reason to avoid undershooting.
-  it('states the measured ~3.1 words/sec rate, not the old, too-slow 2.5 figure', () => {
+  it('states the fleet fallback rate (2.65 wps) by default, not the old 3.1 or 2.5 figures', () => {
     const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
-    expect(prompt).toContain('3.1 words per second')
+    expect(prompt).toContain(`${NARRATION_WORDS_PER_SECOND} words per second`)
+    expect(prompt).toContain('2.65 words per second')
+    expect(prompt).not.toContain('3.1 words per second')
     expect(prompt).not.toContain('2.5 words per second')
+  })
+
+  it("states the voice's own measured rate when one is given, so the prompt matches the enforced word bands", () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English', wordsPerSecond: 2.44 })
+    expect(prompt).toContain('2.44 words per second')
   })
 
   it('instructs writing to fill close to the full target duration, not merely staying within it', () => {
@@ -729,9 +739,34 @@ describe('composeLocalizeScriptSystemPrompt', () => {
     expect(prompt).not.toContain('fitting comfortably within')
   })
 
-  it('explains the asymmetric cost of running long vs. short, so the model prefers erring long', () => {
+  it('says both overshoot and undershoot change the finished length, and caps at max_words', () => {
     const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
-    expect(prompt).toContain('Err on the side of a few words too many rather than too few')
-    expect(prompt).toContain('shortens the whole finished video below what was requested')
+    expect(prompt).toContain('never exceed max_words')
+    expect(prompt).toContain('makes the whole video longer than the length that was requested')
+    expect(prompt).not.toContain('Err on the side of a few words too many')
+  })
+
+  it('forbids narrating anyone entering or exiting the unit', () => {
+    expect(composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })).toContain(NO_ENTRY_EXIT_NARRATION_RULE)
+  })
+})
+
+describe('no entry/exit transition rule', () => {
+  it('is in the intent, image plan, and video script prompts', () => {
+    expect(composeIntentSystemPrompt(testBrand, 'video')).toContain(NO_ENTRY_EXIT_RULE)
+    expect(composeImagePlanSystemPrompt(testBrand, { imageStyle: 'photo', scene: 'A family shops.' })).toContain(
+      NO_ENTRY_EXIT_RULE,
+    )
+    expect(
+      composeVideoScriptSystemPrompt(testBrand, { scriptType: 'x', targetDurationSeconds: 30 } as never),
+    ).toContain(NO_ENTRY_EXIT_RULE)
+  })
+})
+
+describe('narration no entry/exit rule', () => {
+  it('is in the video script prompt too, so narration_intent never asks for the crossing', () => {
+    expect(
+      composeVideoScriptSystemPrompt(testBrand, { scriptType: 'x', targetDurationSeconds: 30 } as never),
+    ).toContain(NO_ENTRY_EXIT_NARRATION_RULE)
   })
 })

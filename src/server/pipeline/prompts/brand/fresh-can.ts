@@ -75,10 +75,10 @@ export const BRAND_PROFILE: BrandProfile = {
   ],
 
   positiveVisualTruths: [
-    'Entry: a discreet QR/scan reader at the rear entrance; the customer holds up a phone.',
+    'Entry (outside only): a discreet QR/scan reader at the rear entrance; a customer stands beside it holding up a phone — never shown stepping in.',
     'Inside: a narrow single aisle, realistic occupancy (typically 1-3 people), shelves and glass-door ' +
       'fridges, unobtrusive ceiling cameras/sensors.',
-    'Exit: the customer simply walks out carrying their items.',
+    'Exit (outside only): a customer already outside, standing or walking near the unit with their items — never shown stepping out.',
     'Produce and packaged goods always look clean, fresh, tidy, and appetising.',
   ],
 

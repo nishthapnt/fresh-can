@@ -7,12 +7,17 @@ import {
   recordTrackRetryableFailure,
   markTrackFailed,
   getVideoScenes,
+  getMeasuredWordsPerSecond,
   upsertVideoSceneAudio,
   type TrackRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
 import { BRAND_PROFILE, composeLocalizeScriptSystemPrompt } from '../../prompts/index'
-import { NARRATION_WORDS_PER_SECOND, narrationWordCount } from '../../../../lib/videoNarrationBudget'
+import {
+  NARRATION_WORDS_PER_SECOND,
+  narrationWordCount,
+  resolveWordsPerSecond,
+} from '../../../../lib/videoNarrationBudget'
 
 // A finished video's length is the SUM of its scenes' real narration
 // lengths (renderLanguageTrack.ts sizes every scene to its audio), so a
@@ -26,12 +31,45 @@ import { NARRATION_WORDS_PER_SECOND, narrationWordCount } from '../../../../lib/
 const MIN_FILL = 0.85
 const MAX_FILL = 1.05
 
-export function narrationWordRange(targetDurationMs: number): { min: number; max: number } {
+export function narrationWordRange(
+  targetDurationMs: number,
+  wordsPerSecond = NARRATION_WORDS_PER_SECOND,
+): { min: number; max: number } {
   const seconds = targetDurationMs / 1000
   return {
-    min: Math.max(1, Math.ceil(seconds * NARRATION_WORDS_PER_SECOND * MIN_FILL)),
-    max: Math.max(1, Math.floor(seconds * NARRATION_WORDS_PER_SECOND * MAX_FILL)),
+    min: Math.max(1, Math.ceil(seconds * wordsPerSecond * MIN_FILL)),
+    max: Math.max(1, Math.floor(seconds * wordsPerSecond * MAX_FILL)),
   }
+}
+
+// Narration that describes anyone crossing the unit's threshold. The visuals
+// never show it (NO_ENTRY_EXIT_RULE), so a voiceover saying it contradicts the
+// picture — real job 790b8771's scene 4 said the student "enters the unit with
+// a quick scan ... and walks out" over a clip showing neither. Deliberately
+// narrow: "arrives", "shops", "leaves with" are all fine; only verbs for the
+// crossing itself match.
+const CROSSING_PATTERNS: readonly RegExp[] = [
+  /\b(?:enter|enters|entered|entering)\b/i,
+  /\b(?:exit|exits|exited|exiting)\b/i,
+  /\b(?:step|steps|stepped|stepping)\s+(?:in|out|inside|into|through)\b/i,
+  /\b(?:walk|walks|walked|walking)\s+(?:in|out|into|inside)\b/i,
+  /\b(?:go|goes|went|going)\s+(?:in|inside|into)\b/i,
+  /\b(?:rush|rushes|rushed|rushing|head|heads|headed|heading)\s+(?:in|inside|into)\b/i,
+  /\b(?:climb|climbs|climbed|climbing|jump|jumps|jumped|jumping)\s+(?:in|into|out|from|inside|down)\b/i,
+  /\b(?:come|comes|came|coming|emerge|emerges|emerged|emerging)\s+(?:out|from)\b/i,
+  // French
+  /\b(?:entre|entrent|entrer|entrant|entré|entrée|entrés)\s+(?:dans|à l'intérieur)\b/i,
+  /\b(?:sort|sortent|sortir|sortant|sorti|sortie|sortis)\s+(?:de|du|d')/i,
+  /\b(?:monte|montent|monter|descend|descendent|descendre)\s+(?:dans|à bord|de|du)\b/i,
+]
+
+export function narrationDescribesCrossing(text: string): boolean {
+  return CROSSING_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+/** Scene numbers whose narration describes entering/exiting the unit. */
+export function findCrossingScenes(localized: readonly { scene_number: number; narration_text: string }[]): number[] {
+  return localized.filter((l) => narrationDescribesCrossing(l.narration_text)).map((l) => l.scene_number)
 }
 
 /** How far outside its word band a narration sits, in words (0 = inside).
@@ -40,10 +78,10 @@ export function narrationWordRange(targetDurationMs: number): { min: number; max
  *  transcribeAudio.ts's overshoot correction — which collapsed real job
  *  8e92b381's 24-word narration for a 5s slot down to 5 words (1.6s) after
  *  a paid synthesis. Rewriting it here, as text, is free of that cliff. */
-const OVER_TOLERANCE = 1.15
+const OVER_TOLERANCE = 1.05
 
-function bandDistance(words: number, targetDurationMs: number): number {
-  const { min, max } = narrationWordRange(targetDurationMs)
+function bandDistance(words: number, targetDurationMs: number, wordsPerSecond = NARRATION_WORDS_PER_SECOND): number {
+  const { min, max } = narrationWordRange(targetDurationMs, wordsPerSecond)
   if (words < min) return min - words
   const hardMax = Math.floor(max * OVER_TOLERANCE)
   return words > hardMax ? words - hardMax : 0
@@ -53,20 +91,28 @@ function bandDistance(words: number, targetDurationMs: number): number {
 export function findOffBandScenes(
   scenes: readonly { scene_number: number; target_duration_ms: number }[],
   localized: readonly { scene_number: number; narration_text: string }[],
+  wordsPerSecond = NARRATION_WORDS_PER_SECOND,
 ): number[] {
   return scenes
     .filter((scene) => {
       const match = localized.find((l) => l.scene_number === scene.scene_number)
-      return !!match && bandDistance(narrationWordCount(match.narration_text), scene.target_duration_ms) > 0
+      return (
+        !!match && bandDistance(narrationWordCount(match.narration_text), scene.target_duration_ms, wordsPerSecond) > 0
+      )
     })
     .map((scene) => scene.scene_number)
 }
 
 /** Whether `candidate` is strictly closer to the slot's word band than `current`. */
-export function isBetterFit(current: string, candidate: string, targetDurationMs: number): boolean {
+export function isBetterFit(
+  current: string,
+  candidate: string,
+  targetDurationMs: number,
+  wordsPerSecond = NARRATION_WORDS_PER_SECOND,
+): boolean {
   return (
-    bandDistance(narrationWordCount(candidate), targetDurationMs) <
-    bandDistance(narrationWordCount(current), targetDurationMs)
+    bandDistance(narrationWordCount(candidate), targetDurationMs, wordsPerSecond) <
+    bandDistance(narrationWordCount(current), targetDurationMs, wordsPerSecond)
   )
 }
 
@@ -119,6 +165,10 @@ export async function runLocalizeScript(
   contentPipelineId: string,
   scriptGenerator: ScriptGenerator,
   backoffBaseDelayMs = 5000,
+  // The job's selected ElevenLabs voice (null/undefined = brand default).
+  // Used only to look up how fast that voice really speaks, so scene word
+  // bands match the voice instead of one fleet-wide rate.
+  options?: { voiceId?: string | null },
 ): Promise<{ ran: boolean }> {
   let working: TrackRow
   if (track.status === 'waiting_on_shared') {
@@ -153,19 +203,27 @@ export async function runLocalizeScript(
 
   const attemptNumber = working.retry_count + 1
   try {
+    const languageName = track.language === 'FR' ? 'French' : 'English'
+    const measuredRate = options?.voiceId
+      ? await getMeasuredWordsPerSecond(client, options.voiceId, track.language === 'FR' ? 'FR' : 'EN')
+      : null
+    const wordsPerSecond = resolveWordsPerSecond(measuredRate)
+    const systemPrompt = composeLocalizeScriptSystemPrompt(BRAND_PROFILE, { language: languageName, wordsPerSecond })
+    const sceneRequest = (s: (typeof scenes)[number], extra: Record<string, unknown> = {}) => {
+      const range = narrationWordRange(s.target_duration_ms, wordsPerSecond)
+      return {
+        scene_number: s.scene_number,
+        narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
+        target_duration_seconds: Math.round(s.target_duration_ms / 1000),
+        min_words: range.min,
+        max_words: range.max,
+        ...extra,
+      }
+    }
+
     const result = await scriptGenerator.generate({
-      systemPrompt: composeLocalizeScriptSystemPrompt(BRAND_PROFILE, {
-        language: track.language === 'FR' ? 'French' : 'English',
-      }),
-      userPrompt: JSON.stringify(
-        scenes.map((s) => ({
-          scene_number: s.scene_number,
-          narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
-          target_duration_seconds: Math.round(s.target_duration_ms / 1000),
-          min_words: narrationWordRange(s.target_duration_ms).min,
-          max_words: narrationWordRange(s.target_duration_ms).max,
-        })),
-      ),
+      systemPrompt,
+      userPrompt: JSON.stringify(scenes.map((s) => sceneRequest(s))),
       stepName: 'localize_script',
     })
 
@@ -174,41 +232,63 @@ export async function runLocalizeScript(
     }
     let localized = result.parsed.scenes
 
-    // One corrective text-only pass (a cheap LLM call — no ElevenLabs/KIE
-    // spend) for scenes far outside their word band (too short OR too long).
-    // Best-effort: never throws, only swaps in a rewrite that fits the band
-    // better, and a still-off result is accepted rather than failing the track.
-    const shortScenes = findOffBandScenes(scenes, localized)
-    if (shortScenes.length > 0) {
+    // Corrective text-only passes (cheap LLM calls — no ElevenLabs/KIE
+    // spend). Each is best-effort: never throws, only swaps in a rewrite that
+    // is actually better, and a still-off result is accepted rather than
+    // failing the track.
+    const rewriteScenes = async (
+      sceneNumbers: number[],
+      extra: (sceneNumber: number) => Record<string, unknown>,
+      accept: (current: string, candidate: string, targetDurationMs: number) => boolean,
+    ): Promise<void> => {
       try {
         const retry = await scriptGenerator.generate({
-          systemPrompt: composeLocalizeScriptSystemPrompt(BRAND_PROFILE, {
-            language: track.language === 'FR' ? 'French' : 'English',
-          }),
+          systemPrompt,
           userPrompt: JSON.stringify(
-            scenes
-              .filter((s) => shortScenes.includes(s.scene_number))
-              .map((s) => ({
-                scene_number: s.scene_number,
-                narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
-                target_duration_seconds: Math.round(s.target_duration_ms / 1000),
-                min_words: narrationWordRange(s.target_duration_ms).min,
-                max_words: narrationWordRange(s.target_duration_ms).max,
-                previous_narration_off_length: localized.find((l) => l.scene_number === s.scene_number)?.narration_text,
-              })),
+            scenes.filter((s) => sceneNumbers.includes(s.scene_number)).map((s) => sceneRequest(s, extra(s.scene_number))),
           ),
           stepName: 'localize_script',
         })
-        if (isValidLocalizeOutput(retry.parsed, shortScenes.length)) {
-          const fixed = retry.parsed.scenes
-          localized = localized.map((l) => {
-            const f = fixed.find((x) => x.scene_number === l.scene_number)
-            return f && isBetterFit(l.narration_text, f.narration_text, scenes.find((x) => x.scene_number === l.scene_number)?.target_duration_ms ?? 0) ? f : l
-          })
-        }
+        if (!isValidLocalizeOutput(retry.parsed, sceneNumbers.length)) return
+        const fixed = retry.parsed.scenes
+        localized = localized.map((l) => {
+          const f = fixed.find((x) => x.scene_number === l.scene_number)
+          const target = scenes.find((x) => x.scene_number === l.scene_number)?.target_duration_ms ?? 0
+          return f && accept(l.narration_text, f.narration_text, target) ? f : l
+        })
       } catch {
-        // keep the first-pass narration
+        // keep the current narration
       }
+    }
+
+    // 1. Scenes far outside their word band (too short OR too long).
+    const offBand = findOffBandScenes(scenes, localized, wordsPerSecond)
+    if (offBand.length > 0) {
+      await rewriteScenes(
+        offBand,
+        (n) => ({ previous_narration_off_length: localized.find((l) => l.scene_number === n)?.narration_text }),
+        (current, candidate, target) => isBetterFit(current, candidate, target, wordsPerSecond),
+      )
+    }
+
+    // 2. Narration that describes entering/exiting the unit (contradicts the
+    // picture, see CROSSING_PATTERNS). Accepted only if the rewrite no longer
+    // describes it and doesn't fit the word band any worse than before.
+    const crossing = findCrossingScenes(localized)
+    if (crossing.length > 0) {
+      await rewriteScenes(
+        crossing,
+        (n) => ({
+          previous_narration_must_change: localized.find((l) => l.scene_number === n)?.narration_text,
+          rewrite_note:
+            'The previous narration described someone entering or leaving the unit. Rewrite it without that — say ' +
+            'they arrive, shop, or head home with their groceries — keeping the same meaning, tone and word band.',
+        }),
+        (current, candidate, target) =>
+          !narrationDescribesCrossing(candidate) &&
+          bandDistance(narrationWordCount(candidate), target, wordsPerSecond) <=
+            bandDistance(narrationWordCount(current), target, wordsPerSecond),
+      )
     }
 
     for (const scene of scenes) {

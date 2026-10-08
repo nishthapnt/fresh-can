@@ -1207,6 +1207,10 @@ const NO_PHANTOM_EFFECTS_CLAUSE =
   ' Add no extra people or figures anywhere in frame beyond who the reference frame ' +
   'shows; every person and object stays grounded, never floating or detached.'
 
+// Short on purpose: sceneVideo's 2450-char cap truncates visualDescription first.
+const NO_ENTRY_EXIT_CLIP_CLAUSE =
+  ' No one enters, exits, climbs into or out of, or jumps from any vehicle or doorway in this clip.'
+
 // Added 2026-09-26 alongside NO_PHANTOM_EFFECTS_CLAUSE — a real render's
 // brand wordmark (correct and legible in the seed scene_image frame, per
 // composeCharacterRefPrompt/composeSceneImagePrompt's own wordmark
@@ -1237,6 +1241,7 @@ export function composeSceneVideoPrompt(job: SceneVideoJob): string {
     'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
     'a new person, limb, or object that was not already in that frame.' +
     NO_PHANTOM_EFFECTS_CLAUSE +
+    NO_ENTRY_EXIT_CLIP_CLAUSE +
     TEMPORAL_CONSISTENCY_CLAUSE +
     VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +

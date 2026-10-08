@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { TranscriptionService, VoiceSynthesizer } from '../../adapters/types'
+import type { ScriptGenerator, TranscriptionService, VoiceSynthesizer } from '../../adapters/types'
 import { ProviderCallError } from '../../adapters/types'
 import type { VideoStorageUploader } from '../../adapters/storage'
 import {
@@ -16,7 +16,7 @@ import {
   type TrackRow,
 } from '../../db'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
-import { BRAND_PROFILE } from '../../prompts/index'
+import { BRAND_PROFILE, composeLocalizeScriptSystemPrompt } from '../../prompts/index'
 import { narrationWordCount } from '../../../../lib/videoNarrationBudget'
 
 const POLL_INTERVAL_MS = 3000
@@ -77,12 +77,30 @@ interface WordTiming {
 // time, instead of depending on the render-time fallback to paper over a
 // large narration overshoot. The correction logic/flow below is unchanged —
 // only these two numbers moved.
-const OVERSHOOT_HARD_TOLERANCE = 1.15
-const OVERSHOOT_SOFT_TOLERANCE = 1.05
-// A cut must leave at least this much of the slot filled, unless the original
-// overshoots by EXTREME_OVERSHOOT x or more (then shortening still wins).
-const MIN_FILL_AFTER_CUT = 0.7
-const EXTREME_OVERSHOOT = 1.8
+//
+// Retuned 2026-10-08 (1.15->1.08, 1.05->1.03, MIN_FILL 0.7->0.85, and the
+// "unless EXTREME_OVERSHOOT" escape removed): real job 790b8771 (36s
+// requested, 44.2s delivered) had scenes at 1.46x and 1.37x their slot that
+// were NEVER corrected, because the only available fix — a sentence-level
+// cut — would have left the slot under 70% full, and the guard preferred an
+// over-long scene to a short one. Both are wrong: the video's length is the
+// sum of its scenes, so an over-long scene silently lengthens the whole
+// video. When no clean cut lands near the slot, the correction is now an LLM
+// rewrite to the exact word count (see rewriteNarrationToWordCount), not
+// "leave it".
+const OVERSHOOT_HARD_TOLERANCE = 1.08
+const OVERSHOOT_SOFT_TOLERANCE = 1.03
+// Once the video as a whole is running over (see
+// OVERSHOOT_RUNNING_TOTAL_THRESHOLD), a scene only has to be this close to
+// its slot to be left alone — the budget is already spent.
+const OVERSHOOT_TIGHT_TOLERANCE = 1.02
+const OVERSHOOT_RUNNING_TOTAL_THRESHOLD = 1.05
+// A cut must leave at least this much of the slot filled; otherwise the
+// correction is a rewrite instead.
+const MIN_FILL_AFTER_CUT = 0.85
+// A rewrite aims slightly under the slot so TTS variance doesn't push it
+// back over.
+const REWRITE_TARGET_FILL = 0.97
 
 /** Word-level truncation — NEVER returns a fragment with no clean ending
  *  (confirmed live 2026-09-26: the old version's "don't sacrifice more than
@@ -104,9 +122,10 @@ const EXTREME_OVERSHOOT = 1.8
  *      gap that leaves;
  *   4. the first comma clause in the original text;
  *   5. only if the text has no sentence-ending punctuation or comma
- *      ANYWHERE (no safe cut point exists at all): the raw word-count
- *      chop, same as before. */
-function truncateNarrationToWordCount(text: string, maxWords: number): string {
+ *      ANYWHERE (no safe cut point exists at all): null — the caller asks
+ *      for a rewrite to the word count instead of chopping mid-phrase
+ *      (retuned 2026-10-08; this used to return the raw word-count chop). */
+function truncateNarrationToWordCount(text: string, maxWords: number): string | null {
   const words = text.trim().split(/\s+/).filter(Boolean)
   if (words.length <= maxWords) return text
   const truncated = words.slice(0, maxWords).join(' ')
@@ -123,24 +142,32 @@ function truncateNarrationToWordCount(text: string, maxWords: number): string {
   const firstComma = text.indexOf(', ')
   if (firstComma > 0) return `${text.slice(0, firstComma).trim()}.`
 
-  return truncated
+  // No safe cut point exists anywhere in the text. A bare word-count chop
+  // would audibly stop mid-phrase, so the caller rewrites instead.
+  return null
 }
+
+export type NarrationCorrection =
+  | { kind: 'cut'; shortenedText: string }
+  | { kind: 'rewrite'; maxWords: number; wordsPerSecond: number }
 
 /** Pure decision logic, unit-tested on its own (transcribeAudio.test.ts):
  *  does this scene's REAL measured duration overshoot its own budget badly
- *  enough to need shortening, and if so, to what text? Self-calibrated from
- *  THIS scene's own just-measured words/sec — never a fleet-wide or
- *  per-voice guess — so it behaves correctly for any ElevenLabs voice,
- *  including one never seen before. Returns null for a small mismatch
- *  (left to the existing render-time handling) or when there's no
- *  narration text to shorten. */
+ *  enough to need shortening, and if so, how? Self-calibrated from THIS
+ *  scene's own just-measured words/sec — never a fleet-wide or per-voice
+ *  guess — so it behaves correctly for any ElevenLabs voice, including one
+ *  never seen before. Returns null for a small mismatch (left to the
+ *  existing render-time handling) or when there's no narration text to
+ *  shorten. A clean sentence/clause cut is preferred when it still fills the
+ *  slot; otherwise the caller is asked to rewrite to `maxWords`. */
 export function computeNarrationCorrection(
   realDurationMs: number,
   targetDurationMs: number,
   narrationText: string | null | undefined,
-): { shortenedText: string } | null {
+  tolerance: number = OVERSHOOT_HARD_TOLERANCE,
+): NarrationCorrection | null {
   if (!narrationText || targetDurationMs <= 0) return null
-  if (realDurationMs <= targetDurationMs * OVERSHOOT_HARD_TOLERANCE) return null
+  if (realDurationMs <= targetDurationMs * tolerance) return null
 
   const words = narrationWordCount(narrationText)
   if (words === 0) return null
@@ -149,18 +176,63 @@ export function computeNarrationCorrection(
   if (maxWords >= words) return null
 
   const shortenedText = truncateNarrationToWordCount(narrationText, maxWords)
-  if (shortenedText === narrationText) return null
-  // Sentence-level chopping can overshoot DOWNWARD: real job 8e92b381 cut a
-  // two-sentence narration to its first sentence, landing at ~58% of the
-  // slot — and since a scene's rendered length IS its narration length, that
-  // shrinks the whole video (18s delivered vs 32s requested). A moderately
-  // long scene is harmless (its clip is held/trimmed by the render step),
-  // so unless it overshoots badly, keep the original rather than accept a
-  // cut that would leave the slot mostly empty.
-  const predictedShortenedMs = (narrationWordCount(shortenedText) / selfWordsPerSecond) * 1000
-  const overshootRatio = realDurationMs / targetDurationMs
-  if (predictedShortenedMs < targetDurationMs * MIN_FILL_AFTER_CUT && overshootRatio < EXTREME_OVERSHOOT) return null
-  return { shortenedText }
+  if (shortenedText !== null && shortenedText !== narrationText) {
+    // Sentence-level chopping can overshoot DOWNWARD: real job 8e92b381 cut a
+    // two-sentence narration to its first sentence, landing at ~58% of the
+    // slot — and since a scene's rendered length IS its narration length,
+    // that shrinks the whole video (18s delivered vs 32s requested). So only
+    // take a cut that still fills the slot.
+    const predictedShortenedMs = (narrationWordCount(shortenedText) / selfWordsPerSecond) * 1000
+    if (predictedShortenedMs >= targetDurationMs * MIN_FILL_AFTER_CUT) return { kind: 'cut', shortenedText }
+  }
+
+  const rewriteWords = Math.max(1, Math.floor((targetDurationMs / 1000) * REWRITE_TARGET_FILL * selfWordsPerSecond))
+  return { kind: 'rewrite', maxWords: rewriteWords, wordsPerSecond: selfWordsPerSecond }
+}
+
+/** Asks the script model to rewrite one scene's narration to at most
+ *  `maxWords` words, same meaning and tone. Text-only (no TTS spend until the
+ *  caller accepts the result). Returns null on any failure or if the rewrite
+ *  is not actually shorter and within budget — the caller then keeps the
+ *  original narration, never failing the track. */
+export async function rewriteNarrationToWordCount(
+  scriptGenerator: ScriptGenerator,
+  opts: {
+    language: 'EN' | 'FR'
+    sceneNumber: number
+    text: string
+    targetDurationMs: number
+    maxWords: number
+    wordsPerSecond: number
+  },
+): Promise<string | null> {
+  try {
+    const result = await scriptGenerator.generate({
+      systemPrompt: composeLocalizeScriptSystemPrompt(BRAND_PROFILE, {
+        language: opts.language === 'FR' ? 'French' : 'English',
+        wordsPerSecond: opts.wordsPerSecond,
+      }),
+      userPrompt: JSON.stringify([
+        {
+          scene_number: opts.sceneNumber,
+          narration_intent: opts.text,
+          target_duration_seconds: Math.round(opts.targetDurationMs / 1000),
+          min_words: Math.max(1, Math.floor(opts.maxWords * 0.85)),
+          max_words: opts.maxWords,
+          previous_narration_off_length: opts.text,
+        },
+      ]),
+      stepName: 'localize_script',
+    })
+    const parsed = result.parsed as { scenes?: { scene_number?: unknown; narration_text?: unknown }[] } | null
+    const text = parsed?.scenes?.[0]?.narration_text
+    if (typeof text !== 'string' || text.trim() === '') return null
+    const count = narrationWordCount(text)
+    if (count > opts.maxWords || count >= narrationWordCount(opts.text)) return null
+    return text.trim()
+  } catch {
+    return null
+  }
 }
 
 // Cancellation check (2026-09-22, P0 fix) — see isPipelineFailed's header
@@ -251,6 +323,10 @@ export async function runTranscribeAudio(
     voiceSynthesizer: VoiceSynthesizer
     uploader: VideoStorageUploader
     jobId: string
+    /** Enables the rewrite fallback (see computeNarrationCorrection): when no
+     *  clean cut lands near the slot, the narration is rewritten to a word
+     *  count instead. Omitted = such scenes keep their original narration. */
+    scriptGenerator?: ScriptGenerator
     /** Falls back to BRAND_PROFILE.videoVoiceIds[track.language], same
      *  resolution order synthesizeVoice.ts already uses. */
     voiceId?: string | null
@@ -303,6 +379,11 @@ export async function runTranscribeAudio(
   try {
     const combinedWords: WordTiming[] = []
     let cumulativeOffsetMs = 0
+    // Running totals across scenes already finalized, so a video that is
+    // already over budget gets its later scenes held to a tighter tolerance —
+    // the finished length is the SUM of the scenes, so each scene only
+    // slightly over still adds up to a visibly long video.
+    let cumulativeTargetMs = 0
 
     for (const scene of scenes) {
       const audio = audioRows.find((a) => a.video_scene_id === scene.id)!
@@ -337,7 +418,24 @@ export async function runTranscribeAudio(
       let correctedFileUrl: string | undefined
 
       if (correction) {
-        const fix = computeNarrationCorrection(realDurationMs, scene.target_duration_ms, audio.narration_text)
+        const runningOvershoot = cumulativeTargetMs > 0 ? cumulativeOffsetMs / cumulativeTargetMs : 1
+        const tolerance =
+          runningOvershoot > OVERSHOOT_RUNNING_TOTAL_THRESHOLD ? OVERSHOOT_TIGHT_TOLERANCE : OVERSHOOT_HARD_TOLERANCE
+        const decision = computeNarrationCorrection(realDurationMs, scene.target_duration_ms, audio.narration_text, tolerance)
+        let fix: { shortenedText: string } | null = null
+        if (decision?.kind === 'cut') {
+          fix = { shortenedText: decision.shortenedText }
+        } else if (decision?.kind === 'rewrite' && correction.scriptGenerator && audio.narration_text) {
+          const rewritten = await rewriteNarrationToWordCount(correction.scriptGenerator, {
+            language: track.language === 'FR' ? 'FR' : 'EN',
+            sceneNumber: scene.scene_number,
+            text: audio.narration_text,
+            targetDurationMs: scene.target_duration_ms,
+            maxWords: decision.maxWords,
+            wordsPerSecond: decision.wordsPerSecond,
+          })
+          if (rewritten) fix = { shortenedText: rewritten }
+        }
         if (fix) {
           try {
             const voiceId = correction.voiceId ?? BRAND_PROFILE.videoVoiceIds?.[track.language]
@@ -399,6 +497,7 @@ export async function runTranscribeAudio(
         combinedWords.push({ text: w.text, start: w.start + cumulativeOffsetMs, end: w.end + cumulativeOffsetMs })
       }
       cumulativeOffsetMs += realDurationMs
+      cumulativeTargetMs += scene.target_duration_ms
 
       // Persist the REAL measured duration back over synthesizeVoice.ts's
       // word-count ESTIMATE. renderLanguageTrack.ts's per-scene duration-
@@ -419,6 +518,14 @@ export async function runTranscribeAudio(
           ...(correctedFileUrl ? { fileUrl: correctedFileUrl } : {}),
         })
       }
+    }
+
+    if (cumulativeTargetMs > 0 && cumulativeOffsetMs > cumulativeTargetMs * OVERSHOOT_RUNNING_TOTAL_THRESHOLD) {
+      console.log(
+        `[transcribe_captions] track ${track.id}: total narration ${cumulativeOffsetMs}ms is ` +
+          `${Math.round((cumulativeOffsetMs / cumulativeTargetMs - 1) * 100)}% over its ${cumulativeTargetMs}ms plan ` +
+          `even after per-scene correction`,
+      )
     }
 
     await upsertVideoCaptions(client, {

@@ -7,11 +7,28 @@
 // than under server/pipeline so the dashboard page can import it directly
 // without pulling in the rest of the prompt-composition module tree.
 //
-// Real ElevenLabs-measured narration rate for this pipeline (2026-09-24 —
-// see composeLocalizeScriptSystemPrompt's own header for how this number was
-// derived: two real jobs landed at ~58% of their requested duration because
-// the previous 2.5wps assumption was ~25% slower than reality).
-export const NARRATION_WORDS_PER_SECOND = 3.1
+// Fallback narration rate for a voice with no measured history. Re-measured
+// 2026-10-08 from real finished jobs (words / AssemblyAI-measured duration,
+// trailing-silence buffer included, which is the slot a scene actually
+// occupies): 2.4-2.9 words/sec, mean ~2.65. The previous 3.1 (measured
+// 2026-09-24 for a different voice) overshot every recent job, e.g. job
+// 790b8771's 36s request rendered at 44.2s because scene narration was
+// budgeted at 3.1 wps but spoken at ~2.5. Per-voice measured rates (see
+// db.getMeasuredWordsPerSecond) override this wherever history exists.
+export const NARRATION_WORDS_PER_SECOND = 2.65
+
+// A measured rate outside this band is treated as noise (a handful of scenes
+// from a degenerate run), not a real property of the voice.
+const MIN_PLAUSIBLE_WPS = 2.0
+const MAX_PLAUSIBLE_WPS = 3.6
+
+/** The rate to budget narration against: the voice's measured rate when it
+ *  is plausible, else the fleet-wide fallback above. */
+export function resolveWordsPerSecond(measured?: number | null): number {
+  if (typeof measured !== 'number' || !Number.isFinite(measured)) return NARRATION_WORDS_PER_SECOND
+  if (measured < MIN_PLAUSIBLE_WPS || measured > MAX_PLAUSIBLE_WPS) return NARRATION_WORDS_PER_SECOND
+  return Math.round(measured * 100) / 100
+}
 
 // Slack above the raw rate — the render step already tolerates narration
 // that runs "a little long" by holding a scene's last frame, so the budget
@@ -24,8 +41,8 @@ const TOLERANCE = 1.15
  *  from its own target_duration_ms. Both the client counter and the
  *  server-side enforcement call this same function, so they can never
  *  disagree at the boundary. */
-export function maxNarrationWords(targetDurationMs: number): number {
-  return Math.ceil((targetDurationMs / 1000) * NARRATION_WORDS_PER_SECOND * TOLERANCE)
+export function maxNarrationWords(targetDurationMs: number, wordsPerSecond = NARRATION_WORDS_PER_SECOND): number {
+  return Math.ceil((targetDurationMs / 1000) * wordsPerSecond * TOLERANCE)
 }
 
 export function narrationWordCount(text: string): number {

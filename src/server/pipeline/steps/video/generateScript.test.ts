@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeScriptOutput } from './generateScript'
+import { fitSceneDurations, normalizeScriptOutput } from './generateScript'
 
 const VALID = {
   script: 'A short script.',
@@ -151,5 +151,54 @@ describe('normalizeScriptOutput', () => {
       expect(result).not.toBeNull()
       expect(result!.look).toEqual({ lighting: 'golden hour' })
     })
+  })
+})
+
+describe('fitSceneDurations', () => {
+  const of = (...secs: number[]) => secs.map((target_duration_seconds, i) => ({ scene_number: i + 1, target_duration_seconds }))
+  const sum = (scenes: { target_duration_seconds: number }[]) => scenes.reduce((a, s) => a + s.target_duration_seconds, 0)
+
+  it("brings job 790b8771's 38s plan down to the requested 36s", () => {
+    const fitted = fitSceneDurations(of(7, 8, 6, 9, 8), 36)
+    expect(sum(fitted)).toBe(36)
+  })
+
+  it('brings an under-length plan up to the request (job 5d2dd9a2 planned 37s; 8b682bc9 and f0df42af were short)', () => {
+    expect(sum(fitSceneDurations(of(5, 6, 4, 5, 6), 36))).toBe(36)
+  })
+
+  it('leaves an already-exact plan unchanged', () => {
+    expect(fitSceneDurations(of(7, 6, 8, 9, 6), 36).map((s) => s.target_duration_seconds)).toEqual([7, 6, 8, 9, 6])
+  })
+
+  it('keeps every scene within the 4-11s bounds and whole seconds', () => {
+    const fitted = fitSceneDurations(of(3, 20, 5, 2, 30), 40)
+    for (const s of fitted) {
+      expect(Number.isInteger(s.target_duration_seconds)).toBe(true)
+      expect(s.target_duration_seconds).toBeGreaterThanOrEqual(4)
+      expect(s.target_duration_seconds).toBeLessThanOrEqual(11)
+    }
+    expect(sum(fitted)).toBe(40)
+  })
+
+  it('preserves the relative pacing of the model plan', () => {
+    const fitted = fitSceneDurations(of(4, 12, 4), 24)
+    expect(fitted[1].target_duration_seconds).toBeGreaterThan(fitted[0].target_duration_seconds)
+  })
+
+  it('relaxes the 4s floor only when the scene count makes it impossible, and still sums exactly', () => {
+    const fitted = fitSceneDurations(of(4, 4, 4, 4, 4, 4, 4, 4, 4, 4), 32)
+    expect(sum(fitted)).toBe(32)
+  })
+
+  it('does not mutate the input scenes and preserves their other fields', () => {
+    const input = of(7, 8, 6, 9, 8)
+    const fitted = fitSceneDurations(input, 36)
+    expect(input.map((s) => s.target_duration_seconds)).toEqual([7, 8, 6, 9, 8])
+    expect(fitted.map((s) => s.scene_number)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('returns scenes untouched for an invalid total rather than inventing durations', () => {
+    expect(fitSceneDurations(of(7, 8), 0).map((s) => s.target_duration_seconds)).toEqual([7, 8])
   })
 })

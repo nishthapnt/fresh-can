@@ -1264,3 +1264,11 @@ describe('self-serve guard + interior scenes', () => {
     expect(sceneGuardVideoClause(BRAND_PROFILE, 'none', 'none')).toBe('')
   })
 })
+
+describe('composeSceneVideoPrompt entry/exit rule', () => {
+  it('forbids entering/exiting a vehicle or doorway in the clip', () => {
+    expect(composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })).toContain(
+      'No one enters, exits, climbs into or out of',
+    )
+  })
+})

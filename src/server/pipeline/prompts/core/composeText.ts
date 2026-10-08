@@ -57,6 +57,33 @@ const CONTENT_TYPE_LABEL: Record<string, string> = {
 }
 
 /**
+ * Prompt-only rule (no post-hoc check or retry — a guard here would mean
+ * regenerating paid scenes): every scene is wholly inside or wholly outside
+ * the unit; the crossing itself is never depicted. Shared with compose.ts's
+ * scene image/video prompts.
+ */
+export const NO_ENTRY_EXIT_RULE =
+  'Never show anyone entering, exiting, climbing into or out of, stepping through the door of, or jumping ' +
+  'from the vehicle or unit, or its door being opened or closed mid-action — every scene is wholly inside it ' +
+  'or wholly outside it, and any enter/shop/leave journey is told as a cut between an outside scene and an ' +
+  'inside scene, never the crossing.'
+
+/**
+ * The spoken-word half of NO_ENTRY_EXIT_RULE. The visuals never show anyone
+ * crossing the unit's threshold, so narration must not describe it either —
+ * real job 790b8771's scene-4 narration said "the student enters the unit
+ * with a quick scan ... and walks out" over a clip that (by design) showed
+ * neither, so the voiceover contradicted the picture. Narration may say
+ * someone arrives, shops, or leaves WITH something; it never narrates the
+ * crossing itself.
+ */
+export const NO_ENTRY_EXIT_NARRATION_RULE =
+  'Narration must never describe anyone entering, exiting, stepping into or out of, climbing into or out of, ' +
+  'or walking through the door of the unit or vehicle — the picture never shows that crossing, so the words ' +
+  'must not either. Say that a person arrives at the unit, is shopping, or heads home with their groceries; ' +
+  'never that they "enter", "step in", "walk out", "come out of" or "exit" it.'
+
+/**
  * Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2/§5.1) — turns the admin's raw idea
  * into a structured creative brief, the single input every subsequent
  * planning step (blog outline, video script, image plan) will read from.
@@ -73,7 +100,7 @@ export function composeIntentSystemPrompt(brand: BrandProfile, contentType: stri
     brand.businessModelNegatives.length > 0 ? ` ${brand.businessModelNegatives.join(' ')}` : ''
 
   return (
-    `${brand.missionStatement}${journeyLine}${negativesLine}\n\n` +
+    `${brand.missionStatement}${journeyLine}${negativesLine} ${NO_ENTRY_EXIT_RULE}\n\n` +
     'You are interpreting an admin\'s raw idea for ' +
     `${contentTypeLabel} before any script, outline, or image plan gets written. Read the idea charitably ` +
     'and specifically — assume it is a genuine, considered starting point, not a vague prompt to pad out. ' +
@@ -144,7 +171,7 @@ export function composeImagePlanSystemPrompt(
       : '"textPlan" MUST be null for this job (image_style: "photo") — this style never renders on-image text.'
 
   return (
-    `${brand.missionStatement}${negativesLine}\n\n` +
+    `${brand.missionStatement}${negativesLine} ${NO_ENTRY_EXIT_RULE}\n\n` +
     'You are planning a single social media image post before it gets rendered. This is the creative brief ' +
     `the plan is built around: "${opts.scene}". Brand facts above are fixed constraints on correctness if ` +
     'they appear — never the reason this image exists, and never a directive on style, mood, or composition, ' +
@@ -699,18 +726,23 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '    }\n' +
     '  ]\n' +
     '}\n' +
-    `Produce between 4 and 10 scenes whose target_duration_seconds sum to approximately ${opts.targetDurationSeconds} ` +
-    'seconds — that is the target runtime, aim for it. Treat it as a guideline, not a hard cutoff: it is fine ' +
-    'for the true total to land a bit short or long of it if that is what a complete, naturally-paced narration ' +
-    'actually needs. Never truncate a scene\'s narration_intent, or drop a scene\'s idea early, just to force the ' +
-    'total to match exactly.\n\n' +
+    `Produce between 4 and 10 scenes whose target_duration_seconds are whole numbers (4-11 seconds each) that ` +
+    `sum to EXACTLY ${opts.targetDurationSeconds} seconds — that is the requested runtime, not a guideline. ` +
+    'Plan the story to fit it: a scene\'s narration is written to its own target_duration_seconds later, so ' +
+    'make the total right here by giving fewer or shorter beats to a story that needs more room, never by ' +
+    'planning a longer total than requested. Never truncate a scene\'s narration_intent, or drop a scene\'s ' +
+    'idea early, just to make the numbers add up — adjust the number of scenes instead.\n\n' +
     'The overall video and every individual scene must read as a genuine story or moment from real life — ' +
     'natural pacing, real stakes or feeling — never scripted ad copy, a corporate promo, or a polished ' +
     'commercial, even though it is being produced for marketing use. Every scene\'s setting must also be ' +
     'physically plausible and safe — an ordinary real-world place the action could actually happen (a ' +
     'sidewalk, porch, kitchen table, park, community space, or similar) — never an implausible or unsafe ' +
     'arrangement like people gathered or eating in the middle of an active road, unless the scene idea ' +
-    'itself explicitly calls for that exact setup. Shoot it like a well-made short film, not a slideshow of ' +
+    'itself explicitly calls for that exact setup. ' +
+    NO_ENTRY_EXIT_RULE +
+    ' ' +
+    NO_ENTRY_EXIT_NARRATION_RULE +
+    ' Shoot it like a well-made short film, not a slideshow of ' +
     'plain snapshots: vary shot types scene to scene (wide establishing shots, medium shots, close-ups, ' +
     'over-the-shoulder, tracking shots) and give each one deliberate camera direction in shot_notes — this is ' +
     'a production-quality bar every scene should meet, never a directive on what mood or overall style to ' +
@@ -746,6 +778,11 @@ export interface LocalizeScriptSystemPromptOptions {
   /** Full word ("English"/"French"), not the EN/FR code — reads more
    *  naturally in the instruction itself. */
   language: string
+  /** The voice's measured narration rate (db.getMeasuredWordsPerSecond), or
+   *  omitted to use the fleet-wide fallback. Must be the SAME rate
+   *  localizeScript.ts used to compute each scene's min/max word band, or the
+   *  prompt's stated rate and the enforced bands would disagree. */
+  wordsPerSecond?: number
 }
 
 /**
@@ -795,6 +832,7 @@ export interface LocalizeScriptSystemPromptOptions {
  * length and fixing it wouldn't have changed either real job's outcome.
  */
 export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: LocalizeScriptSystemPromptOptions): string {
+  const wordsPerSecond = opts.wordsPerSecond ?? NARRATION_WORDS_PER_SECOND
   return (
     `${brand.missionStatement} Voice: ${brand.voiceGuidelines}${bannedWordsLine(brand)}\n\n` +
     `You are localizing a video's narration into ${opts.language}. You will be given a list of scenes, each ` +
@@ -803,13 +841,14 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     'each scene, writing to fill close to its FULL target duration, and every scene\'s narration_text MUST have between ' +
     'its given min_words and max_words words (a hard requirement, not a suggestion; a scene with previous_narration_off_length ' +
     'must be rewritten to fit that band (longer or shorter), still faithful to its narration_intent) — real measured narration audio for this ' +
-    `pipeline runs at roughly ${NARRATION_WORDS_PER_SECOND} words per second (multiply that rate by ` +
+    `pipeline runs at roughly ${wordsPerSecond} words per second (multiply that rate by ` +
     'target_duration_seconds for the word count to aim for), noticeably faster than a slow, deliberate ' +
-    'voiceover pace. Err on the side of a few words ' +
-    'too many rather than too few: the render step stretches a scene\'s own visual (holding its final frame) to ' +
-    'cover narration that runs a little long, but narration that runs short leaves the rest of the target ' +
-    'duration silent and shortens the whole finished video below what was requested — a real problem, not a ' +
-    'cosmetic one. Write it as natural spoken narration for a ' +
+    'voiceover pace. Aim for the middle of the min_words-max_words band and never exceed max_words: a ' +
+    'finished video\'s length is the SUM of its scenes\' real narration lengths, so narration that runs long ' +
+    'makes the whole video longer than the length that was requested, and narration that runs short makes it ' +
+    'shorter — both are real problems, not cosmetic ones. ' +
+    `${NO_ENTRY_EXIT_NARRATION_RULE} ` +
+    'Write it as natural spoken narration for a ' +
     'real story, never as scripted ad copy or a voiceover that sounds like a commercial. The one exception: if ' +
     `a narration_intent explicitly calls for naming ${brand.name} (or otherwise references the brand by name), the ` +
     `localized ${opts.language} wording MUST include that name literally, spoken naturally — never paraphrase, ` +

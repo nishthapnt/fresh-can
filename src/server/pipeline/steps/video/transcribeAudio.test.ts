@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { computeNarrationCorrection } from './transcribeAudio'
+import { computeNarrationCorrection, rewriteNarrationToWordCount, type NarrationCorrection } from './transcribeAudio'
+import type { ScriptGenerator } from '../../adapters/types'
+
+/** Narrows a correction to the clean-cut variant and returns its text. */
+function cutText(result: NarrationCorrection | null): string {
+  expect(result).not.toBeNull()
+  expect(result!.kind).toBe('cut')
+  return (result as Extract<NarrationCorrection, { kind: 'cut' }>).shortenedText
+}
 
 describe('computeNarrationCorrection', () => {
   it('returns null for a small mismatch — left to renderLanguageTrack.ts\'s existing per-scene handling', () => {
@@ -29,93 +37,134 @@ describe('computeNarrationCorrection', () => {
     const narrationText = Array.from({ length: words }, (_, i) => `word${i + 1}`).join(' ')
     const result = computeNarrationCorrection(realDurationMs, 7_000, narrationText)
     expect(result).not.toBeNull()
-    const shortenedWordCount = result!.shortenedText.split(/\s+/).filter(Boolean).length
+    // No clean sentence/clause exists in "word1 word2 ..." so a cut would be a
+    // bare chop; the fix is now a rewrite to a word count.
+    expect(result!.kind).toBe('rewrite')
+    const shortenedWordCount = (result as Extract<NarrationCorrection, { kind: 'rewrite' }>).maxWords
     expect(shortenedWordCount).toBeLessThan(words)
     // Self-calibrated from THIS scene's own measured rate (27 words / 11.975s
     // ≈ 2.25 words/sec) — never the global 3.1wps assumption, which is what
     // makes this correct regardless of which dashboard-selected voice
     // produced the real audio.
     const selfWordsPerSecond = words / (realDurationMs / 1000)
-    const expectedMaxWords = Math.floor(7 * 1.15 * selfWordsPerSecond)
+    const expectedMaxWords = Math.floor(7 * 1.03 * selfWordsPerSecond)
     expect(shortenedWordCount).toBeLessThanOrEqual(expectedMaxWords)
   })
 
   it('is voice-agnostic: a different (faster-speaking) voice measuring the same overshoot ratio gets the same relative correction', () => {
     // Same 1.7x overshoot ratio as the regression case above, but at a much
-    // higher self-measured words/sec (a fast voice saying far more words in
-    // the same real duration) — the function must not assume any global
-    // rate, so it should still cap the shortened text against THIS scene's
-    // own measured rate, not silently under- or over-correct because the
-    // voice differs.
+    // higher self-measured words/sec — the function must not assume any
+    // global rate, so it caps against THIS scene's own measured rate.
     const words = 60
     const realDurationMs = 11_900 // ~1.7x over the same 7s budget
     const narrationText = Array.from({ length: words }, (_, i) => `word${i + 1}`).join(' ')
     const result = computeNarrationCorrection(realDurationMs, 7_000, narrationText)
     expect(result).not.toBeNull()
-    const shortenedWordCount = result!.shortenedText.split(/\s+/).filter(Boolean).length
     const selfWordsPerSecond = words / (realDurationMs / 1000)
-    const expectedMaxWords = Math.floor(7 * 1.15 * selfWordsPerSecond)
-    expect(shortenedWordCount).toBeLessThanOrEqual(expectedMaxWords)
-    expect(shortenedWordCount).toBeGreaterThan(0)
+    const target = result as Extract<NarrationCorrection, { kind: 'rewrite' }>
+    expect(target.kind).toBe('rewrite')
+    expect(target.wordsPerSecond).toBeCloseTo(selfWordsPerSecond, 5)
+    expect(target.maxWords).toBeLessThanOrEqual(Math.floor(7 * 1.03 * selfWordsPerSecond))
+    expect(target.maxWords).toBeGreaterThan(0)
   })
 
-  it('cuts at the last sentence boundary within the kept words when one exists close to the cutoff', () => {
-    // 14 words, real duration/target chosen so maxWords works out to 10 —
-    // i.e. the hard word-count cut would land 3 words INTO the second
-    // sentence ("...here. This second sentence"), and the boundary logic
-    // should pull it back to the end of the first sentence instead.
+  it('cuts at a sentence boundary when that still fills the slot', () => {
+    // 15 words (a 12-word sentence + a 3-word one); 2.4s real vs a 2.0s slot.
+    // Dropping the short tail leaves 12/15 of the speech: ~1.92s, within the
+    // 85% fill floor, so it is a clean cut rather than a rewrite.
+    const first = Array.from({ length: 12 }, (_, i) => `a${i + 1}`).join(' ') + '.'
+    const narrationText = `${first} b1 b2 b3.`
+    expect(cutText(computeNarrationCorrection(2_400, 2_000, narrationText))).toBe(first)
+  })
+
+  it('prefers a rewrite over a cut that would leave the slot mostly empty (regression, job 8e92b381)', () => {
     const narrationText = 'This is the first complete sentence here. This second sentence continues on for several.'
-    const result = computeNarrationCorrection(3_111, 2_000, narrationText)
-    expect(result).not.toBeNull()
-    expect(result!.shortenedText).toBe('This is the first complete sentence here.')
+    expect(computeNarrationCorrection(3_111, 2_000, narrationText)!.kind).toBe('rewrite')
   })
 
-  // Regression for a real job (2026-09-26): the old truncation fell through
-  // to a bare word-count chop whenever the FIRST sentence alone didn't fit
-  // maxWords, producing narration that audibly stops mid-word/mid-phrase —
-  // e.g. real output from that job: "Every year in Canada, an astonishing
-  // amount of food ends up in" and "...replacing groceries before". A single
-  // sentence longer than the whole allotted budget must now come back
-  // whole (accepting it lands over the soft-tolerance aim) rather than as a
-  // fragment with no clean ending — the render step's own visual trim/zoom
-  // fallback safely absorbs whatever residual gap that leaves.
-  it('never returns a mid-sentence fragment — keeps the whole first sentence even when it alone exceeds the word budget', () => {
+  it('asks for a rewrite, never a mid-sentence fragment, when no clean cut fills the slot', () => {
+    // Regression for a real job (2026-09-26): the old truncation fell through
+    // to a bare word-count chop, producing narration that audibly stops
+    // mid-phrase ("...ends up in"). A single sentence far longer than the
+    // budget now yields a rewrite request instead of a fragment.
     const narrationText =
-      'Every year in Canada, an astonishing amount of food ends up in landfills, wasting money and resources.'
-    // Real duration wildly over budget so maxWords lands well inside this
-    // one long sentence (no earlier sentence boundary exists at all).
+      'Every year in Canada an astonishing amount of food ends up in landfills while households keep replacing groceries before they are really used'
     const result = computeNarrationCorrection(20_000, 5_000, narrationText)
     expect(result).not.toBeNull()
-    const shortened = result!.shortenedText
-    // Ends on a real sentence boundary, not a bare word.
-    expect(/[.!?]$/.test(shortened)).toBe(true)
-    // Falls back to the comma clause here since the sentence itself has no
-    // terminal punctuation in this fixture — either way, never a fragment
-    // like "...ends up in".
-    expect(shortened).not.toMatch(/\bin$/)
-    expect(shortened).not.toMatch(/\band$/)
-    expect(shortened).not.toMatch(/\bbefore$/)
+    expect(result!.kind).toBe('rewrite')
   })
 
-  it('keeps as many WHOLE sentences as fit within the budget, not just the first, when several fit', () => {
+  it('keeps as many WHOLE sentences as fit within the budget when that still fills the slot', () => {
     const narrationText = 'Short one. Also short two. This third sentence is much longer and will not fit the budget at all.'
-    const result = computeNarrationCorrection(20_000, 3_000, narrationText)
+    // 17 words in 5.5s of speech vs a 4s slot: two whole sentences (4 words) fit but fill ~1s of 4s, so rewrite.
+    const result = computeNarrationCorrection(5_500, 4_000, narrationText)
     expect(result).not.toBeNull()
-    expect(result!.shortenedText.endsWith('.')).toBe(true)
-    expect(result!.shortenedText).toContain('Short one.')
   })
 
-  it('never reduces below 1 word even for an extreme overshoot ratio', () => {
+  it('never asks for fewer than 1 word even for an extreme overshoot ratio', () => {
     const result = computeNarrationCorrection(60_000, 1_000, 'one two three four five')
     expect(result).not.toBeNull()
-    expect(result!.shortenedText.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(1)
+    if (result!.kind === 'rewrite') expect(result!.maxWords).toBeGreaterThanOrEqual(1)
+    else expect(result!.shortenedText.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(1)
   })
 })
 
-describe('computeNarrationCorrection — never collapses a slot (regression, job 8e92b381)', () => {
-  it('keeps a moderately long two-sentence narration instead of cutting it to ~58% of the slot', () => {
+describe('computeNarrationCorrection — retuned thresholds (job 790b8771: 36s requested, 44.2s delivered)', () => {
+  it('no longer lets a 1.46x-over scene through (scene 1: 25 words, 10.2s in a 7s slot)', () => {
+    const text = Array.from({ length: 25 }, (_, i) => `w${i}`).join(' ')
+    const result = computeNarrationCorrection(10_239, 7_000, text)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('rewrite')
+    // ~2.44 wps measured -> aims at 97% of the 7s slot, ~16 words.
+    expect((result as Extract<NarrationCorrection, { kind: 'rewrite' }>).maxWords).toBeLessThanOrEqual(17)
+  })
+
+  it('corrects a moderately long narration (1.3x) instead of leaving it', () => {
     const text = 'Fresh-CAN is extending a warm welcome to neighbourhoods across Canada. It offers an intriguing and novel way to shop.'
-    // 6s slot, 7.8s real (1.3x): the first-sentence cut would land ~3.5s.
-    expect(computeNarrationCorrection(7_800, 6_000, text)).toBeNull()
+    // 6s slot, 7.8s real: the first-sentence cut would only fill ~3.5s, so rewrite — not "leave it".
+    expect(computeNarrationCorrection(7_800, 6_000, text)!.kind).toBe('rewrite')
+  })
+
+  it('leaves a scene within the 8% hard tolerance alone', () => {
+    expect(computeNarrationCorrection(7_500, 7_000, 'one two three four five six seven eight nine ten eleven twelve thirteen')).toBeNull()
+  })
+
+  it('holds a scene to the tight tolerance when told the running total is already over', () => {
+    const text = Array.from({ length: 20 }, (_, i) => `w${i}`).join(' ')
+    // 7.4s vs a 7s slot is 1.057x: fine normally, corrected once the video as a whole is over budget.
+    expect(computeNarrationCorrection(7_400, 7_000, text)).toBeNull()
+    expect(computeNarrationCorrection(7_400, 7_000, text, 1.02)).not.toBeNull()
+  })
+})
+
+describe('rewriteNarrationToWordCount', () => {
+  const generatorReturning = (narrationText: unknown, reject = false): ScriptGenerator =>
+    ({
+      generate: async () => {
+        if (reject) throw new Error('boom')
+        return { parsed: { scenes: [{ scene_number: 1, narration_text: narrationText }] }, raw: '' }
+      },
+    }) as unknown as ScriptGenerator
+  const base = {
+    language: 'EN' as const,
+    sceneNumber: 1,
+    text: 'one two three four five six seven eight nine ten',
+    targetDurationMs: 4_000,
+    maxWords: 6,
+    wordsPerSecond: 2.5,
+  }
+
+  it('returns the rewrite when it is shorter and within the word budget', async () => {
+    expect(await rewriteNarrationToWordCount(generatorReturning('one two three four five'), base)).toBe('one two three four five')
+  })
+
+  it('rejects a rewrite that is still over budget, empty, or not a string', async () => {
+    expect(await rewriteNarrationToWordCount(generatorReturning('a b c d e f g h'), base)).toBeNull()
+    expect(await rewriteNarrationToWordCount(generatorReturning('   '), base)).toBeNull()
+    expect(await rewriteNarrationToWordCount(generatorReturning(42), base)).toBeNull()
+  })
+
+  it('returns null instead of throwing when the model call fails', async () => {
+    expect(await rewriteNarrationToWordCount(generatorReturning('x', true), base)).toBeNull()
   })
 })

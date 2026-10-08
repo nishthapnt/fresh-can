@@ -283,6 +283,64 @@ export function normalizeScriptOutput(parsed: unknown): VideoScriptOutput | null
   }
 }
 
+// Per-scene planned-duration bounds. The floor mirrors lib/sceneClipDuration's
+// MIN_CLIP_SECONDS (a scene shorter than that still renders a 4s clip, so the
+// planned total can't be honoured below it); the ceiling keeps one scene from
+// hogging the runtime. The floor relaxes only when the scene count makes it
+// arithmetically impossible (e.g. 10 scenes in 32s).
+const MIN_SCENE_SECONDS = 4
+const MAX_SCENE_SECONDS = 11
+
+/**
+ * Forces the scenes' planned durations to sum to EXACTLY `totalSeconds`.
+ * A finished video's length is the sum of its scenes' real narration, which
+ * is written to each scene's planned slot — so a plan that already sums to
+ * more than requested (job 790b8771 planned 38s for a 36s request) can never
+ * land on target no matter how well narration fits its slots. The model is
+ * asked for an exact total but never trusted to add up; this is the
+ * enforcement. Scales proportionally (preserving the model's relative pacing),
+ * rounds to whole seconds, clamps to the per-scene bounds, then hands out the
+ * remainder one second at a time to the scenes with the most room.
+ */
+export function fitSceneDurations<T extends { target_duration_seconds: number }>(
+  scenes: readonly T[],
+  totalSeconds: number,
+): T[] {
+  const total = Math.round(totalSeconds)
+  const n = scenes.length
+  if (n === 0 || !Number.isFinite(total) || total <= 0) return scenes.map((s) => ({ ...s }))
+
+  const floor = Math.max(1, Math.min(MIN_SCENE_SECONDS, Math.floor(total / n)))
+  const ceiling = Math.max(floor, MAX_SCENE_SECONDS)
+  const rawSum = scenes.reduce((sum, s) => sum + Math.max(0, s.target_duration_seconds), 0)
+  const scale = rawSum > 0 ? total / rawSum : 0
+  const durations = scenes.map((s) => {
+    const proportional = rawSum > 0 ? s.target_duration_seconds * scale : total / n
+    return Math.min(ceiling, Math.max(floor, Math.round(proportional)))
+  })
+
+  let diff = total - durations.reduce((sum, d) => sum + d, 0)
+  while (diff !== 0) {
+    const step = diff > 0 ? 1 : -1
+    // Adjust the scene with the most room in the needed direction (ties go to
+    // the earlier scene) so no single scene absorbs the whole correction.
+    let pick = -1
+    let bestRoom = 0
+    durations.forEach((d, i) => {
+      const room = step > 0 ? ceiling - d : d - floor
+      if (room > bestRoom) {
+        bestRoom = room
+        pick = i
+      }
+    })
+    if (pick === -1) break // every scene pinned at a bound — total is infeasible
+    durations[pick] += step
+    diff -= step
+  }
+
+  return scenes.map((s, i) => ({ ...s, target_duration_seconds: durations[i] }))
+}
+
 /** Reads a scene's visual_state back out of its stored narration_intent
  *  (see upsertVideoScenes's call below — visual_state rides inside that
  *  same JSON column rather than a new one). Trusts the shape rather than
@@ -394,7 +452,14 @@ export async function runGenerateScript(
         stepName: 'generate_script',
       })
 
-      const output = normalizeScriptOutput(result.parsed)
+      const normalized = normalizeScriptOutput(result.parsed)
+      const output = normalized
+        ? {
+            ...normalized,
+            scenes: fitSceneDurations(normalized.scenes, input.durationSeconds),
+            duration_seconds: input.durationSeconds,
+          }
+        : null
       if (!output) {
         // Includes a truncated raw snippet — this exact failure previously
         // surfaced to the user as just "model output did not match the
