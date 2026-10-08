@@ -514,8 +514,7 @@ const SCENE_CONTENTS_RULE =
 // compose.test.ts's real truncation-cascade regressions (600-char
 // visual_description, long shot_notes/cast) rather than by feel.
 const PHOTOREALISTIC_QUALITY_FLOOR =
-  'Premium photorealistic commercial photography of one single continuous frame, never shots stacked to ' +
-  'fill the height, a collage, or split-screen: crisp natural detail, true-to-life skin/food/fabric ' +
+  'Premium photorealistic commercial photography: crisp natural detail, true-to-life skin/food/fabric ' +
   'texture, natural camera depth of field and lighting — never oversharpened, plastic/CGI-looking, or ' +
   'oversaturated.'
 
@@ -735,7 +734,29 @@ export function composeCharacterRefPrompt(brand: BrandProfile, job: CharacterRef
   return { prompt, referenceImageUrl }
 }
 
+/** The aspect ratios the dashboard offers for video (content_jobs.aspect_ratio). */
+type SceneAspectRatio = '9:16' | '1:1' | '16:9'
+
+// What the dashboard's aspect ratio means as a PROMPT instruction. The ratio is
+// already sent to the image API as `aspect_ratio` (it fixes the canvas), but
+// that never told the model what to COMPOSE for it: both collage stills so far
+// (jobs 65b08e09 scene 1, 8b682bc9 scene 5) were wide-shot scenes that came
+// back on a correct 9:16 canvas as several landscape shots stacked to fill
+// it. Stating the shape as one photograph removes the reason to do that.
+const ASPECT_FRAMING: Record<SceneAspectRatio, string> = {
+  '9:16': 'one single vertical 9:16 portrait photograph, composed for that tall frame',
+  '1:1': 'one single square 1:1 photograph, composed for that frame',
+  '16:9': 'one single horizontal 16:9 photograph, composed for that wide frame',
+}
+
+function aspectFramingClause(aspectRatio: SceneAspectRatio | undefined): string {
+  return `Composed as ${ASPECT_FRAMING[aspectRatio ?? '9:16']}.`
+}
+
 interface SceneImageJob {
+  /** The job's chosen aspect ratio (content_jobs.aspect_ratio); '9:16' when omitted,
+   *  matching the pipeline's own default. */
+  aspectRatio?: SceneAspectRatio
   pipelineId: string
   sceneNumber: number
   visualDescription: string
@@ -919,6 +940,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
+    aspectFramingClause(job.aspectRatio),
     appClause,
     interiorRef ? interiorBlock(brand) : unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
@@ -1031,6 +1053,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
+    aspectFramingClause(job.aspectRatio),
     creativeBrief,
     appClause,
   ]

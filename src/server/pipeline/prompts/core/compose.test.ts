@@ -1391,16 +1391,34 @@ describe('Track C: brand text no longer invites lettering or exits', () => {
   })
 })
 
-describe('single-frame guard on every image prompt', () => {
-  it('tells the image model to render one continuous frame, never a collage (job 65b08e09 scene 1 came back as three stacked panels)', () => {
-    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, {
-      pipelineId: 'p',
-      sceneNumber: 1,
-      visualDescription: 'A static wide shot of a backyard barbecue at sunset.',
-      shotNotes: null,
-      characterRefUrl: 'https://example.com/ref.png',
-      unitPresence: 'none',
-    })
-    expect(prompt).toContain('one single continuous frame, never shots stacked to fill the height, a collage, or split-screen')
+describe('aspect-ratio framing on video scene stills', () => {
+  const job = {
+    pipelineId: 'p',
+    sceneNumber: 1,
+    visualDescription: 'A static wide shot of a lively backyard barbecue at sunset.',
+    shotNotes: null,
+    characterRefUrl: 'https://example.com/ref.png',
+    unitPresence: 'none' as const,
+  }
+
+  it("states the dashboard's chosen shape as one photograph (both collage stills were wide shots on a correct 9:16 canvas)", () => {
+    expect(composeSceneImagePrompt(BRAND_PROFILE, { ...job, aspectRatio: '9:16' }).prompt).toContain(
+      'Composed as one single vertical 9:16 portrait photograph',
+    )
+    expect(composeSceneImagePrompt(BRAND_PROFILE, { ...job, aspectRatio: '1:1' }).prompt).toContain(
+      'Composed as one single square 1:1 photograph',
+    )
+    expect(composeSceneImagePrompt(BRAND_PROFILE, { ...job, aspectRatio: '16:9' }).prompt).toContain(
+      'Composed as one single horizontal 16:9 photograph',
+    )
+  })
+
+  it("defaults to the pipeline's own 9:16 when no ratio is given", () => {
+    expect(composeSceneImagePrompt(BRAND_PROFILE, job).prompt).toContain('vertical 9:16 portrait photograph')
+  })
+
+  it('does not tell the model what NOT to do — no "never ... collage" boilerplate in the shared quality floor', () => {
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, aspectRatio: '9:16' })
+    expect(prompt).not.toMatch(/never[^.]*collage/i)
   })
 })

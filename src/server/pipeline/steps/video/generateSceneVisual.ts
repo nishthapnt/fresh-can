@@ -407,6 +407,7 @@ async function runSceneImageStep(
             visualDescription: scene.visual_description,
           })
         : composeSceneImagePrompt(BRAND_PROFILE, {
+            aspectRatio,
             pipelineId: pipeline.id,
             sceneNumber: scene.scene_number,
             visualDescription: scene.visual_description,
