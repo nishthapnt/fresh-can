@@ -297,7 +297,7 @@ export type AVMergeResult =
  *  FINAL pass for a given track (no captions → mux; captions → caption-
  *  burn) is the one that ever needs this escalation. */
 export interface AVMerger {
-  /** `crf` (default 23, quality-first, 2026-09-24 — previously a fixed
+  /** `crf` (default INTERMEDIATE_CRF=19, quality-first, 2026-09-24 — previously a fixed
    *  3800kbps cap regardless of actual render length): concat is the
    *  heaviest re-encode in the whole render (a full decode of every scene
    *  clip) and the FIRST one, so bitrate-capping it unconditionally threw
@@ -320,7 +320,7 @@ export interface AVMerger {
    *  narration length (sum of every scene's real audio duration) — see
    *  avMerger.ts's buildMuxCommand for why it's needed (fades the last
    *  ~0.6s to black/silence, the deterministic half of the "abrupt
-   *  ending" fix). `crf` (default 23, quality-first, 2026-09-23) — no
+   *  ending" fix). `crf` (default INTERMEDIATE_CRF=19, quality-first, 2026-09-23) — no
    *  bitrate cap, encoder picks bitrate per scene complexity; this is the
    *  final render whenever there are no captions, so its file size is
    *  never verified until after the fact — see submitMuxCapped and

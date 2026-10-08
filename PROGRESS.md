@@ -1948,3 +1948,8 @@ Audited the 3 real video jobs from 2026-10-08 (790b8771 44.2s, e4a83ec0 39.1s, 5
 - Fixes (`compose.ts`, `composeText.ts`, `brand/fresh-can.ts`): cast block shrinks full→compact→minimal before the description is touched; generic "brand details are constraints" sentence is droppable; clip suffix compressed (worst case 2,514→2,059) to fit a vehicle-design lock, single-shot/no-collage and no-readable-packaging-text clauses; script prompt requires one colour-named outfit per cast member, cast_present people visible on screen, a readable unit or none; interior brand text no longer mentions a door (prompted exit poses) or lettered stickers; `noNewTextInstruction` says packaging/labels/bags are plain.
 - Not done by decision: vision QA retries, 1080p, smoke/steam guard. Image cap left at 2,995 (KIE nano-banana-2's real limit unverified; a third party lists 20,000).
 - ⭐ Next: D2 (encode bitrate headroom); run a real job to confirm.
+
+### 2026-10-08 — D2: render encode quality
+- The delivered video goes through up to 4 lossy libx264 passes (scene scale/duration-match → concat → mux → caption burn), all at CRF 23, so artifacts compounded. Now `SCENE_PASS_CRF=18`, `INTERMEDIATE_CRF=19` (concat, mux), `FINAL_CRF=20` (caption burn) in `adapters/avMerger.ts`.
+- Measured locally with ffmpeg on job 790b8771's real stored clips (43s, 720x1280), chaining the same passes: 23/23/23/23 → 12.6MB, PSNR 38.4 dB; 18/19/19/20 → 19.7MB, 41.0 dB; 17/17/18/18 → 24.4MB, 42.1 dB. ~3.7 Mbps ⇒ stays under the 50MB `SAFE_UPLOAD_BYTES` guard to ~110s; larger still falls back to the capped encode as before.
+- Not verified against upload-post.com itself (render time / transfer of the larger intermediates). Resolution unchanged (720p by decision).

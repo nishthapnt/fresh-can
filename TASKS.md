@@ -120,7 +120,7 @@
 - [x] B1 — narration prompts forbid describing entering/exiting the unit
 - [x] B2 — narration lint + one targeted rewrite for entry/exit wording
 - [x] C1 unit design lock in clip prompt · C2 readable-unit planning rule (no QA retry, by decision) · C3 no lettered packaging (image+clip+interior brand text) · C4 one colour-named outfit per cast member · C5 cast always on screen + cast block shrinks before the description is cut · C7 single-shot/no-collage clause · prompt budget fixes (clip suffix 2514→2059, boilerplate trimmed)
-- [ ] D2 — final encode bitrate headroom
+- [x] D2 — render CRF ladder 18/19/19/20 (was 23 everywhere): +2.6 dB PSNR on real clips, ~1.55x file size
 - Skipped by decision: QA retries, 1080p, restoring smoke/steam guard
 
 ---

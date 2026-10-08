@@ -231,6 +231,27 @@ function msToAssTime(ms: number): string {
 // can never drift apart from each other or from this math.
 const CAPPED_VIDEO_ENCODE_ARGS = '-b:v 3800k -maxrate 3800k -bufsize 7600k'
 
+// CRF per render pass (lower = higher quality, bigger file). Retuned
+// 2026-10-08 (was 23 everywhere). The delivered video is the product of up to
+// FOUR lossy libx264 generations — per-scene scale/duration-match, concat,
+// mux, caption burn — and every generation re-quantizes the previous one's
+// artifacts, so the earlier passes are held to a stricter target than the
+// last. Measured on the real stored clips of job 790b8771 (43s, 720x1280),
+// chaining the same passes: 23/23/23/23 -> 12.6MB, PSNR 38.4 dB vs the
+// source; 18/19/19/20 -> 19.7MB, 41.0 dB (+2.6 dB); 17/17/18/18 -> 24.4MB,
+// 42.1 dB. 18/19/19/20 was chosen: ~3.7 Mbps, so a video stays under
+// renderLanguageTrack.ts's 50MB SAFE_UPLOAD_BYTES guard up to ~110s (this
+// pipeline's videos are far shorter), and anything larger still escalates to
+// the capped fallback exactly as before.
+/** Per-scene passes (scale, duration-match): run on short single clips, and
+ *  their softness is baked into every later pass, so they get the strictest CRF. */
+export const SCENE_PASS_CRF = 18
+/** Whole-video passes whose output is re-encoded again afterwards (concat, and
+ *  mux when captions follow). */
+export const INTERMEDIATE_CRF = 19
+/** The last pass a viewer's file comes out of (caption burn). */
+export const FINAL_CRF = 20
+
 /**
  * `crf` (default 23, quality-first, 2026-09-24 — see AVMerger.submitVideoConcat's
  * own doc comment, types.ts, for why this replaced an unconditional fixed
@@ -240,7 +261,7 @@ const CAPPED_VIDEO_ENCODE_ARGS = '-b:v 3800k -maxrate 3800k -bufsize 7600k'
  * buildVideoConcatCommandCapped below for the deterministic fallback used
  * only when this comes back oversized.
  */
-export function buildVideoConcatCommand(scenes: AVMergeInput['scenes'], crf = 23): {
+export function buildVideoConcatCommand(scenes: AVMergeInput['scenes'], crf = INTERMEDIATE_CRF): {
   files: string[]
   fullCommand: string
   outputExtension: string
@@ -403,7 +424,7 @@ export function buildMuxCommand(
   videoUrl: string,
   audioUrl: string,
   totalDurationSeconds: number,
-  crf = 23,
+  crf = INTERMEDIATE_CRF,
 ): {
   files: string[]
   fullCommand: string
@@ -560,7 +581,7 @@ export function buildCaptionAssFile(
 export function buildCaptionBurnCommand(
   mergedVideoUrl: string,
   assFileUrl: string,
-  crf = 23,
+  crf = FINAL_CRF,
 ): {
   files: string[]
   fullCommand: string
@@ -630,7 +651,7 @@ export function buildScaleCommand(
   // adds is baked into content_visual_assets' shared clip and compounds
   // through every later pass (duration-match, concat, mux, caption-burn) —
   // worth paying a small, safe preset step for.
-  const fullCommand = `ffmpeg -y -i {input} -vf "scale=${width}:${height}" -c:v libx264 -preset veryfast -crf 23 -an {output}`
+  const fullCommand = `ffmpeg -y -i {input} -vf "scale=${width}:${height}" -c:v libx264 -preset veryfast -crf ${SCENE_PASS_CRF} -an {output}`
   return { files: [videoUrl], fullCommand, outputExtension: 'mp4' }
 }
 
@@ -819,7 +840,7 @@ export function buildSceneDurationMatchCommand(
   // API yet.
   const inputFlags = useLoopFallback ? '-stream_loop -1 ' : ''
   const vfArg = vf ? ` -vf "${vf}"` : ''
-  const fullCommand = `ffmpeg -y ${inputFlags}-i {input}${vfArg} -t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf 23 -an {output}`
+  const fullCommand = `ffmpeg -y ${inputFlags}-i {input}${vfArg} -t ${targetDurationSeconds.toFixed(2)} -c:v libx264 -preset veryfast -crf ${SCENE_PASS_CRF} -an {output}`
   return { files: [clipUrl], fullCommand, outputExtension: 'mp4' }
 }
 

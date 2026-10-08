@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
+  SCENE_PASS_CRF,
+  INTERMEDIATE_CRF,
+  FINAL_CRF,
   buildVideoConcatCommand,
   buildVideoConcatCommandCapped,
   buildAudioConcatCommand,
@@ -46,7 +49,7 @@ describe('buildVideoConcatCommand', () => {
 
   it('uses quality-first CRF, not a fixed bitrate cap — this pass\'s own output is size-guarded by renderLanguageTrack.ts (escalating to buildVideoConcatCommandCapped if oversized) rather than throttled unconditionally on every render', () => {
     const { fullCommand } = buildVideoConcatCommand(THREE_SCENES)
-    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).toContain(`-crf ${INTERMEDIATE_CRF}`)
     expect(fullCommand).not.toContain('-b:v')
     expect(fullCommand).not.toContain('-maxrate')
     expect(fullCommand).not.toContain('-bufsize')
@@ -142,9 +145,9 @@ describe('buildMuxCommand', () => {
     expect(fullCommand).not.toContain('-filter_complex')
   })
 
-  it('defaults to CRF 23, quality-first, with no bitrate cap — the normal path whenever there are no captions', () => {
+  it('defaults to the intermediate CRF, quality-first, with no bitrate cap — the normal path whenever there are no captions', () => {
     const { fullCommand } = buildMuxCommand('https://example.com/video.mp4', 'https://example.com/audio.mp4', 10)
-    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).toContain(`-crf ${INTERMEDIATE_CRF}`)
     expect(fullCommand).not.toContain('-b:v')
     expect(fullCommand).not.toContain('-maxrate')
     expect(fullCommand).not.toContain('-bufsize')
@@ -294,9 +297,9 @@ describe('buildCaptionBurnCommand', () => {
     expect(fullCommand).not.toContain('-filter_complex')
   })
 
-  it('defaults to CRF 23, quality-first, with no bitrate cap — the normal path whenever captions are present', () => {
+  it('defaults to the final CRF, quality-first, with no bitrate cap — the normal path whenever captions are present', () => {
     const { fullCommand } = buildCaptionBurnCommand('https://example.com/merged.mp4', 'https://example.com/captions.ass')
-    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).toContain(`-crf ${FINAL_CRF}`)
     expect(fullCommand).not.toContain('-b:v')
     expect(fullCommand).not.toContain('-maxrate')
     expect(fullCommand).not.toContain('-bufsize')
@@ -418,9 +421,9 @@ describe('buildScaleCommand', () => {
     expect(fullCommand).not.toContain('{input0}')
   })
 
-  it('sets -crf 23 explicitly — the same quality target libx264 already defaults to, not a reduction', () => {
+  it('uses the strict per-scene CRF, since its softness is baked into every later pass', () => {
     const { fullCommand } = buildScaleCommand('https://example.com/clip.mp4', 1080, 1920)
-    expect(fullCommand).toContain('-crf 23')
+    expect(fullCommand).toContain(`-crf ${SCENE_PASS_CRF}`)
   })
 
   it('never contains a semicolon', () => {
@@ -637,7 +640,7 @@ describe('UploadPostAVMerger', () => {
     expect(body.files).toEqual(['https://example.com/v.mp4', 'https://example.com/a.mp4'])
     expect(body.full_command).not.toContain(';')
     expect(body.full_command).toContain('fade=t=out:st=9.40:d=0.60')
-    expect(body.full_command).toContain('-crf 23')
+    expect(body.full_command).toContain(`-crf ${INTERMEDIATE_CRF}`)
   })
 
   it('submitMuxCapped() sends the deterministic bitrate-capped fallback command', async () => {
@@ -725,7 +728,7 @@ describe('UploadPostAVMerger', () => {
     const body = JSON.parse(capturedBody!)
     expect(body.files).toEqual(['https://example.com/merged.mp4', 'https://example.com/captions.ass'])
     expect(body.full_command).not.toContain(';')
-    expect(body.full_command).toContain('-crf 23')
+    expect(body.full_command).toContain(`-crf ${FINAL_CRF}`)
   })
 
   it('submitCaptionBurnCapped() sends the deterministic bitrate-capped fallback command', async () => {
@@ -826,5 +829,21 @@ describe('UploadPostAVMerger', () => {
   it('poll() throws ProviderCallError on a non-ok HTTP response from the status check', async () => {
     const merger = new UploadPostAVMerger('key', mockFetch({ ok: false, status: 404, textBody: 'not found' }))
     await expect(merger.poll({ providerRef: 'job-1' })).rejects.toThrow(ProviderCallError)
+  })
+})
+
+describe('render CRF ladder (2026-10-08 quality retune)', () => {
+  it('gets stricter the earlier a pass runs, because each later pass re-encodes its artifacts', () => {
+    expect(SCENE_PASS_CRF).toBeLessThan(INTERMEDIATE_CRF)
+    expect(INTERMEDIATE_CRF).toBeLessThan(FINAL_CRF)
+  })
+
+  it('is stricter than the old uniform CRF 23 at every stage', () => {
+    for (const crf of [SCENE_PASS_CRF, INTERMEDIATE_CRF, FINAL_CRF]) expect(crf).toBeLessThan(23)
+  })
+
+  it('applies the scene-pass CRF to the duration-match pass too', () => {
+    const { fullCommand } = buildSceneDurationMatchCommand('https://example.com/c.mp4', 8)
+    expect(fullCommand).toContain(`-crf ${SCENE_PASS_CRF}`)
   })
 })
