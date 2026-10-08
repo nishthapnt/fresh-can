@@ -809,6 +809,8 @@ export interface LocalizeScriptSystemPromptOptions {
    *  localizeScript.ts used to compute each scene's min/max word band, or the
    *  prompt's stated rate and the enforced bands would disagree. */
   wordsPerSecond?: number
+  /** The creator's own scene idea (content_jobs.scene_notes), if any. */
+  sceneNotes?: string | null
 }
 
 /**
@@ -874,6 +876,12 @@ export function composeLocalizeScriptSystemPrompt(brand: BrandProfile, opts: Loc
     'makes the whole video longer than the length that was requested, and narration that runs short makes it ' +
     'shorter — both are real problems, not cosmetic ones. ' +
     `${NO_ENTRY_EXIT_NARRATION_RULE} ` +
+    'Each scene also carries "on_screen" (what the viewer sees); narration must agree with it, describing only ' +
+    'what that scene shows or the idea it carries. ' +
+    (opts.sceneNotes
+      ? `The creator's own idea for this video is: "${opts.sceneNotes}". Narration stays faithful to it, and any ` +
+        'action it rules out (for example "no scanning") never appears in the wording. '
+      : '') +
     'Write it as natural spoken narration for a ' +
     'real story, never as scripted ad copy or a voiceover that sounds like a commercial. The one exception: if ' +
     `a narration_intent explicitly calls for naming ${brand.name} (or otherwise references the brand by name), the ` +

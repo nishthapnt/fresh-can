@@ -168,7 +168,7 @@ export async function runLocalizeScript(
   // The job's selected ElevenLabs voice (null/undefined = brand default).
   // Used only to look up how fast that voice really speaks, so scene word
   // bands match the voice instead of one fleet-wide rate.
-  options?: { voiceId?: string | null },
+  options?: { voiceId?: string | null; sceneNotes?: string | null },
 ): Promise<{ ran: boolean }> {
   let working: TrackRow
   if (track.status === 'waiting_on_shared') {
@@ -208,12 +208,13 @@ export async function runLocalizeScript(
       ? await getMeasuredWordsPerSecond(client, options.voiceId, track.language === 'FR' ? 'FR' : 'EN')
       : null
     const wordsPerSecond = resolveWordsPerSecond(measuredRate)
-    const systemPrompt = composeLocalizeScriptSystemPrompt(BRAND_PROFILE, { language: languageName, wordsPerSecond })
+    const systemPrompt = composeLocalizeScriptSystemPrompt(BRAND_PROFILE, { language: languageName, wordsPerSecond, sceneNotes: options?.sceneNotes })
     const sceneRequest = (s: (typeof scenes)[number], extra: Record<string, unknown> = {}) => {
       const range = narrationWordRange(s.target_duration_ms, wordsPerSecond)
       return {
         scene_number: s.scene_number,
         narration_intent: (s.narration_intent as { text?: string } | null)?.text ?? s.narration_intent,
+        on_screen: s.visual_description,
         target_duration_seconds: Math.round(s.target_duration_ms / 1000),
         min_words: range.min,
         max_words: range.max,

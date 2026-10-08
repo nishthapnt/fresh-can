@@ -692,6 +692,13 @@ describe('composeLocalizeScriptSystemPrompt', () => {
     expect(prompt).toContain('in French')
   })
 
+  it('anchors narration to the on-screen content and the creator\'s own idea', () => {
+    const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English', sceneNotes: 'no scanning' })
+    expect(prompt).toContain('"on_screen"')
+    expect(prompt).toContain('"no scanning"')
+    expect(composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })).not.toContain("creator's own idea")
+  })
+
   it('tells the model to write natural spoken narration, never scripted ad copy', () => {
     const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'English' })
     expect(prompt).toContain('never as scripted ad copy or a voiceover that sounds like a commercial')
