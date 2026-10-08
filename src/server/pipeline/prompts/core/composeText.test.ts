@@ -686,6 +686,14 @@ describe('composeVideoScriptSystemPrompt', () => {
   })
 })
 
+describe('cast guidance in the video script prompt', () => {
+  it('asks for gender in appearance and for every person shown to be listed in cast_present', () => {
+    const prompt = composeVideoScriptSystemPrompt(testBrand, { category: 'Test Category', scriptType: 'SOLUTION', targetDurationSeconds: 36 })
+    expect(prompt).toContain('gender, ethnicity/skin tone')
+    expect(prompt).toContain('is listed here, so a scene never has a person in it who is missing from this list')
+  })
+})
+
 describe('composeLocalizeScriptSystemPrompt', () => {
   it('keeps "in {language}" so FR tracks produce a literal "in French" substring', () => {
     const prompt = composeLocalizeScriptSystemPrompt(testBrand, { language: 'French' })

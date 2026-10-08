@@ -687,7 +687,7 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '  "cast_bible": [ { "id": string (short, stable, e.g. "mother"), "role": string, "age_range": string, ' +
     '"appearance": string (specific and unambiguous enough that a different artist working from this text ' +
     'alone, with no image reference, would draw the same individual every time — always state apparent ' +
-    'ethnicity/skin tone, exact hair color/texture/style, and build or facial structure; never a generic phrase ' +
+    'gender, ethnicity/skin tone, exact hair color/texture/style, and build or facial structure; never a generic phrase ' +
     'like "kind-looking" or "friendly" that could describe many different people), "wardrobe": string (ONE ' +
     'fixed outfit worn in every scene of the video, naming each garment with its exact color, e.g. "olive-green ' +
     'zip hoodie, dark-wash jeans, white sneakers" — never just "a hoodie", never a change of outfit), ' +
@@ -723,7 +723,9 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     'this scene, if any — include them even when this scene is set at a different location or in a different ' +
     'setting than where they last appeared; never drop a recurring person from this list just because the ' +
     'scene changed location, that is exactly when losing their locked appearance is most noticeable. [] or ' +
-    'omit only if the video has no cast_bible or genuinely no cast_bible person is shown in this scene),\n' +
+    'omit only if the video has no cast_bible or genuinely no cast_bible person is shown in this scene. Every ' +
+    'cast_bible person your visual_description shows or mentions, in any role (guest, neighbour, passenger, ' +
+    'customer), is listed here, so a scene never has a person in it who is missing from this list),\n' +
     '      "props_present": string[] (visually significant objects this scene establishes or carries forward),\n' +
     `      "unit_presence": "none" | "background" | "featured" (is ${brand.name}'s physical unit the ` +
     'subject of this scene, plausibly present in the background, or absent — an honest per-scene read, never a default. ' +

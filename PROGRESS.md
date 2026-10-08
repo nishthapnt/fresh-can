@@ -1973,3 +1973,7 @@ Audited the 3 real video jobs from 2026-10-08 (790b8771 44.2s, e4a83ec0 39.1s, 5
 
 ### 2026-10-09 — Narration vs the creator's brief
 - The localize step only saw `narration_intent`, so a brief saying "no scanning" still got "a quick scan of the app". It now also receives each scene's `on_screen` (the scene's visual_description) and the job's `scene_notes`; the prompt requires narration to agree with what is on screen and with the creator's idea, and never include an action the idea rules out. Wired through `runLocalizeScript` options (`sceneNotes`) from `video.ts`. Prompt-only; unverified on a real job.
+
+### 2026-10-09 — Cast drift and empty cast_present
+- Scene 4's neighbour (cast: slender Black man) rendered as a woman, and scene 3 listed guests but had empty `cast_present`, so no cast text reached the still. Causes: `appearance` never had to state gender, and `cast_present` only required people who "visually appear" without covering secondary roles.
+- Script prompt: `appearance` must now state gender; `cast_present` must list every cast_bible person the scene's visual_description shows or mentions in any role (guest, neighbour, passenger, customer). Prompt-only; unverified on a real job. Remaining gap: a planner can still omit someone (no code check, by design — matches the LLM-decided rule).
