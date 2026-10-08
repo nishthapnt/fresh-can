@@ -63,6 +63,22 @@ const CROSSING_PATTERNS: readonly RegExp[] = [
   /\b(?:monte|montent|monter|descend|descendent|descendre)\s+(?:dans|à bord|de|du)\b/i,
 ]
 
+const UNIT_WORDS = /\b(?:unit|truck|vehicle|container|fresh[- ]?can|camion|unité)\b/i
+
+/** Visual-text variant: a crossing verb within 40 characters of a word for the
+ *  unit ("exit the unit"), so a home or street exit ("steps out onto the
+ *  street") never matches. */
+export function visualDescribesUnitCrossing(text: string): boolean {
+  return CROSSING_PATTERNS.some((pattern) => {
+    const g = new RegExp(pattern.source, 'gi')
+    for (let m = g.exec(text); m; m = g.exec(text)) {
+      const around = text.slice(Math.max(0, m.index - 40), m.index + m[0].length + 40)
+      if (UNIT_WORDS.test(around)) return true
+    }
+    return false
+  })
+}
+
 export function narrationDescribesCrossing(text: string): boolean {
   return CROSSING_PATTERNS.some((pattern) => pattern.test(text))
 }

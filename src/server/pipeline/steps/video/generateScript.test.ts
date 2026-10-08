@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fitSceneDurations, normalizeScriptOutput } from './generateScript'
+import { fitSceneDurations, fixUnitCrossingScenes, normalizeScriptOutput } from './generateScript'
 
 const VALID = {
   script: 'A short script.',
@@ -200,5 +200,35 @@ describe('fitSceneDurations', () => {
 
   it('returns scenes untouched for an invalid total rather than inventing durations', () => {
     expect(fitSceneDurations(of(7, 8), 0).map((s) => s.target_duration_seconds)).toEqual([7, 8])
+  })
+})
+
+describe('fixUnitCrossingScenes', () => {
+  const scene = (n: number, v: string) => ({ scene_number: n, visual_description: v, narration_intent: 'x', target_duration_seconds: 7 })
+  const gen = (scenes: unknown) => ({ generate: async () => ({ parsed: { scenes }, raw: '' }) }) as never
+
+  it('flags exits from the unit but not home or street exits', async () => {
+    const { visualDescribesUnitCrossing } = await import('./localizeScript')
+    expect(visualDescribesUnitCrossing('Sarah and Daniel exit the unit with grocery bags')).toBe(true)
+    expect(visualDescribesUnitCrossing('The couple steps out onto a charming street bathed in warm, golden evening light. They spot a Fresh-CAN unit ahead.')).toBe(false)
+  })
+
+  it('rewrites a flagged scene and leaves the others', async () => {
+    const scenes = [scene(1, 'They chop vegetables.'), scene(2, 'They exit the unit with bags.')]
+    const out = await fixUnitCrossingScenes(
+      scenes,
+      gen([{ scene_number: 2, visual_description: 'They stand beside the unit holding bags.', shot_notes: 'Side view.' }]),
+    )
+    expect(out[0]).toBe(scenes[0])
+    expect(out[1].visual_description).toBe('They stand beside the unit holding bags.')
+    expect(out[1].shot_notes).toBe('Side view.')
+  })
+
+  it('keeps the original when the rewrite still crosses or the call fails', async () => {
+    const scenes = [scene(1, 'They exit the unit with bags.')]
+    const still = await fixUnitCrossingScenes(scenes, gen([{ scene_number: 1, visual_description: 'They walk out of the truck.', shot_notes: '' }]))
+    expect(still[0]).toBe(scenes[0])
+    const boom = await fixUnitCrossingScenes(scenes, { generate: async () => { throw new Error('x') } } as never)
+    expect(boom[0]).toBe(scenes[0])
   })
 })

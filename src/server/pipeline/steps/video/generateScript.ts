@@ -11,6 +11,7 @@ import {
   getVideoScenes,
   type PipelineRow,
 } from '../../db'
+import { visualDescribesUnitCrossing } from './localizeScript'
 import { hasExceededMaxAttempts, isReadyToRetry, MAX_ATTEMPTS } from '../../lib/backoff'
 import {
   BRAND_PROFILE,
@@ -341,6 +342,54 @@ export function fitSceneDurations<T extends { target_duration_seconds: number }>
   return scenes.map((s, i) => ({ ...s, target_duration_seconds: durations[i] }))
 }
 
+/**
+ * Scenes whose visual shows someone entering or leaving the unit are
+ * rewritten once as an outside-beside-the-unit frame. The planner prompt
+ * already asks for that cut, but a model that writes "exit the unit" makes the
+ * image model draw a door on the unit's side (job c07bfcf6 scene 4), since the
+ * reference shows no door there. Fails open: any error or a rewrite that still
+ * crosses keeps the original scene.
+ */
+export async function fixUnitCrossingScenes(
+  scenes: ScriptSceneOutput[],
+  scriptGenerator: ScriptGenerator,
+): Promise<ScriptSceneOutput[]> {
+  const flagged = scenes.filter((s) => visualDescribesUnitCrossing(s.visual_description))
+  if (flagged.length === 0) return scenes
+  try {
+    const result = await scriptGenerator.generate({
+      systemPrompt:
+        'Rewrite each scene so nobody enters, exits, or crosses the unit\'s doorway on screen. Show the customer ' +
+        'standing on the pavement beside the unit, already carrying their groceries, with the unit\'s plain side ' +
+        'panel behind them (or, for a shopping scene, show them inside already). Keep the same people, mood, ' +
+        'setting and story meaning, and keep the same length. Shot notes keep a side or three-quarter view of the ' +
+        'unit. Respond with strictly valid JSON: { "scenes": [ { "scene_number": number, "visual_description": ' +
+        'string, "shot_notes": string } ] }, one entry per scene given.',
+      userPrompt: JSON.stringify(
+        flagged.map((s) => ({
+          scene_number: s.scene_number,
+          visual_description: s.visual_description,
+          shot_notes: s.shot_notes ?? '',
+        })),
+      ),
+      stepName: 'generate_script',
+    })
+    const rewritten = (result.parsed as { scenes?: unknown })?.scenes
+    if (!Array.isArray(rewritten)) return scenes
+    return scenes.map((s) => {
+      const r = rewritten.find((x) => x?.scene_number === s.scene_number)
+      if (!r || typeof r.visual_description !== 'string' || visualDescribesUnitCrossing(r.visual_description)) return s
+      return {
+        ...s,
+        visual_description: r.visual_description,
+        shot_notes: typeof r.shot_notes === 'string' && r.shot_notes.trim() ? r.shot_notes : s.shot_notes,
+      }
+    })
+  } catch {
+    return scenes
+  }
+}
+
 /** Reads a scene's visual_state back out of its stored narration_intent
  *  (see upsertVideoScenes's call below — visual_state rides inside that
  *  same JSON column rather than a new one). Trusts the shape rather than
@@ -456,7 +505,10 @@ export async function runGenerateScript(
       const output = normalized
         ? {
             ...normalized,
-            scenes: fitSceneDurations(normalized.scenes, input.durationSeconds),
+            scenes: fitSceneDurations(
+              await fixUnitCrossingScenes(normalized.scenes, scriptGenerator),
+              input.durationSeconds,
+            ),
             duration_seconds: input.durationSeconds,
           }
         : null
