@@ -63,10 +63,11 @@ const CONTENT_TYPE_LABEL: Record<string, string> = {
  * scene image/video prompts.
  */
 export const NO_ENTRY_EXIT_RULE =
-  'Never show anyone entering, exiting, climbing into or out of, stepping through the door of, or jumping ' +
-  'from the vehicle or unit, or its door being opened or closed mid-action — every scene is wholly inside it ' +
-  'or wholly outside it, and any enter/shop/leave journey is told as a cut between an outside scene and an ' +
-  'inside scene, never the crossing.'
+  'Tell any enter-shop-leave journey as a cut: one scene ends with the customer outside beside the unit, the ' +
+  'next scene opens inside it, and the following scene opens outside with the customer already carrying their ' +
+  'groceries. Every scene is wholly inside or wholly outside, and the crossing itself (a door opening or ' +
+  'closing, stepping through, climbing in or out) happens between scenes. This holds even when the scene idea ' +
+  'words a beat as "walks out" or "rushes inside": keep that beat\'s meaning and tell it as the cut.'
 
 /**
  * The spoken-word half of NO_ENTRY_EXIT_RULE. The visuals never show anyone

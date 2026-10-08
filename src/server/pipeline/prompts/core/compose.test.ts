@@ -780,7 +780,7 @@ describe('composeSceneImagePrompt', () => {
     // The fixed safety/brand clauses must survive truncation fully intact —
     // only the free-text fields are ever allowed to shrink.
     expect(scene.prompt).toContain('clean, fresh, tidy, and appetizing')
-    expect(scene.prompt).toContain('ONLY entrance')
+    expect(scene.prompt).toContain('only opening')
     expect(scene.prompt).toContain('Premium photorealistic commercial photography')
   })
 
@@ -1057,18 +1057,18 @@ describe('composeCharacterRefPrompt', () => {
 // locations only — full structural coverage of the tiered/atomic shape is
 // Phase 8's job (§13), not a Phase 1 rewrite.
 describe('Fresh-CAN brand unit descriptor', () => {
-  it('explicitly forbids doors on the sides of the truck, not just a buried mention', () => {
-    expect(BRAND_PROFILE.unit.full).toMatch(/NEVER render a door.*either side/i)
-    expect(BRAND_PROFILE.unit.full).toContain('ONLY entrance')
+  it('describes the sides as solid steel with the rear door as the only opening, in positive terms', () => {
+    expect(BRAND_PROFILE.unit.full).toMatch(/front face and both side panels are\s+solid, unbroken maroon steel/i)
+    expect(BRAND_PROFILE.unit.full).toContain('only opening')
+    expect(BRAND_PROFILE.unit.full).not.toMatch(/NEVER render/i)
   })
 
-  it('explicitly forbids doors/openings on the front face too — regression for a real generation showing a door there', () => {
+  it('covers the front face too — regression for a real generation showing a door there', () => {
     expect(BRAND_PROFILE.unit.full).toContain('front face')
-    expect(BRAND_PROFILE.unit.full).toMatch(/NEVER render a door.*front face/i)
+    expect(BRAND_PROFILE.unit.full).toMatch(/front face and both side panels/i)
   })
 
-  it('explicitly names a service window/hatch as forbidden — regression for a real generation showing an open service hatch to a customer', () => {
-    expect(BRAND_PROFILE.unit.full).toContain('service window')
+  it('serves customers only at the rear door — regression for a real generation showing an open service hatch to a customer', () => {
     expect(BRAND_PROFILE.unit.full).toContain('only place customers are ever served')
   })
 
@@ -1266,9 +1266,9 @@ describe('self-serve guard + interior scenes', () => {
 })
 
 describe('composeSceneVideoPrompt entry/exit rule', () => {
-  it('forbids entering/exiting a vehicle or doorway in the clip', () => {
+  it('keeps everyone on one side of the doorway for the whole clip', () => {
     expect(composeSceneVideoPrompt({ visualDescription: 'X', shotNotes: null })).toContain(
-      'No one enters, exits, climbs into or out of',
+      'Everyone stays on one side of the doorway for the whole clip',
     )
   })
 })
@@ -1343,17 +1343,18 @@ describe('Track C: scene video prompt', () => {
   const unitJob = { visualDescription: 'The student pauses beside the unit.', shotNotes: 'Slow tracking shot.' }
 
   it('locks the vehicle design only when the unit is in the reference frame', () => {
-    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'featured' })).toContain('never add a roof, awning, kiosk, or stall')
-    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'background' })).toContain('never add a roof, awning, kiosk, or stall')
-    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'none' })).not.toContain('kiosk')
-    expect(composeSceneVideoPrompt(unitJob)).not.toContain('kiosk')
+    const lock = "keeps the reference frame's exact silhouette: white cab, flat-topped maroon container"
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'featured' })).toContain(lock)
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'background' })).toContain(lock)
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'none' })).not.toContain('silhouette')
+    expect(composeSceneVideoPrompt(unitJob)).not.toContain('silhouette')
   })
 
   it('asks for one continuous shot and no readable packaging text on every scene', () => {
     for (const unitPresence of ['none', 'featured'] as const) {
       const prompt = composeSceneVideoPrompt({ ...unitJob, unitPresence })
-      expect(prompt).toContain('One continuous single shot, never split-screen or a collage')
-      expect(prompt).toContain('Packaging, labels, and bags show no readable text')
+      expect(prompt).toContain('One continuous single-take shot')
+      expect(prompt).toContain('Packaging, labels, and bags have blank fronts')
     }
   })
 
@@ -1378,11 +1379,11 @@ describe('Track C: scene video prompt', () => {
 
 describe('Track C: brand text no longer invites lettering or exits', () => {
   it('tells the model packaging, labels and bags carry no lettering', () => {
-    expect(BRAND_PROFILE.noNewTextInstruction).toMatch(/packaging, labels, and shopping bags are plain or blank/)
+    expect(BRAND_PROFILE.noNewTextInstruction).toMatch(/packaging, labels, and shopping bags have\s+blank fronts/)
   })
 
   it("keeps the vehicle's real wordmark carve-out", () => {
-    expect(BRAND_PROFILE.noNewTextInstruction).toContain("vehicle's real signage/logo")
+    expect(BRAND_PROFILE.noNewTextInstruction).toContain("vehicle's own signage")
   })
 
   it('does not describe a door in the interior (it prompted people to walk toward an exit)', () => {

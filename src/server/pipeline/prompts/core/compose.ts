@@ -1253,14 +1253,14 @@ const TEMPORAL_CONSISTENCY_CLAUSE =
 // small text, so packaging is told to carry none. The unit's own wordmark is
 // exempt via WORDMARK_LEGIBILITY_CLAUSE.
 const SINGLE_SHOT_NO_PACKAGING_TEXT_CLAUSE =
-  ' One continuous single shot, never split-screen or a collage. Packaging, labels, and bags show no readable text.'
+  ' One continuous single-take shot. Packaging, labels, and bags have blank fronts.'
 
 // Added 2026-10-08 (Track C): the clip prompt said nothing about the unit's
 // design, so Seedance redesigned it mid-clip (job 790b8771 scene 3: the box
 // truck became a roofed kiosk, and the wordmark garbled with it). Only for
 // scenes whose reference frame actually contains the unit.
 const UNIT_DESIGN_LOCK_CLAUSE =
-  ' Keep the vehicle exactly as in the reference frame; never add a roof, awning, kiosk, or stall.'
+  " The vehicle keeps the reference frame's exact silhouette: white cab, flat-topped maroon container."
 
 // A photographic/rendering quality floor for the 720p Seedance deliverable,
 // same posture as composeSceneImagePrompt's own PHOTOREALISTIC_QUALITY_FLOOR
@@ -1277,11 +1277,11 @@ const VIDEO_VISUAL_QUALITY_STYLE =
 // floating, detached from the ground, in an otherwise ordinary street shot.
 // Closed with a short, explicit textual rule the model checks itself against
 // (no new plan field, no new LLM call, no extra provider spend).
-const NO_PHANTOM_EFFECTS_CLAUSE = ' Everyone and everything stays grounded, never floating or detached.'
+const NO_PHANTOM_EFFECTS_CLAUSE = ' Everyone and everything rests on the ground.'
 
 // Short on purpose: sceneVideo's 2450-char cap truncates visualDescription first.
 const NO_ENTRY_EXIT_CLIP_CLAUSE =
-  ' No one enters, exits, climbs into or out of, or jumps from any vehicle or doorway in this clip.'
+  ' Everyone stays on one side of the doorway for the whole clip, exactly as in the reference frame.'
 
 // Added 2026-09-26 alongside NO_PHANTOM_EFFECTS_CLAUSE — a real render's
 // brand wordmark (correct and legible in the seed scene_image frame, per

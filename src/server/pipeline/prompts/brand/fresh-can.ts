@@ -115,11 +115,10 @@ export const BRAND_PROFILE: BrandProfile = {
       'mounted on back. The cab is plain white and unbranded; all branding is on the container only. The ' +
       'white "Fresh [maple leaf icon] CAN" wordmark, never distorted, appears once, centered, on each of ' +
       'the two side panels — nowhere else on the vehicle. The front face (where it meets the cab) and the ' +
-      'rear face are both plain maroon with no wordmark or signage. NEVER render a door, hatch, ' +
-      'service window, vent, or any other opening or fixture on the front face or either side — the rear ' +
-      'double door, a black-frame glass double door flush at bumper height with no external staircase, is ' +
-      "the vehicle's ONLY entrance and ONLY opening, on any face, and the only place customers are ever " +
-      'served.',
+      'rear face are both plain maroon with no wordmark or signage. The front face and both side panels are ' +
+      "solid, unbroken maroon steel; the rear face holds the vehicle's only opening — a black-frame glass " +
+      'double door flush at bumper height, reached straight from the ground — which is the only entrance and ' +
+      'the only place customers are ever served.',
 
     interior:
       'The interior of the Fresh-CAN mobile grocery store: a narrow aisle inside the shipping container ' +
@@ -161,8 +160,8 @@ export const BRAND_PROFILE: BrandProfile = {
 
   noNewTextInstruction:
     'Photorealistic. Keep the vehicle\'s real signage/logo exactly as shown in the reference photo, unaltered. ' +
-    'No other text, logo, or typography anywhere — packaging, labels, and shopping bags are plain or blank, ' +
-    'never lettered — pure photography only.',
+    "The only lettering in frame is the vehicle's own signage; packaging, labels, and shopping bags have " +
+    'blank fronts — pure photography only.',
 
   ctaBarText: 'Visit fresh-can.com',
 
