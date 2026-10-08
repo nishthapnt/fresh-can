@@ -84,6 +84,23 @@ export const NO_ENTRY_EXIT_NARRATION_RULE =
   'never that they "enter", "step in", "walk out", "come out of" or "exit" it.'
 
 /**
+ * Track C (2026-10-08) planning rules for what a scene's visual_description may
+ * show, each tied to a failure seen in real renders: (1) a listed cast member
+ * must actually be on screen — real job 5d2dd9a2's scene 3 listed a mother and
+ * child but rendered one disembodied arm, and scene 2 swapped the family for
+ * strangers; (2) when the unit appears it must be readable — a tiny or distant
+ * unit is where the wordmark garbled (job 790b8771); (3) packaging text — video
+ * models cannot hold small lettering, so labels and bags are told to carry
+ * none (jobs e4a83ec0, 5d2dd9a2).
+ */
+export const SCENE_VISUAL_FIDELITY_RULE =
+  'Every person in a scene\'s cast_present must be clearly visible on screen in that scene\'s ' +
+  'visual_description — never swap them for unnamed extras, and never reduce them to hands or a first-person ' +
+  'view. When the unit appears, give it a clear, square-on, well-lit view large enough for its side wordmark ' +
+  'to read cleanly, or leave it out of that scene; never a tiny, distant, or partly hidden unit. Avoid ' +
+  'close-ups of product labels and bags — wherever packaging appears it carries no readable text.'
+
+/**
  * Layer 1 (PROMPT_REFACTOR_BRIEF.md §4.2/§5.1) — turns the admin's raw idea
  * into a structured creative brief, the single input every subsequent
  * planning step (blog outline, video script, image plan) will read from.
@@ -670,7 +687,9 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     '"appearance": string (specific and unambiguous enough that a different artist working from this text ' +
     'alone, with no image reference, would draw the same individual every time — always state apparent ' +
     'ethnicity/skin tone, exact hair color/texture/style, and build or facial structure; never a generic phrase ' +
-    'like "kind-looking" or "friendly" that could describe many different people), "wardrobe": string, ' +
+    'like "kind-looking" or "friendly" that could describe many different people), "wardrobe": string (ONE ' +
+    'fixed outfit worn in every scene of the video, naming each garment with its exact color, e.g. "olive-green ' +
+    'zip hoodie, dark-wash jeans, white sneakers" — never just "a hoodie", never a change of outfit), ' +
     '"distinguishing_details": string } ] (one entry per named or recurring person in the story — locked ' +
     'physical descriptions to reuse VERBATIM in every scene that person appears in, the backbone of keeping ' +
     'them looking the same scene to scene; omit entirely for a video with no recurring named people),\n' +
@@ -742,6 +761,8 @@ export function composeVideoScriptSystemPrompt(brand: BrandProfile, opts: VideoS
     NO_ENTRY_EXIT_RULE +
     ' ' +
     NO_ENTRY_EXIT_NARRATION_RULE +
+    ' ' +
+    SCENE_VISUAL_FIDELITY_RULE +
     ' Shoot it like a well-made short film, not a slideshow of ' +
     'plain snapshots: vary shot types scene to scene (wide establishing shots, medium shots, close-ups, ' +
     'over-the-shoulder, tracking shots) and give each one deliberate camera direction in shot_notes — this is ' +

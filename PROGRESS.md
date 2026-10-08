@@ -1942,3 +1942,9 @@ Audited the 3 real video jobs from 2026-10-08 (790b8771 44.2s, e4a83ec0 39.1s, 5
 - Verified by `tsc --noEmit` + full vitest (659 tests); no paid generation runs.
 - ⚠️ The e2e suite writes real "E2E … DELETE ME" rows into Supabase and does not clean them up.
 - ⭐ Next: Track C (unit consistency, garbled text, wardrobe, cast fidelity), D2.
+
+### 2026-10-08 — Track C (visual fidelity / hallucination), prompt-only
+- Root cause found by replaying the 3 real jobs through the composers: the image prompt cap (2,995) left ~740 chars for scene content on featured scenes; a 3-person cast block made the cascade cut the scene description to nothing AND drop the cast (job 5d2dd9a2 scenes 2–3 → wrong people / lone arm). Clip prompts: fixed suffix up to 2,514 chars vs 2,450 cap → camera direction truncated in 10/15 clips.
+- Fixes (`compose.ts`, `composeText.ts`, `brand/fresh-can.ts`): cast block shrinks full→compact→minimal before the description is touched; generic "brand details are constraints" sentence is droppable; clip suffix compressed (worst case 2,514→2,059) to fit a vehicle-design lock, single-shot/no-collage and no-readable-packaging-text clauses; script prompt requires one colour-named outfit per cast member, cast_present people visible on screen, a readable unit or none; interior brand text no longer mentions a door (prompted exit poses) or lettered stickers; `noNewTextInstruction` says packaging/labels/bags are plain.
+- Not done by decision: vision QA retries, 1080p, smoke/steam guard. Image cap left at 2,995 (KIE nano-banana-2's real limit unverified; a third party lists 20,000).
+- ⭐ Next: D2 (encode bitrate headroom); run a real job to confirm.

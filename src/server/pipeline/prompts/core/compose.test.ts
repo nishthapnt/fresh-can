@@ -1272,3 +1272,121 @@ describe('composeSceneVideoPrompt entry/exit rule', () => {
     )
   })
 })
+
+describe('Track C: cast survives the length cap (real job 5d2dd9a2 scenes 2-3)', () => {
+  const family = [
+    {
+      id: 'mother',
+      role: 'mother',
+      age_range: 'late 30s',
+      appearance: 'Southeast Asian woman with medium brown skin, long straight black hair in a low ponytail, slim build',
+      wardrobe: 'cream knit sweater, dark-wash jeans, white sneakers',
+      distinguishing_details: 'small silver hoop earrings and a thin gold watch on the left wrist',
+    },
+    {
+      id: 'father',
+      role: 'father',
+      age_range: 'early 40s',
+      appearance: 'Black man with dark brown skin, short cropped hair, trimmed beard, athletic build',
+      wardrobe: 'grey crewneck sweater, black chinos, brown leather boots',
+      distinguishing_details: 'wire-rimmed round glasses and a small scar through the left eyebrow',
+    },
+    {
+      id: 'child',
+      role: 'child',
+      age_range: 'about 8',
+      appearance: 'Latino boy with light tan skin, short curly dark brown hair, small build',
+      wardrobe: 'tie-dye t-shirt in teal and orange, khaki cargo shorts, red sneakers',
+      distinguishing_details: 'gap in his front teeth',
+    },
+  ]
+  const visualDescription =
+    'Interior of the Fresh-CAN unit with the family browsing, shelves stocked with fresh produce and goods. ' +
+    'The mother reaches for bright red tomatoes while the child selects a sauce from a lower shelf.'
+  const job = {
+    pipelineId: 'p',
+    sceneNumber: 3,
+    visualDescription,
+    shotNotes: 'Over-the-shoulder close-up tracking shots alternating between the mother and child.',
+    characterRefUrl: 'https://example.com/ref.png',
+    unitPresence: 'featured' as const,
+    setting: 'interior' as const,
+    appPresence: 'background' as const,
+    containsFood: true,
+    cast: family,
+  }
+
+  it('keeps the whole scene description AND every cast member on a featured, 3-person scene', () => {
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, job)
+    expect(prompt).toContain(visualDescription)
+    expect(prompt).toContain('Recurring people')
+    for (const role of ['mother', 'father', 'child']) expect(prompt).toContain(`the ${role} (`)
+    expect(prompt.length).toBeLessThanOrEqual(2995)
+  })
+
+  it('shrinks the cast block (keeping look + outfit) before it ever cuts the description', () => {
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, shotNotes: null })
+    // Outfit colours are the thing that drifted between scenes — they must survive compaction.
+    expect(prompt).toContain('cream knit sweater')
+    expect(prompt).toContain('tie-dye t-shirt')
+  })
+
+  it('never emits a prompt over the cap, and never drops the cast outright just because a long description needs room', () => {
+    const long = 'The family moves slowly down the narrow aisle, comparing produce and reading nothing at all. '.repeat(8)
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, { ...job, visualDescription: long, shotNotes: null })
+    expect(prompt.length).toBeLessThanOrEqual(2995)
+    expect(prompt).toContain('Recurring people')
+  })
+})
+
+describe('Track C: scene video prompt', () => {
+  const unitJob = { visualDescription: 'The student pauses beside the unit.', shotNotes: 'Slow tracking shot.' }
+
+  it('locks the vehicle design only when the unit is in the reference frame', () => {
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'featured' })).toContain('never add a roof, awning, kiosk, or stall')
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'background' })).toContain('never add a roof, awning, kiosk, or stall')
+    expect(composeSceneVideoPrompt({ ...unitJob, unitPresence: 'none' })).not.toContain('kiosk')
+    expect(composeSceneVideoPrompt(unitJob)).not.toContain('kiosk')
+  })
+
+  it('asks for one continuous shot and no readable packaging text on every scene', () => {
+    for (const unitPresence of ['none', 'featured'] as const) {
+      const prompt = composeSceneVideoPrompt({ ...unitJob, unitPresence })
+      expect(prompt).toContain('One continuous single shot, never split-screen or a collage')
+      expect(prompt).toContain('Packaging, labels, and bags show no readable text')
+    }
+  })
+
+  it("keeps room for a typical (~220-char) description and camera notes in the worst case (final scene, unit, guard, look)", () => {
+    // Real clips lost their camera direction in 10 of 15 scenes when the fixed
+    // suffix alone was ~2500 chars of a 2450 cap (2026-10-08 audit).
+    const worst = {
+      visualDescription: 'x'.repeat(220),
+      shotNotes: 'y'.repeat(120),
+      unitPresence: 'featured' as const,
+      isFinalScene: true,
+      look: { lighting: 'bright and natural', time_of_day: 'late afternoon' },
+      sceneGuardVideoClause: sceneGuardVideoClause(BRAND_PROFILE, 'featured', 'none'),
+      appUiVideoClause: '',
+    }
+    const prompt = composeSceneVideoPrompt(worst)
+    expect(prompt.length).toBeLessThanOrEqual(2450)
+    expect(prompt).toContain(worst.visualDescription)
+    expect(prompt).toContain(worst.shotNotes)
+  })
+})
+
+describe('Track C: brand text no longer invites lettering or exits', () => {
+  it('tells the model packaging, labels and bags carry no lettering', () => {
+    expect(BRAND_PROFILE.noNewTextInstruction).toMatch(/packaging, labels, and shopping bags are plain or blank/)
+  })
+
+  it("keeps the vehicle's real wordmark carve-out", () => {
+    expect(BRAND_PROFILE.noNewTextInstruction).toContain("vehicle's real signage/logo")
+  })
+
+  it('does not describe a door in the interior (it prompted people to walk toward an exit)', () => {
+    expect(BRAND_PROFILE.unit.interior).not.toMatch(/plain white\s+door/)
+    expect(BRAND_PROFILE.unit.interior).not.toMatch(/sticker/i)
+  })
+})

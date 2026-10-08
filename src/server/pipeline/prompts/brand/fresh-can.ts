@@ -127,9 +127,9 @@ export const BRAND_PROFILE: BrandProfile = {
       'shelving units on one side of the aisle, stocked with bagged snacks and packaged groceries. ' +
       'Black-framed glass-door refrigerated cases on the other side, each topped with a deep maroon (#6B1A1A) header sign ' +
       'bearing a white "Fresh [maple leaf icon] CAN" wordmark, stocked with beverages and fresh salad ' +
-      'containers (some individually labeled with a small "Fresh CAN" sticker). A stainless steel prep ' +
-      'counter and sink — a fixed utility fitting, never a checkout or point-of-sale — near a plain white ' +
-      'door at the far end of the aisle.',
+      'containers (plain, unlettered). A stainless steel prep ' +
+      'counter and sink — a fixed utility fitting, never a checkout or point-of-sale — at the far end of the ' +
+      'aisle, with no door in view.',
 
     wordmarkText: 'Fresh CAN',
   },
@@ -161,7 +161,8 @@ export const BRAND_PROFILE: BrandProfile = {
 
   noNewTextInstruction:
     'Photorealistic. Keep the vehicle\'s real signage/logo exactly as shown in the reference photo, unaltered. ' +
-    'No other invented text, logo, or typography anywhere, on the vehicle or off it — pure photography only.',
+    'No other text, logo, or typography anywhere — packaging, labels, and shopping bags are plain or blank, ' +
+    'never lettered — pure photography only.',
 
   ctaBarText: 'Visit fresh-can.com',
 
@@ -178,14 +179,13 @@ export const BRAND_PROFILE: BrandProfile = {
   sceneGuard: {
     image: 'Self-serve store, not a market: no staff serving, no crates or produce outside.',
     video:
-      ' Fresh-CAN is self-serve and cashierless: never show staff serving, hand-overs of goods, crates or produce ' +
-      'stands outside, or a service window.',
+      ' Self-serve and cashierless: never show staff serving, hand-overs of goods, outdoor produce stands, or ' +
+      'a service window.',
   },
   appUi: {
     imageClause:
       'Any Fresh-CAN app phone screen is ONLY deep maroon (#6B1A1A) and white: white background, maroon header, ' +
-      'buttons and icons, QR code in maroon on white. No blue, green, black, gradient, dark mode, or other ' +
-      'app/map styling. Keep the UI simple, little readable text.',
+      'buttons and icons, maroon QR code on white. No other colors, gradients, or dark mode; little readable text.',
     videoClause:
       ' Any phone screen showing the Fresh-CAN app stays strictly maroon (#6B1A1A) and white in every frame — ' +
       'never any other UI color.',

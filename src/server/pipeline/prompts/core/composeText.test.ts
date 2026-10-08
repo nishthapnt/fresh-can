@@ -12,6 +12,7 @@ import {
   composeLocalizeScriptSystemPrompt,
   NO_ENTRY_EXIT_RULE,
   NO_ENTRY_EXIT_NARRATION_RULE,
+  SCENE_VISUAL_FIDELITY_RULE,
 } from './composeText'
 import type { BrandProfile, CreativeBrief } from '../types'
 
@@ -768,5 +769,21 @@ describe('narration no entry/exit rule', () => {
     expect(
       composeVideoScriptSystemPrompt(testBrand, { scriptType: 'x', targetDurationSeconds: 30 } as never),
     ).toContain(NO_ENTRY_EXIT_NARRATION_RULE)
+  })
+})
+
+describe('Track C script-planning rules', () => {
+  const prompt = () => composeVideoScriptSystemPrompt(testBrand, { scriptType: 'x', targetDurationSeconds: 30 } as never)
+
+  it('requires one fixed, colour-named outfit per cast member', () => {
+    expect(prompt()).toContain('ONE fixed outfit worn in every scene')
+    expect(prompt()).toContain('each garment with its exact color')
+  })
+
+  it('requires cast_present people to be visible, the unit to be readable, and packaging to be unlettered', () => {
+    expect(prompt()).toContain(SCENE_VISUAL_FIDELITY_RULE)
+    expect(SCENE_VISUAL_FIDELITY_RULE).toContain('never reduce them to hands or a first-person view')
+    expect(SCENE_VISUAL_FIDELITY_RULE).toContain('large enough for its side wordmark to read cleanly')
+    expect(SCENE_VISUAL_FIDELITY_RULE).toContain('no readable text')
   })
 })

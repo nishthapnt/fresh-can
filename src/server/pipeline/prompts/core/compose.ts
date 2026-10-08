@@ -422,9 +422,8 @@ function describeReferencePhoto(reference: BrandReferenceImage): string {
 // moment" style mandate it replaced (see this constant's own history
 // above), and compose.test.ts asserts on the anchor phrase directly.
 const SCENE_IS_CREATIVE_BRIEF =
-  'Brand details are constraints on correctness if they appear — never as the reason this scene exists, ' +
-  'and never as a directive about the overall photographic style, mood, or composition; the scene\'s own ' +
-  'style (documentary, editorial, posed, graphic, split-composition, or otherwise) governs.'
+  'Brand details are correctness constraints if they appear — never as the reason this scene exists, and ' +
+  'never as a directive about the overall photographic style, mood, or composition; the scene\'s own style governs.'
 
 // A grocery-access brand can never show food looking anything less than
 // fresh — added 2026-09-19 after generated photos of produce/groceries came
@@ -441,7 +440,7 @@ const SCENE_IS_CREATIVE_BRIEF =
 const FOOD_MUST_LOOK_CLEAN =
   'Any food, produce, or packaged groceries must look clean, fresh, tidy, and appetizing — no dirt, ' +
   'bruising, wilting, mold, spills, or clutter. Never render food looking dirty, rotten, messy, or ' +
-  'unappetizing, regardless of the scene.'
+  'unappetizing.'
 
 // The positive framing a blog scene with unitPresence: 'none' still needs —
 // distinct from unitBrandingBlock('none'), which only covers the negative
@@ -479,8 +478,8 @@ const GENERIC_DOCUMENTARY_HINT =
 const SCENE_CONTENTS_RULE =
   'Show only the people, objects, and setting this scene describes or clearly implies, in a physically ' +
   'plausible and safe setting (never, e.g., people eating in the middle of a road). Every visible hand ' +
-  'belongs to one of those people, with natural anatomy; skin looks real. Any reflection in glass, a window, ' +
-  'or a mirror shows exactly that same real person and setting — never an extra, duplicated, or ghostly figure.'
+  'belongs to one of those people, with natural anatomy; skin looks real. Reflections show only that same ' +
+  'real person and setting, never an extra or ghostly figure.'
 
 // A production-value quality floor, not a style dictate — the scene's own
 // description still decides mood/style/composition (SCENE_IS_CREATIVE_BRIEF).
@@ -810,20 +809,35 @@ export function sceneLookClause(look: VideoScriptLook | null | undefined): strin
 /** Locked physical descriptions for the people in this scene — see
  *  SceneImageJob.cast. Capped at 4 people; a scene with more named cast
  *  than that is already beyond what one image renders reliably. */
-function castClause(cast: readonly CastBibleEntry[] | undefined): string {
+type CastDetail = 'full' | 'compact' | 'minimal'
+
+function castClause(cast: readonly CastBibleEntry[] | undefined, detail: CastDetail = 'full'): string {
   if (!cast || cast.length === 0) return ''
-  const field = (v: string | undefined) => (v?.trim() ? truncateToFit(v.trim(), PLAN_FIELD_MAX_CHARS) : '')
+  const cap = detail === 'full' ? PLAN_FIELD_MAX_CHARS : detail === 'compact' ? 50 : 40
+  const field = (v: string | undefined) => (v?.trim() ? truncateToFit(v.trim(), cap) : '')
   const people = cast.slice(0, 4).map((c) => {
-    const details = [
-      field(c.age_range),
-      field(c.appearance),
-      c.wardrobe?.trim() ? `wearing ${field(c.wardrobe)}` : '',
-      field(c.distinguishing_details),
-    ].filter(Boolean)
+    // 'compact'/'minimal' keep identity (appearance) and outfit (wardrobe) —
+    // the two things that visibly drift between scenes — and shed the rest.
+    const details =
+      detail === 'full'
+        ? [
+            field(c.age_range),
+            field(c.appearance),
+            c.wardrobe?.trim() ? `wearing ${field(c.wardrobe)}` : '',
+            field(c.distinguishing_details),
+          ]
+        : detail === 'compact'
+          ? [field(c.age_range), field(c.appearance), c.wardrobe?.trim() ? `wearing ${field(c.wardrobe)}` : '']
+          : [field(c.appearance), c.wardrobe?.trim() ? `wearing ${field(c.wardrobe)}` : '']
+    const kept = details.filter(Boolean)
     const name = field(c.role) || c.id
-    return details.length > 0 ? `the ${name} (${details.join(', ')})` : `the ${name}`
+    return kept.length > 0 ? `the ${name} (${kept.join(', ')})` : `the ${name}`
   })
-  return `Recurring people — each one is the exact same real individual in every scene, never a different person who merely resembles the description: same face, hair, and clothing as every other scene: ${people.join('; ')}.`
+  const preface =
+    detail === 'full'
+      ? 'Recurring people — each one is the exact same real individual in every scene, never a different person who merely resembles the description: same face, hair, and clothing as every other scene: '
+      : 'Recurring people, each the exact same individual with the same face, hair and clothing in every scene: '
+  return `${preface}${people.join('; ')}.`
 }
 
 /**
@@ -904,7 +918,6 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
-    showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
     appClause,
     interiorRef ? interiorBlock(brand) : unitBrandingBlock(brand, unitPresence),
     showSubject ? REFERENCE_IS_GUIDE_NOT_COPY : '',
@@ -927,6 +940,10 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
   let regenInstructions = job.regenInstructions ?? ''
   let cast = castClause(job.cast)
   let continuityClause = continuityClauseFrom(job.previousVisualState)
+  // Generic meta-guidance (brand details are constraints, not the point):
+  // useful, but never worth cutting the scene's own words for — it yields
+  // right after the guard clause (Track C, 2026-10-08).
+  let creativeBrief = showSubject ? SCENE_IS_CREATIVE_BRIEF : ''
 
   const totalLen = () =>
     fixedLen +
@@ -936,7 +953,8 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     (cast ? 1 + cast.length : 0) +
     (regenInstructions ? 1 + `${regenInstructions}.`.length : 0) +
     (continuityClause ? 1 + continuityClause.length : 0) +
-    (guardClause ? 1 + guardClause.length : 0)
+    (guardClause ? 1 + guardClause.length : 0) +
+    (creativeBrief ? 1 + creativeBrief.length : 0)
 
   let overflow = totalLen() - PROMPT_LIMITS.sceneImage
   if (overflow > 0 && continuityClause) {
@@ -954,8 +972,27 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     guardClause = ''
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
+  if (overflow > 0 && creativeBrief) {
+    creativeBrief = ''
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
   if (overflow > 0 && shotNotes) {
     shotNotes = truncateToFit(shotNotes, shotNotes.length - overflow)
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
+  // Shrink the cast block in steps BEFORE the description is touched: a
+  // 3-person family's full cast text alone is ~600 chars, and real job
+  // 5d2dd9a2's featured scenes 2-3 overflowed by more than the whole scene
+  // description — the cascade below then cut the description to nothing AND
+  // dropped the cast, so the stills showed the wrong people (scene 2) and
+  // only a disembodied arm (scene 3). Compact/minimal keep each person's
+  // look and outfit, the two things that drift between scenes.
+  if (overflow > 0 && cast) {
+    cast = castClause(job.cast, 'compact')
+    overflow = totalLen() - PROMPT_LIMITS.sceneImage
+  }
+  if (overflow > 0 && cast) {
+    cast = castClause(job.cast, 'minimal')
     overflow = totalLen() - PROMPT_LIMITS.sceneImage
   }
   // cast is the ONLY thing anchoring a recurring person's face across
@@ -993,7 +1030,7 @@ export function composeSceneImagePrompt(brand: BrandProfile, job: SceneImageJob)
     containsFood ? FOOD_MUST_LOOK_CLEAN : '',
     SCENE_CONTENTS_RULE,
     PHOTOREALISTIC_QUALITY_FLOOR,
-    showSubject ? SCENE_IS_CREATIVE_BRIEF : '',
+    creativeBrief,
     appClause,
   ]
 
@@ -1154,16 +1191,15 @@ interface SceneVideoJob {
  *  this fix — this clause is the soft, model-compliance half. */
 
 const FINAL_SCENE_SETTLE_CLAUSE =
-  ' This is the FINAL shot of the video — ease subject and camera motion into a settled, held final beat by ' +
-  'the end of the shot rather than staying in active movement right up to the cut; the last moment on screen ' +
-  'should already read as an ending, not get cut off mid-motion.'
+  ' This is the FINAL shot — ease subject and camera motion into a settled, held final beat so the ending ' +
+  'does not get cut off mid-motion.'
 
 function lookHoldClause(look: VideoScriptLook | null | undefined): string {
   const bits = [look?.lighting, look?.time_of_day]
     .map((v) => (v?.trim() ? truncateToFit(v.trim(), PLAN_FIELD_MAX_CHARS) : ''))
     .filter(Boolean)
   if (bits.length === 0) return ''
-  return ` Keep the frame's ${bits.join(', ')} lighting and color steady for the whole shot — no lighting shifts.`
+  return ` Keep the frame's ${bits.join(', ')} lighting and color steady for the whole shot.`
 }
 
 // Frame-to-frame stability guard, added 2026-09-24 alongside the video-concat
@@ -1186,26 +1222,38 @@ const TEMPORAL_CONSISTENCY_CLAUSE =
   ' Keep textures, packaging details, and lighting stable and flicker-free across every frame, with natural, ' +
   'non-warped motion blur.'
 
+// Added 2026-10-08 (Track C): one continuous shot and no readable
+// packaging text. Real renders produced a three-panel collage final scene
+// (job 8b682bc9) and gibberish lettering on labels and bags once Seedance
+// animated them (jobs e4a83ec0, 5d2dd9a2) — video diffusion cannot hold
+// small text, so packaging is told to carry none. The unit's own wordmark is
+// exempt via WORDMARK_LEGIBILITY_CLAUSE.
+const SINGLE_SHOT_NO_PACKAGING_TEXT_CLAUSE =
+  ' One continuous single shot, never split-screen or a collage. Packaging, labels, and bags show no readable text.'
+
+// Added 2026-10-08 (Track C): the clip prompt said nothing about the unit's
+// design, so Seedance redesigned it mid-clip (job 790b8771 scene 3: the box
+// truck became a roofed kiosk, and the wordmark garbled with it). Only for
+// scenes whose reference frame actually contains the unit.
+const UNIT_DESIGN_LOCK_CLAUSE =
+  ' Keep the vehicle exactly as in the reference frame; never add a roof, awning, kiosk, or stall.'
+
 // A photographic/rendering quality floor for the 720p Seedance deliverable,
 // same posture as composeSceneImagePrompt's own PHOTOREALISTIC_QUALITY_FLOOR
-// (~line 433) — never a camera-movement or composition dictate (that stays owned
+// — never a camera-movement or composition dictate (that stays owned
 // entirely by the motion-layers paragraph below and each scene's own
-// shot_notes/visualDescription), so it can't make every scene move or look
-// staged the same way. Reusable across every scene regardless of its
-// blocking, camera move, or mood.
+// shot_notes/visualDescription). Compressed 2026-10-08 to pay for the Track C
+// clauses above inside the 2450-char cap.
 const VIDEO_VISUAL_QUALITY_STYLE =
-  ' Rendered as premium, photorealistic cinematic smartphone footage: natural color science, subtle ' +
-  'refined grading, high dynamic range with clean highlights and shadows, crisp realistic detail and ' +
-  'textures, natural skin and lighting, natural motion blur — polished commercial quality, never ' +
-  'oversaturated, over-sharpened, or CGI-looking.'
+  ' Rendered as premium, photorealistic cinematic smartphone footage: natural color, crisp realistic detail, ' +
+  'natural skin, lighting and motion blur — polished commercial quality, never oversaturated, over-sharpened, ' +
+  'or CGI-looking.'
 
 // Added 2026-09-26 after a real Seedance render showed a background pedestrian
 // floating, detached from the ground, in an otherwise ordinary street shot.
 // Closed with a short, explicit textual rule the model checks itself against
 // (no new plan field, no new LLM call, no extra provider spend).
-const NO_PHANTOM_EFFECTS_CLAUSE =
-  ' Add no extra people or figures anywhere in frame beyond who the reference frame ' +
-  'shows; every person and object stays grounded, never floating or detached.'
+const NO_PHANTOM_EFFECTS_CLAUSE = ' Everyone and everything stays grounded, never floating or detached.'
 
 // Short on purpose: sceneVideo's 2450-char cap truncates visualDescription first.
 const NO_ENTRY_EXIT_CLIP_CLAUSE =
@@ -1223,29 +1271,29 @@ const NO_ENTRY_EXIT_CLIP_CLAUSE =
 // with no branded unit in its reference frame has no wordmark for this
 // clause to protect, so it costs those scenes nothing.
 const WORDMARK_LEGIBILITY_CLAUSE =
-  ' Keep the visible brand wordmark pixel-accurate and legible in every frame — identical letters and layout, ' +
-  'never distorted, mirrored, or reinterpreted.'
+  ' Keep the brand wordmark identical, legible, and undistorted in every frame.'
 
 export function composeSceneVideoPrompt(job: SceneVideoJob): string {
   const appClause = (job.appUiVideoClause ?? '') + (job.sceneGuardVideoClause ?? '')
+  const hasUnit = !!job.unitPresence && job.unitPresence !== 'none'
   const suffix =
     " Animate this as three distinct layers: the subject's own action described above; any natural ambient " +
     'motion already implied by the setting — wind moving hair, fabric, or leaves, water, ' +
-    'shifting light — so the environment never freezes into a still backdrop, but never motion with no real ' +
+    'shifting light — but never motion with no real ' +
     'cause: produce, packaged goods, and other solid objects at rest must stay completely still unless a ' +
     'visible hand, wind, or other real force is actually moving them; and camera motion as a separate layer ' +
     'on top of those two — follow whatever camera direction is given above (pans, tilts, tracking, slow ' +
     'dolly, rack focus) with smooth, real-camera motion. Camera movement is never a substitute for actual ' +
     'subject or environmental motion. Never a jump cut, and never a staged product-reveal move like a slow ' +
-    'orbit or a dramatic hero push-in around the subject. The approved reference frame is the visual source ' +
-    'of truth — preserve every established person, limb, and object exactly as shown in it; never introduce ' +
-    'a new person, limb, or object that was not already in that frame.' +
+    'orbit or a dramatic hero push-in around the subject. The reference frame is the source of truth — ' +
+    'preserve every person, limb, and object exactly as shown and add nothing new.' +
     NO_PHANTOM_EFFECTS_CLAUSE +
     NO_ENTRY_EXIT_CLIP_CLAUSE +
+    SINGLE_SHOT_NO_PACKAGING_TEXT_CLAUSE +
     TEMPORAL_CONSISTENCY_CLAUSE +
     VIDEO_VISUAL_QUALITY_STYLE +
     lookHoldClause(job.look) +
-    (job.unitPresence && job.unitPresence !== 'none' ? WORDMARK_LEGIBILITY_CLAUSE : '') +
+    (hasUnit ? UNIT_DESIGN_LOCK_CLAUSE + WORDMARK_LEGIBILITY_CLAUSE : '') +
     appClause +
     (job.isFinalScene ? FINAL_SCENE_SETTLE_CLAUSE : '')
 
