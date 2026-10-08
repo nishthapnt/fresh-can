@@ -235,6 +235,49 @@ export async function rewriteNarrationToWordCount(
   }
 }
 
+// Closed-loop speed fit (2026-10-08). Word-count budgeting alone cannot hit a
+// scene's slot: the same voice speaks 2.4-3.6 words/sec depending on the
+// text (real jobs: 790b8771 ran 2.4-2.7, 65b08e09 ran 2.9-3.6), so scenes
+// land 15-30% either side of their slot and the video's length drifts the
+// same way (44.2s and then 31.1s for a 36s request). After a scene's real
+// duration is MEASURED, ElevenLabs' voice speed (0.7-1.2) is the one knob
+// that moves it without touching the wording: a short scene is re-spoken
+// slower, a moderately long one faster.
+//
+// Bounded to a natural-sounding range, not the API's full one: below 0.8
+// narration drags, above ~1.12 it sounds rushed.
+const SPEED_MIN = 0.8
+const SPEED_MAX = 1.12
+// A scene under this fraction of its slot is slowed down to fill it.
+const UNDERSHOOT_THRESHOLD = 0.9
+// Aim a hair under the slot so measurement noise cannot tip it back over.
+const SPEED_AIM_FILL = 0.98
+// A speed change smaller than this is not worth a resynthesis + retranscription.
+const SPEED_MIN_CHANGE = 0.04
+// Overshoot up to this ratio is fixed by speed alone (wording untouched);
+// beyond it the narration genuinely has too many words (cut / rewrite).
+const SPEED_ONLY_OVERSHOOT_MAX = 1.15
+
+/** The voice speed that would bring a scene's measured duration onto its
+ *  slot, or null when it is already close enough (or no bounded speed helps).
+ *  `tolerance` is the same overshoot tolerance computeNarrationCorrection uses
+ *  (tightened once the whole video is running over). */
+export function computeSpeedFit(
+  realDurationMs: number,
+  targetDurationMs: number,
+  tolerance: number = OVERSHOOT_HARD_TOLERANCE,
+): number | null {
+  if (!(realDurationMs > 0) || !(targetDurationMs > 0)) return null
+  const ratio = realDurationMs / targetDurationMs
+  const wanted = realDurationMs / (targetDurationMs * SPEED_AIM_FILL)
+  let speed: number
+  if (ratio < UNDERSHOOT_THRESHOLD) speed = Math.max(SPEED_MIN, wanted)
+  else if (ratio > tolerance) speed = Math.min(SPEED_MAX, wanted)
+  else return null
+  speed = Math.round(speed * 100) / 100
+  return Math.abs(speed - 1) < SPEED_MIN_CHANGE ? null : speed
+}
+
 // Cancellation check (2026-09-22, P0 fix) — see isPipelineFailed's header
 // (db.ts, isTrackFailed is its track-scoped twin) and generateSceneVisual
 // .ts's own pollUntilDone for the full reasoning; not duplicated here.
@@ -421,7 +464,69 @@ export async function runTranscribeAudio(
         const runningOvershoot = cumulativeTargetMs > 0 ? cumulativeOffsetMs / cumulativeTargetMs : 1
         const tolerance =
           runningOvershoot > OVERSHOOT_RUNNING_TOTAL_THRESHOLD ? OVERSHOOT_TIGHT_TOLERANCE : OVERSHOOT_HARD_TOLERANCE
-        const decision = computeNarrationCorrection(realDurationMs, scene.target_duration_ms, audio.narration_text, tolerance)
+        const voiceId = correction.voiceId ?? BRAND_PROFILE.videoVoiceIds?.[track.language]
+
+        // Re-synthesizes `text` (at `speed`, if given), uploads it, and
+        // re-transcribes it. Returns the new measurement, null when it did not
+        // complete (the caller keeps what it had — never fails the track), or
+        // 'cancelled'.
+        const resynthesize = async (
+          text: string,
+          pathTag: string,
+          speed?: number,
+        ): Promise<{ words: WordTiming[]; durationMs: number; fileUrl: string } | null | 'cancelled'> => {
+          try {
+            if (!voiceId) throw new Error('no voice id available for the narration retry')
+            const synthResult = await correction.voiceSynthesizer.synthesize({
+              text,
+              voiceId,
+              ...(speed !== undefined ? { speed } : {}),
+            })
+            // A DISTINCT path from synthesizeVoice.ts's own upload (not the
+            // same `scene-N-audio.mp3` re-uploaded with upsert) — confirmed
+            // live (2026-09-26) that reusing the same path made AssemblyAI's
+            // fetch of this "corrected" audio come back at nearly the same
+            // duration as the ORIGINAL narration, not the real corrected one:
+            // same class of stale-cached-URL issue this repo already hit once
+            // for the final rendered video (see mediaUrl.ts's cache-busting
+            // commit) — a same-path overwrite can serve a cached copy of the
+            // old bytes to an external fetcher even though Storage itself has
+            // the new ones. A new path is a guaranteed cache miss, not a
+            // heuristic fix.
+            // `fit-<speed*100>` in the name is READ BACK by db.getMeasuredWordsPerSecond
+            // to undo the speed change when calibrating a voice's natural pace.
+            const path = `${correction.jobId}/${track.language}/scene-${scene.scene_number}-audio-${pathTag}.mp3`
+            const newFileUrl = await correction.uploader.uploadBuffer(path, synthResult.audioBuffer, 'audio/mpeg')
+            const retryJobRef = await transcriptionService.submit({ audioUrl: newFileUrl })
+            const retryOutcome = await pollUntilDone(client, track.id, transcriptionService, retryJobRef)
+            if ('cancelled' in retryOutcome) return 'cancelled'
+            if (!('words' in retryOutcome)) {
+              const detail = 'failed' in retryOutcome ? retryOutcome.detail : 'AssemblyAI poll timed out'
+              console.log(
+                `[transcribe_captions] scene ${scene.scene_number}: ${pathTag} retry did not complete (${detail}) — keeping the previous narration audio`,
+              )
+              return null
+            }
+            const last = retryOutcome.words[retryOutcome.words.length - 1]
+            return {
+              words: retryOutcome.words,
+              durationMs: last !== undefined ? last.end + TRAILING_SILENCE_BUFFER_MS : (retryOutcome.audioDurationMs ?? 0),
+              fileUrl: newFileUrl,
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            console.log(
+              `[transcribe_captions] scene ${scene.scene_number}: ${pathTag} attempt failed (${message}) — keeping the previous narration audio`,
+            )
+            return null
+          }
+        }
+
+        // 1. Wording fix, only for an overshoot too large for speed alone.
+        const decision =
+          realDurationMs / scene.target_duration_ms > SPEED_ONLY_OVERSHOOT_MAX
+            ? computeNarrationCorrection(realDurationMs, scene.target_duration_ms, audio.narration_text, tolerance)
+            : null
         let fix: { shortenedText: string } | null = null
         if (decision?.kind === 'cut') {
           fix = { shortenedText: decision.shortenedText }
@@ -437,58 +542,49 @@ export async function runTranscribeAudio(
           if (rewritten) fix = { shortenedText: rewritten }
         }
         if (fix) {
-          try {
-            const voiceId = correction.voiceId ?? BRAND_PROFILE.videoVoiceIds?.[track.language]
-            if (!voiceId) throw new Error('no voice id available for narration-correction retry')
-            const synthResult = await correction.voiceSynthesizer.synthesize({ text: fix.shortenedText, voiceId })
-            // A DISTINCT path from synthesizeVoice.ts's own upload (not the
-            // same `scene-N-audio.mp3` re-uploaded with upsert) — confirmed
-            // live (2026-09-26) that reusing the same path made AssemblyAI's
-            // fetch of this "corrected" audio come back at nearly the same
-            // duration as the ORIGINAL over-budget narration, not the real
-            // (much shorter) corrected one: same class of stale-cached-URL
-            // issue this repo already hit once for the final rendered video
-            // (see mediaUrl.ts's cache-busting commit) — a same-path
-            // overwrite can serve a cached copy of the old bytes to an
-            // external fetcher even though Storage itself has the new ones.
-            // A new path is a guaranteed cache miss, not a heuristic fix.
-            const path = `${correction.jobId}/${track.language}/scene-${scene.scene_number}-audio-corrected.mp3`
-            const newFileUrl = await correction.uploader.uploadBuffer(path, synthResult.audioBuffer, 'audio/mpeg')
-            const retryJobRef = await transcriptionService.submit({ audioUrl: newFileUrl })
-            const retryOutcome = await pollUntilDone(client, track.id, transcriptionService, retryJobRef)
-
-            if ('cancelled' in retryOutcome) {
-              console.log(
-                `[transcribe_captions] cancelled during narration-correction retry at scene ${scene.scene_number} — stopping, not recording a failure`,
-              )
-              return { ran: true }
-            }
-            if ('words' in retryOutcome) {
-              words = retryOutcome.words
-              lastWord = words[words.length - 1]
-              realDurationMs =
-                lastWord !== undefined
-                  ? lastWord.end + TRAILING_SILENCE_BUFFER_MS
-                  : (retryOutcome.audioDurationMs ?? realDurationMs)
-              correctedNarrationText = fix.shortenedText
-              correctedFileUrl = newFileUrl
-              console.log(
-                `[transcribe_captions] scene ${scene.scene_number}: narration overshot its ` +
-                  `${scene.target_duration_ms}ms budget — resynthesized shorter, now ${realDurationMs}ms`,
-              )
-            } else {
-              const detail = 'failed' in retryOutcome ? retryOutcome.detail : 'AssemblyAI poll timed out'
-              console.log(
-                `[transcribe_captions] scene ${scene.scene_number}: narration-correction retry did not complete ` +
-                  `(${detail}) — keeping the original over-budget narration`,
-              )
-            }
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err)
+          const result = await resynthesize(fix.shortenedText, 'corrected')
+          if (result === 'cancelled') {
             console.log(
-              `[transcribe_captions] scene ${scene.scene_number}: narration-correction attempt failed (${message}) ` +
-                `— keeping the original over-budget narration`,
+              `[transcribe_captions] cancelled during narration-correction retry at scene ${scene.scene_number} — stopping, not recording a failure`,
             )
+            return { ran: true }
+          }
+          if (result) {
+            words = result.words
+            realDurationMs = result.durationMs
+            correctedNarrationText = fix.shortenedText
+            correctedFileUrl = result.fileUrl
+            console.log(
+              `[transcribe_captions] scene ${scene.scene_number}: narration overshot its ` +
+                `${scene.target_duration_ms}ms budget — resynthesized shorter, now ${realDurationMs}ms`,
+            )
+          }
+        }
+
+        // 2. Speed fit on whatever the scene measures now: slows a short scene,
+        // speeds up a moderately long one. Kept only if it lands closer.
+        const speed = computeSpeedFit(realDurationMs, scene.target_duration_ms, tolerance)
+        const speedText = correctedNarrationText ?? audio.narration_text
+        if (speed !== null && speedText) {
+          const result = await resynthesize(speedText, `fit-${Math.round(speed * 100)}`, speed)
+          if (result === 'cancelled') {
+            console.log(
+              `[transcribe_captions] cancelled during narration speed fit at scene ${scene.scene_number} — stopping, not recording a failure`,
+            )
+            return { ran: true }
+          }
+          if (
+            result &&
+            result.durationMs > 0 &&
+            Math.abs(result.durationMs - scene.target_duration_ms) < Math.abs(realDurationMs - scene.target_duration_ms)
+          ) {
+            console.log(
+              `[transcribe_captions] scene ${scene.scene_number}: speed ${speed} moved narration ${realDurationMs}ms -> ` +
+                `${result.durationMs}ms (slot ${scene.target_duration_ms}ms)`,
+            )
+            words = result.words
+            realDurationMs = result.durationMs
+            correctedFileUrl = result.fileUrl
           }
         }
       }

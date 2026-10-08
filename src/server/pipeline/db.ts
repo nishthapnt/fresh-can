@@ -986,16 +986,43 @@ export async function getVideoSceneAudioRows(
 /** Minimum number of measured scenes before a voice's own rate is trusted
  *  over the fleet-wide fallback — a single short job is too noisy. */
 const MIN_RATE_SAMPLE_SCENES = 6
+/** Most recent scenes sampled — recent enough to track a voice/model change. */
+const RATE_SAMPLE_SCENES = 60
+/** How many of the voice's recent jobs to look through for real audio. */
+const RATE_SAMPLE_JOBS = 40
+
+/** Test fixtures (the e2e suites write real "E2E … DELETE ME" rows) must never
+ *  count as calibration data: at the time of real job 65b08e09 the voice's 10
+ *  most recent jobs were all such rows with no audio at all, so the calibration
+ *  silently fell back to the default. */
+export function isTestJobTopic(topic: string | null | undefined): boolean {
+  return /\bE2E\b|DELETE ME/i.test(topic ?? '')
+}
+
+/** The speed an audio file was spoken at, read back from its name
+ *  (transcribeAudio.ts writes `scene-N-audio-fit-<speed*100>.mp3`); 1 when it
+ *  was spoken at the voice's natural pace. */
+export function speedFromAudioUrl(fileUrl: string | null | undefined): number {
+  const match = /-audio-fit-(\d{2,3})\.mp3/.exec(fileUrl ?? '')
+  const speed = match ? Number(match[1]) / 100 : 1
+  return speed > 0.5 && speed < 1.5 ? speed : 1
+}
 
 /**
- * The words-per-second a given ElevenLabs voice has actually spoken at in
- * past jobs (total narration words / total measured audio duration, over
- * its most recent finished scenes), or null when there isn't enough history.
- * Real narration speed varies per voice (2.4-2.9 wps across recent jobs), so
- * budgeting every voice at one fixed rate is what made finished videos land
- * 20% over their requested length. Best-effort: any query error returns
- * null (the caller falls back to the default rate) rather than failing the
- * track.
+ * The words-per-second a given ElevenLabs voice speaks at NATURALLY, from past
+ * jobs (total narration words / total measured audio duration over its most
+ * recent real scenes), or null when there isn't enough history. Real narration
+ * speed varies per voice (2.4-3.6 wps across recent jobs), so budgeting every
+ * voice at one fixed rate made finished videos land 20% over — and then 14%
+ * under — their requested length.
+ *
+ *  - Test jobs are excluded (see isTestJobTopic).
+ *  - A scene re-spoken at a different speed has its duration converted back to
+ *    natural pace (duration x speed), so the closed-loop speed fit does not
+ *    bias the estimate toward scenes that happened to land in tolerance.
+ *
+ * Best-effort: any query error returns null (the caller falls back to the
+ * default rate) rather than failing the track.
  */
 export async function getMeasuredWordsPerSecond(
   client: SupabaseClient,
@@ -1006,17 +1033,25 @@ export async function getMeasuredWordsPerSecond(
     const voiceColumn = language === 'FR' ? 'voice_id_fr' : 'voice_id_en'
     const { data: jobs, error: jobsError } = await client
       .from('content_jobs')
-      .select('id')
+      .select('id, topic')
       .eq(voiceColumn, voiceId)
+      // Filtered in the query, not just below: the e2e suites create dozens of
+      // rows, enough to fill a fixed-size window before any real job is reached.
+      .not('topic', 'ilike', '%DELETE ME%')
+      .not('topic', 'ilike', '%E2E%')
       .order('created_at', { ascending: false })
-      .limit(10)
-    if (jobsError || !jobs || jobs.length === 0) return null
+      .limit(RATE_SAMPLE_JOBS)
+    if (jobsError || !jobs) return null
+    const realJobIds = (jobs as { id: string; topic: string | null }[])
+      .filter((j) => !isTestJobTopic(j.topic))
+      .map((j) => j.id)
+    if (realJobIds.length === 0) return null
 
     const { data: pipelines, error: pipelinesError } = await client
       .from('content_pipelines')
       .select('id')
       .eq('content_type', 'video')
-      .in('job_id', jobs.map((j: { id: string }) => j.id))
+      .in('job_id', realJobIds)
     if (pipelinesError || !pipelines || pipelines.length === 0) return null
 
     const { data: tracks, error: tracksError } = await client
@@ -1028,20 +1063,23 @@ export async function getMeasuredWordsPerSecond(
 
     const { data: rows, error: rowsError } = await client
       .from('video_scene_audio')
-      .select('narration_text, duration_ms')
+      .select('narration_text, duration_ms, file_url')
       .eq('status', 'ready')
       .not('duration_ms', 'is', null)
       .in('content_language_track_id', tracks.map((t: { id: string }) => t.id))
+      .order('created_at', { ascending: false })
+      .limit(RATE_SAMPLE_SCENES)
     if (rowsError || !rows) return null
 
     let words = 0
     let seconds = 0
     let scenes = 0
-    for (const row of rows as { narration_text: string | null; duration_ms: number | null }[]) {
+    for (const row of rows as { narration_text: string | null; duration_ms: number | null; file_url: string | null }[]) {
       const count = (row.narration_text ?? '').trim().split(/\s+/).filter(Boolean).length
       if (count === 0 || !row.duration_ms || row.duration_ms <= 0) continue
       words += count
-      seconds += row.duration_ms / 1000
+      // At speed s the audio is ~1/s as long as natural, so natural = duration x s.
+      seconds += (row.duration_ms / 1000) * speedFromAudioUrl(row.file_url)
       scenes += 1
     }
     if (scenes < MIN_RATE_SAMPLE_SCENES || seconds <= 0) return null

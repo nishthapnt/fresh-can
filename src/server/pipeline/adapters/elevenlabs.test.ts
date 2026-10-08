@@ -62,3 +62,28 @@ describe('ElevenLabsVoiceSynthesizer', () => {
     expect(result.providerRef).toMatch(/^elevenlabs-\d+$/)
   })
 })
+
+describe('ElevenLabsVoiceSynthesizer speed', () => {
+  const bodyOf = async (input: { speed?: number }) => {
+    let body: Record<string, unknown> = {}
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => new Uint8Array([1]).buffer, text: async () => '' }
+    }) as unknown as typeof fetch
+    await new ElevenLabsVoiceSynthesizer('k', fetchImpl).synthesize({ text: 'hi', voiceId: 'v', ...input })
+    return body
+  }
+
+  it('sends no voice_settings at all when no speed is asked for, so ordinary calls are unchanged', async () => {
+    expect(await bodyOf({})).toEqual({ text: 'hi', model_id: 'eleven_multilingual_v2' })
+  })
+
+  it('sends the speed in voice_settings', async () => {
+    expect((await bodyOf({ speed: 0.85 })).voice_settings).toEqual({ speed: 0.85 })
+  })
+
+  it("clamps the speed to ElevenLabs' 0.7-1.2 range", async () => {
+    expect((await bodyOf({ speed: 0.3 })).voice_settings).toEqual({ speed: 0.7 })
+    expect((await bodyOf({ speed: 2 })).voice_settings).toEqual({ speed: 1.2 })
+  })
+})

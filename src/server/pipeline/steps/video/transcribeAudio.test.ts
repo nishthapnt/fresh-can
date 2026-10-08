@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { computeNarrationCorrection, rewriteNarrationToWordCount, type NarrationCorrection } from './transcribeAudio'
+import {
+  computeNarrationCorrection,
+  computeSpeedFit,
+  rewriteNarrationToWordCount,
+  type NarrationCorrection,
+} from './transcribeAudio'
 import type { ScriptGenerator } from '../../adapters/types'
 
 /** Narrows a correction to the clean-cut variant and returns its text. */
@@ -166,5 +171,50 @@ describe('rewriteNarrationToWordCount', () => {
 
   it('returns null instead of throwing when the model call fails', async () => {
     expect(await rewriteNarrationToWordCount(generatorReturning('x', true), base)).toBeNull()
+  })
+})
+
+describe('computeSpeedFit (closed-loop narration speed)', () => {
+  it('slows a scene that came in short, by the ratio needed to fill ~98% of its slot', () => {
+    // 5.45s in an 8s slot (job 65b08e09 scene 4): would need 0.70 -> floored at 0.8.
+    expect(computeSpeedFit(5_452, 8_000)).toBe(0.8)
+    // 4.43s in a 5s slot (88.6%): wanted 4.43/(5*0.98) = 0.90.
+    expect(computeSpeedFit(4_428, 5_000)).toBe(0.9)
+  })
+
+  it('speeds up a moderately long scene, capped at 1.12', () => {
+    // 11s in a 10s slot -> wanted 1.122 -> 1.12.
+    expect(computeSpeedFit(11_000, 10_000)).toBe(1.12)
+    // 10.9s in a 10s slot -> 1.11.
+    expect(computeSpeedFit(10_900, 10_000)).toBe(1.11)
+  })
+
+  it('leaves a scene alone when it is already within tolerance either way', () => {
+    expect(computeSpeedFit(10_000, 10_000)).toBeNull()
+    expect(computeSpeedFit(9_300, 10_000)).toBeNull() // 93%: above the 90% undershoot line
+    expect(computeSpeedFit(10_700, 10_000)).toBeNull() // 1.07x: within the 1.08 tolerance
+  })
+
+  it('ignores a change too small to be worth a resynthesis', () => {
+    // 8.9s in 10s is under 90% but the wanted speed (0.908) is a 9% change — fine; 9.0 is not under.
+    expect(computeSpeedFit(9_050, 10_000)).toBeNull()
+  })
+
+  it('honours the tightened tolerance once the whole video is running over', () => {
+    expect(computeSpeedFit(10_400, 10_000)).toBeNull()
+    expect(computeSpeedFit(10_400, 10_000, 1.02)).toBe(1.06)
+  })
+
+  it('never returns an out-of-range speed and returns null for unusable input', () => {
+    for (const real of [1_000, 3_000, 5_000, 12_000, 20_000, 60_000]) {
+      const speed = computeSpeedFit(real, 10_000)
+      if (speed !== null) {
+        expect(speed).toBeGreaterThanOrEqual(0.8)
+        expect(speed).toBeLessThanOrEqual(1.12)
+      }
+    }
+    expect(computeSpeedFit(0, 10_000)).toBeNull()
+    expect(computeSpeedFit(5_000, 0)).toBeNull()
+    expect(computeSpeedFit(Number.NaN, 10_000)).toBeNull()
   })
 })

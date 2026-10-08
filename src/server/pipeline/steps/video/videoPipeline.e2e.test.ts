@@ -9,6 +9,11 @@
 // That's the specific defect (character-ref/scene-visual generation living
 // inside n8n's per-language loop) this whole migration exists to fix.
 import { describe, it, expect, beforeAll, afterEach, afterAll, vi } from 'vitest'
+
+// The scene-image step fetches each generated still to check it is not a
+// stacked-panel collage. This suite's stills are fake example.com URLs, so
+// hitting the network for them only adds latency (and flaky timeouts).
+vi.mock('../../lib/panelDetect', () => ({ isStackedPanelCollageUrl: vi.fn(async () => false) }))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient, upsertVisualAsset, type PipelineRow, type TrackRow } from '../../db'
 import { runGenerateScript, type VideoScriptJobInput } from './generateScript'
@@ -1149,8 +1154,12 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     })
 
     expect(rewriteGen.generate).toHaveBeenCalledTimes(1) // scene 1 only
-    expect(submit).toHaveBeenCalledTimes(3) // scene 1 original + scene 1 retry + scene 2 original
-    expect(voice.synthesize).toHaveBeenCalledTimes(3) // +1 correction retry for scene 1 only
+    // Scene 1: original + wording retry. Scene 2 (9s in an 11s slot = 82%) is also
+    // short enough to be re-spoken slower by the speed fit; this mock's poll
+    // returns the same 9s for that retry, which is not closer to the slot, so it
+    // is rejected and scene 2 keeps its original audio (and its wording).
+    expect(submit).toHaveBeenCalledTimes(4)
+    expect(voice.synthesize).toHaveBeenCalledTimes(4) // +1 wording retry (scene 1) +1 speed-fit attempt (scene 2)
 
     const { data: finalTrack } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
     expect(finalTrack.status).toBe('awaiting_shared')
@@ -1177,6 +1186,79 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
     // budget instead — total should be close to budget, not 1.3x over it.
     expect(totalRealDurationMs).toBeLessThan(20_000 * 1.15)
     expect(scene1Audio?.duration_ms).toBeLessThan(17_000)
+  })
+
+  it('M3: a short scene is re-spoken slower and a moderately long one faster, instead of letting the video drift off its requested length', async () => {
+    const { jobId, pipeline } = await makeJobAndPipeline('EN')
+    const scriptGen = makeLocalizeAwareScriptGenerator()
+    await runGenerateScript(client, pipeline, scriptInput, scriptGen)
+    const { data: draftReady } = await client.from('content_pipelines').select('*').eq('id', pipeline.id).single()
+    const approved = await approve(draftReady as PipelineRow, ['EN'])
+    const { data: tracks } = await client.from('content_language_tracks').select('*').eq('content_pipeline_id', pipeline.id)
+    const track = tracks![0] as TrackRow
+
+    await runLocalizeScript(client, track, approved.id, scriptGen)
+    const { data: afterLocalize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+
+    const voice = makeMockVoiceSynthesizer()
+    const uploader = makeFakeVideoUploader()
+    await runSynthesizeVoice(client, afterLocalize as TrackRow, approved.id, jobId, voice, uploader)
+    const { data: afterSynthesize } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+
+    // The planned slots are whatever generate_script's exact-total fit produced,
+    // so read them rather than assuming. Scene 1 measures 65% of its slot (far too
+    // short -> slowed, floored at speed 0.8) and re-measures ~87%; scene 2 measures
+    // 110% (over the 1.08 tolerance but within the speed-only range -> sped up to
+    // the 1.12 cap, wording untouched) and re-measures ~99%.
+    const { data: plannedScenes } = await client
+      .from('video_scenes')
+      .select('target_duration_ms')
+      .eq('content_pipeline_id', approved.id)
+      .order('scene_number', { ascending: true })
+    const [t1, t2] = plannedScenes!.map((r) => r.target_duration_ms as number)
+    // The transcription's last word end + the 300ms trailing-silence buffer = real duration.
+    const endFor = (realMs: number) => Math.round(realMs) - 300
+    const durations: Record<string, number> = {
+      'transcript-1': endFor(t1 * 0.65),
+      'transcript-2': endFor(t1 * 0.87),
+      'transcript-3': endFor(t2 * 1.1),
+      'transcript-4': endFor(t2 * 0.99),
+    }
+    let submitCount = 0
+    const submit = vi.fn(async () => ({ providerRef: `transcript-${++submitCount}` }))
+    const poll = vi.fn(async (jobRef: { providerRef: string }): Promise<TranscriptionPollResult> => ({
+      status: 'ready',
+      timingData: [{ text: 'word', start: 0, end: durations[jobRef.providerRef] }],
+      text: 'word',
+    }))
+    const transcription = { submit, poll } satisfies TranscriptionService
+
+    await runTranscribeAudio(client, afterSynthesize as TrackRow, approved.id, transcription, undefined, {
+      voiceSynthesizer: voice,
+      uploader,
+      jobId,
+    })
+
+    expect(submit).toHaveBeenCalledTimes(4) // each scene: original + one speed-fit retry
+    const speeds = (voice.synthesize as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => (c[0] as { speed?: number }).speed)
+      .filter((v) => v !== undefined)
+    expect(speeds).toEqual([0.8, 1.12])
+
+    const { data: finalTrack } = await client.from('content_language_tracks').select('*').eq('id', track.id).single()
+    expect(finalTrack.status).toBe('awaiting_shared')
+
+    const { data: audioRows } = await client.from('video_scene_audio').select('*').eq('content_language_track_id', track.id)
+    // Wording is untouched; only the audio file (named with its speed) and duration changed.
+    expect(audioRows!.some((a) => a.narration_text === 'English text for scene 1')).toBe(true)
+    expect(audioRows!.some((a) => a.narration_text === 'English text for scene 2')).toBe(true)
+    expect(audioRows!.some((a) => String(a.file_url).includes('-audio-fit-80.mp3'))).toBe(true)
+    expect(audioRows!.some((a) => String(a.file_url).includes('-audio-fit-112.mp3'))).toBe(true)
+    const total = audioRows!.reduce((sum, a) => sum + (a.duration_ms ?? 0), 0)
+    // Unfitted this was 0.65 + 1.10 of a slot = 1.75 slots; fitted it is 0.87 + 0.99 = 1.86 of 2.
+    const budget = t1 + t2
+    expect(total).toBeGreaterThan(budget * 0.9)
+    expect(total).toBeLessThan(budget * 1.03)
   })
 
   it('M3: one language failing (ElevenLabs down) never blocks or corrupts the other', async () => {
@@ -1477,7 +1559,7 @@ describe.skipIf(!hasCreds)('Video pipeline end-to-end (real DB, mocked providers
       .limit(1)
       .single()
     expect(step.output_snapshot.encodeTier).toBe('capped')
-  }, 30000)
+  }, 120000) // many live-DB round trips; 30s was brittle at ~500ms/query
 
   it('M4: render does not run until the pipeline\'s shared visuals are ready (generation fencing)', async () => {
     const { pipeline } = await makeJobAndPipeline('EN')

@@ -29,6 +29,11 @@ export class ElevenLabsVoiceSynthesizer implements VoiceSynthesizer {
         body: JSON.stringify({
           text: input.text,
           model_id: 'eleven_multilingual_v2', // supports EN and FR from one model
+          // Only sent when a speed was asked for, so every ordinary call is
+          // byte-for-byte what it was before. Clamped to the API's 0.7-1.2.
+          ...(input.speed !== undefined
+            ? { voice_settings: { speed: Math.min(1.2, Math.max(0.7, input.speed)) } }
+            : {}),
         }),
       },
     )

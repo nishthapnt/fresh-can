@@ -147,6 +147,10 @@ export interface ImageValidator {
 export interface VoiceSynthesisInput {
   text: string
   voiceId: string
+  /** ElevenLabs voice speed (API range 0.7-1.2, 1.0 = the voice's natural
+   *  pace). Omitted = the voice's own setting. Used by transcribeAudio.ts's
+   *  closed-loop speed fit to land a scene on its slot. */
+  speed?: number
 }
 
 export interface VoiceSynthesisResult {
