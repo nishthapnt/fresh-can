@@ -1977,3 +1977,8 @@ Audited the 3 real video jobs from 2026-10-08 (790b8771 44.2s, e4a83ec0 39.1s, 5
 ### 2026-10-09 — Cast drift and empty cast_present
 - Scene 4's neighbour (cast: slender Black man) rendered as a woman, and scene 3 listed guests but had empty `cast_present`, so no cast text reached the still. Causes: `appearance` never had to state gender, and `cast_present` only required people who "visually appear" without covering secondary roles.
 - Script prompt: `appearance` must now state gender; `cast_present` must list every cast_bible person the scene's visual_description shows or mentions in any role (guest, neighbour, passenger, customer). Prompt-only; unverified on a real job. Remaining gap: a planner can still omit someone (no code check, by design — matches the LLM-decided rule).
+
+### 2026-10-09 — Pushed + test-row cleanup
+- Pushed 11 commits to origin/main (`a3b801f..c0df716`).
+- Deleted 114 leftover test jobs ("E2E VIDEO TEST - DELETE ME" / "E2E IMAGE TEST - DELETE ME") from the live Supabase, plus their rows in pipelines, pipeline_steps, language tracks, video scenes, scene audio, captions, visual assets, drafts and generated_content. Verified none remain. Some predated this session (Oct 3); the rest came from interrupted e2e runs. Storage files were not touched.
+- ⭐ Still open: everything needs one real render to verify (collage, runtime, unit doors, narration vs brief, cast drift); planner may still mark exit scenes `unit_presence: none`.
