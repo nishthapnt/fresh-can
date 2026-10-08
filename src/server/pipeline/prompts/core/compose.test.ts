@@ -1390,3 +1390,17 @@ describe('Track C: brand text no longer invites lettering or exits', () => {
     expect(BRAND_PROFILE.unit.interior).not.toMatch(/sticker/i)
   })
 })
+
+describe('single-frame guard on every image prompt', () => {
+  it('tells the image model to render one continuous frame, never a collage (job 65b08e09 scene 1 came back as three stacked panels)', () => {
+    const { prompt } = composeSceneImagePrompt(BRAND_PROFILE, {
+      pipelineId: 'p',
+      sceneNumber: 1,
+      visualDescription: 'A static wide shot of a backyard barbecue at sunset.',
+      shotNotes: null,
+      characterRefUrl: 'https://example.com/ref.png',
+      unitPresence: 'none',
+    })
+    expect(prompt).toContain('one single continuous frame, never a collage or split-screen')
+  })
+})

@@ -1,3 +1,4 @@
+import { isStackedPanelCollageUrl } from '../../lib/panelDetect'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   ImageGenerator,
@@ -246,6 +247,18 @@ const VALIDATION_RETRY_PREFIX = 'VALIDATION_RETRY:'
 // retry, then accept.
 const MAX_VALIDATION_RETRIES = 1
 
+// A collage still (several photos stacked in one frame) is rejected by a free,
+// local check (lib/panelDetect.ts) rather than the vision gate, and it gets
+// one extra retry: it is the most visible failure a scene can have (a whole
+// scene of the finished video, ~19% in real job 65b08e09), and a from-scratch
+// regeneration with the single-frame instruction is cheap next to shipping it.
+export const COLLAGE_ISSUE = 'the image is a collage or stacked multi-panel layout instead of one single continuous photograph'
+const MAX_COLLAGE_RETRIES = 2
+
+export function isCollageIssue(issue: string): boolean {
+  return /collage|split[- ]?screen|multi[- ]?panel|stacked (?:panel|image|photo)|grid of (?:photo|image)/i.test(issue)
+}
+
 /** Plan-level (pipeline-wide) Layer 2 fields from the script draft, loaded
  *  once per runGenerateSceneVisual call and shared by every scene. */
 interface ScenePlanContext {
@@ -265,7 +278,12 @@ interface RejectedImageSnapshot {
  *  regenerate the entire creative concept from scratch"). Reuses
  *  composeSceneImagePrompt's existing regenInstructions channel, so this is
  *  the ONLY new prompt content a validation-triggered retry adds. */
-function buildCorrectionInstruction(issues: string[]): string {
+export function buildCorrectionInstruction(issues: string[]): string {
+  // An edit cannot undo a collage, so this regenerates from scratch with the
+  // single-frame instruction instead of "preserve everything else".
+  if (issues.some(isCollageIssue)) {
+    return 'Render ONE single continuous photograph filling the whole frame — never a collage, split-screen, or stacked panels.'
+  }
   return (
     `Fix this specific issue: ${issues.join('; ')}. Preserve everything else — the established people, ` +
     'objects, composition, and lighting — exactly as already generated.'
@@ -460,7 +478,10 @@ async function runSceneImageStep(
       // "before video generation" here; this function just has to avoid
       // marking the asset 'ready' until validation says so.
       let validation: ImageValidationResult = { pass: true, issues: [] }
-      if (imageValidator) {
+      // Free local collage check first; a collage skips the paid vision call.
+      const collage = await isStackedPanelCollageUrl(permanentUrl)
+      if (collage) validation = { pass: false, issues: [COLLAGE_ISSUE] }
+      if (imageValidator && !collage) {
         try {
           validation = await imageValidator.validate({
             imageUrl: permanentUrl,
@@ -478,6 +499,7 @@ async function runSceneImageStep(
 
       // Only queried on a rejection — the common (passing) path costs no
       // extra DB round-trip.
+      const isCollageRejection = validation.issues.some(isCollageIssue)
       const validationRetriesUsed = validation.pass
         ? 0
         : await countFailedStepAttemptsWithPrefix(
@@ -490,7 +512,7 @@ async function runSceneImageStep(
 
       if (
         !validation.pass &&
-        validationRetriesUsed < MAX_VALIDATION_RETRIES &&
+        validationRetriesUsed < (isCollageRejection ? MAX_COLLAGE_RETRIES : MAX_VALIDATION_RETRIES) &&
         !hasExceededMaxAttempts(attemptNumber, MAX_ATTEMPTS.kie)
       ) {
         // Targeted regeneration (request #6) — reject this image and let
@@ -516,7 +538,12 @@ async function runSceneImageStep(
           status: 'failed_retryable',
           provider: 'openai',
           errorMessage: `${VALIDATION_RETRY_PREFIX}${buildCorrectionInstruction(validation.issues)}`,
-          outputSnapshot: { rejectedImageUrl: permanentUrl, issues: validation.issues },
+          // No rejectedImageUrl for a collage: that would route the next attempt
+          // into edit mode, which cannot fix it — omitting it makes the retry
+          // regenerate from scratch with the correction instruction instead.
+          outputSnapshot: isCollageRejection
+            ? { issues: validation.issues }
+            : { rejectedImageUrl: permanentUrl, issues: validation.issues },
         })
         return true
       }

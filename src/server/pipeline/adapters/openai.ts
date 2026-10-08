@@ -103,7 +103,8 @@ const IMAGE_VALIDATION_SYSTEM_PROMPT =
   'person not implied by the scene, a hand or arm that clearly belongs to no visible or implied person ' +
   '(disembodied, floating, or coming out of an impossible place), duplicate or malformed limbs on one ' +
   'person, a floating or impossible object, a required subject missing entirely, or an obviously ' +
-  'illogical scene. NOT defects: hands or arms of a visible person, or hands implied by the described ' +
+  'illogical scene, or a collage / split-screen / stacked multi-panel layout (the image must be ONE ' +
+  'single continuous photograph). NOT defects: hands or arms of a visible person, or hands implied by the described ' +
   'action (holding, tapping, picking up, cooking, reading, eating, first-person or over-the-shoulder ' +
   'framing) even when the rest of the body is cropped out of frame; any person the scene describes ' +
   '(e.g. a vendor, a friend); and any stylistic, lighting, or composition preference. ' +
