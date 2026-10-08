@@ -514,8 +514,8 @@ const SCENE_CONTENTS_RULE =
 // compose.test.ts's real truncation-cascade regressions (600-char
 // visual_description, long shot_notes/cast) rather than by feel.
 const PHOTOREALISTIC_QUALITY_FLOOR =
-  'Premium photorealistic commercial photography of one single continuous frame, never a collage or ' +
-  'split-screen: crisp natural detail, true-to-life skin/food/fabric ' +
+  'Premium photorealistic commercial photography of one single continuous frame, never shots stacked to ' +
+  'fill the height, a collage, or split-screen: crisp natural detail, true-to-life skin/food/fabric ' +
   'texture, natural camera depth of field and lighting — never oversharpened, plastic/CGI-looking, or ' +
   'oversaturated.'
 

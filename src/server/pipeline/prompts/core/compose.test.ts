@@ -1401,6 +1401,6 @@ describe('single-frame guard on every image prompt', () => {
       characterRefUrl: 'https://example.com/ref.png',
       unitPresence: 'none',
     })
-    expect(prompt).toContain('one single continuous frame, never a collage or split-screen')
+    expect(prompt).toContain('one single continuous frame, never shots stacked to fill the height, a collage, or split-screen')
   })
 })
