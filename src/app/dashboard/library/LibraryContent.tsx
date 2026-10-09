@@ -17,6 +17,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import TopBar from '@/components/layout/TopBar'
 import { supabase } from '@/lib/supabase'
+import { aiDisclaimer } from '@/lib/disclaimer'
 import {
   getVideoLibrary,
   getImageLibrary,
@@ -288,6 +289,10 @@ function PostModal({
                 placeholder="Write your caption…"
                 className="resize-none text-sm"
               />
+              <p className="mt-1.5 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                {aiDisclaimer(target.language)}{' '}
+                <span className="text-gray-400">(added automatically after the caption)</span>
+              </p>
             </div>
 
             {/* Hashtags */}
@@ -908,6 +913,9 @@ function ImageCard({
                 <LanguagePicker className="mt-1.5" />
                 <p className="mt-1 text-sm text-gray-500">{item.category}{item.language ? ` · ${item.language}` : ''}</p>
                 {item.caption && <p className="mt-1.5 text-sm leading-relaxed text-gray-700">{item.caption}</p>}
+                {item.caption && (
+                  <p className="mt-1 text-xs leading-relaxed text-gray-500">{aiDisclaimer(item.language)}</p>
+                )}
                 {item.hashtags.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {item.hashtags.map((tag, i) => (

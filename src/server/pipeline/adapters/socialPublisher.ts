@@ -1,4 +1,5 @@
 import { hashtagsToAppend } from '@/lib/hashtags'
+import { aiDisclaimer } from '@/lib/disclaimer'
 import {
   ProviderCallError,
   type PlatformConnectionStatus,
@@ -14,6 +15,47 @@ import {
 const KNOWN_PLATFORMS: SocialPlatform[] = ['instagram', 'facebook', 'x']
 
 type PlatformResult = { success: boolean; url?: string; error?: string }
+
+/**
+ * upload-post.com returns `results` in two shapes: an object keyed by platform
+ * (`{ instagram: { success, url } }`) and, confirmed live 2026-10-06 on
+ * GET /api/uploadposts/status, an ARRAY of per-platform records
+ * (`[{ platform, success, post_url, error_message }]`). Reading the array as
+ * if it were keyed by platform made a successful Instagram post look failed.
+ * Normalizes either into one platform-keyed map; null if neither shape.
+ */
+function normalizeResults(raw: unknown): Record<string, PlatformResult> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const out: Record<string, PlatformResult> = {}
+  const add = (platform: unknown, r: Record<string, unknown>) => {
+    if (typeof platform !== 'string') return
+    const key = platform.toLowerCase() === 'twitter' ? 'x' : platform.toLowerCase()
+    const url = r.post_url ?? r.url
+    const error = r.error_message ?? r.error
+    out[key] = {
+      success: r.success === true,
+      url: typeof url === 'string' ? url : undefined,
+      error: typeof error === 'string' ? error : undefined,
+    }
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item && typeof item === 'object') add((item as Record<string, unknown>).platform, item as Record<string, unknown>)
+    }
+  } else {
+    for (const [platform, r] of Object.entries(raw)) {
+      if (r && typeof r === 'object') add(platform, r as Record<string, unknown>)
+    }
+  }
+  return out
+}
+
+/** One line per publish/poll so a future stuck or mis-marked post can be
+ *  traced: which of upload-post.com's three routes it took and what the
+ *  provider reported. Never logs captions, URLs or credentials. */
+function logRoute(message: string): void {
+  console.log(`[social:upload-post] ${message}`)
+}
 
 function toOutcomes(
   platforms: SocialPlatform[],
@@ -89,7 +131,11 @@ export class UploadPostSocialPublisher implements SocialPublisher {
     for (const platform of input.platforms) {
       form.append('platform[]', platform)
     }
-    const caption = [input.caption, ...hashtagsToAppend(input.caption, input.hashtags)].join(' ')
+    const disclaimer = aiDisclaimer(input.language)
+    const body = input.caption.includes(disclaimer)
+      ? input.caption
+      : `${input.caption.trimEnd()}\n\n${disclaimer}`
+    const caption = [body, ...hashtagsToAppend(body, input.hashtags)].join(' ')
     form.set('title', caption)
     if (isVideo) {
       form.set('video', input.mediaUrl)
@@ -109,18 +155,29 @@ export class UploadPostSocialPublisher implements SocialPublisher {
     }
 
     const data = (await res.json()) as {
-      results?: Record<string, PlatformResult>
+      results?: unknown
       request_id?: string
       job_id?: string
     }
 
-    if (data.results) {
-      return { status: 'ready', perPlatform: toOutcomes(input.platforms, data.results) }
+    const results = normalizeResults(data.results)
+    // A requested platform missing from the results is not a failure — it may
+    // simply not have reported yet — so fall through to polling when we can.
+    const complete = results !== null && input.platforms.every((p) => p in results)
+    const summary =
+      `${input.contentType} platforms=[${input.platforms.join(',')}] http=${res.status} ` +
+      `resultsShape=${Array.isArray(data.results) ? 'array' : results ? 'object' : 'none'} ` +
+      `resultPlatforms=[${results ? Object.keys(results).join(',') : ''}]`
+    if (results && (complete || (!data.request_id && !data.job_id))) {
+      logRoute(`publish route=immediate ${summary}`)
+      return { status: 'ready', perPlatform: toOutcomes(input.platforms, results) }
     }
     if (data.request_id) {
+      logRoute(`publish route=async request_id=${data.request_id} ${summary}`)
       return { status: 'pending', jobRef: { kind: 'request', requestId: data.request_id } }
     }
     if (data.job_id) {
+      logRoute(`publish route=scheduled job_id=${data.job_id} ${summary}`)
       return { status: 'pending', jobRef: { kind: 'job', jobId: data.job_id } }
     }
 
@@ -147,19 +204,36 @@ export class UploadPostSocialPublisher implements SocialPublisher {
     }
 
     const data = (await res.json()) as {
-      results?: Record<string, PlatformResult>
+      results?: unknown
       status?: string
       error?: string
+      completed?: number
+      total?: number
     }
 
-    if (data.results) {
-      const platforms = Object.keys(data.results) as SocialPlatform[]
-      return { status: 'ready', perPlatform: toOutcomes(platforms, data.results) }
+    const results = normalizeResults(data.results)
+    const ref = jobRef.kind === 'request' ? `request_id=${jobRef.requestId}` : `job_id=${jobRef.jobId}`
+    const seen =
+      `${ref} providerStatus=${data.status ?? 'none'} completed=${data.completed ?? '?'}/${data.total ?? '?'} ` +
+      `resultsShape=${Array.isArray(data.results) ? 'array' : results ? 'object' : 'none'} ` +
+      `resultPlatforms=[${results ? Object.keys(results).join(',') : ''}]`
+    if (results && Object.keys(results).length > 0) {
+      // Partial results (some platforms still publishing) are not final.
+      const stillRunning = typeof data.total === 'number' && (data.completed ?? 0) < data.total
+      if (!stillRunning) {
+        const platforms = Object.keys(results) as SocialPlatform[]
+        logRoute(`poll -> ready ${seen}`)
+        return { status: 'ready', perPlatform: toOutcomes(platforms, results) }
+      }
+      logRoute(`poll -> pending (partial) ${seen}`)
+      return { status: 'pending' }
     }
     if (data.status && /fail|error/i.test(data.status)) {
+      logRoute(`poll -> failed ${seen}`)
       return { status: 'failed', detail: data.error ?? data.status }
     }
 
+    logRoute(`poll -> pending ${seen}`)
     return { status: 'pending' }
   }
 }

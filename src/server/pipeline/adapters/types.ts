@@ -437,6 +437,8 @@ export interface SocialPublishInput {
   platforms: SocialPlatform[]
   caption: string
   hashtags: string[]
+  /** Picks the language of the fixed AI disclaimer line; defaults to English. */
+  language?: string
   /** Publicly fetchable URL of the already-rendered/generated asset
    *  (generated_content.file_url) — upload-post.com accepts a public URL
    *  in place of a raw file upload for both /api/upload and

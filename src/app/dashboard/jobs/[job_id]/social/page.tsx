@@ -337,6 +337,7 @@ export default function SocialPage() {
                     handleApprovePost(type, language as 'EN' | 'FR', caption, hashtags, platforms)
                   }
                   connectionStatus={connectionStatus}
+                  language={language}
                 />
 
                 {/* Platform posting logs */}

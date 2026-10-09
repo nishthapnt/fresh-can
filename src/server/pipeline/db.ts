@@ -1305,13 +1305,16 @@ export async function resolveSocialPlatformLogs(
   const now = new Date().toISOString()
   for (const row of rows) {
     const outcome = perPlatform.find((p) => p.platform === row.platform)
-    const success = outcome?.success ?? false
+    // No result for this platform yet is not a failure — leave it 'posting'
+    // (the stale-posting sweep terminates it if the provider never reports).
+    if (!outcome) continue
+    const success = outcome.success
     const { error } = await client
       .from('social_platform_logs')
       .update({
         status: success ? 'posted' : 'failed',
-        post_url: outcome?.url ?? null,
-        error_message: success ? null : (outcome?.error ?? 'upload-post.com reported failure'),
+        post_url: outcome.url ?? null,
+        error_message: success ? null : (outcome.error ?? 'upload-post.com reported failure'),
         posted_at: success ? now : null,
         failed_at: success ? null : now,
         updated_at: now,

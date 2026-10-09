@@ -87,7 +87,7 @@ describe('UploadPostSocialPublisher (upload-post.com — docs.upload-post.com)',
       expect(body.get('user')).toBe('fc-profile')
       expect(body.getAll('platform[]')).toEqual(['instagram', 'facebook'])
       expect(body.get('video')).toBe('https://example.com/video.mp4')
-      expect(body.get('title')).toBe('Fresh produce today #fresh #local')
+      expect(body.get('title')).toBe('Fresh produce today\n\nAI-generated visuals for marketing purposes only. Details may contain inaccuracies. #fresh #local')
       expect(body.getAll('photos[]')).toEqual([])
     })
 
@@ -101,7 +101,23 @@ describe('UploadPostSocialPublisher (upload-post.com — docs.upload-post.com)',
         hashtags: ['#fresh', 'local'],
         mediaUrl: 'https://example.com/p.jpg',
       })
-      expect((getInit()!.body as FormData).get('title')).toBe('Fresh today #fresh #local')
+      expect((getInit()!.body as FormData).get('title')).toBe('Fresh today #fresh\n\nAI-generated visuals for marketing purposes only. Details may contain inaccuracies. #local')
+    })
+
+    it('uses the French disclaimer for FR posts', async () => {
+      const { fetchImpl, getInit } = capturingFetch()
+      const publisher = new UploadPostSocialPublisher('test-key', 'fc-profile', fetchImpl)
+      await publisher.publish({
+        contentType: 'image_post',
+        platforms: ['instagram'],
+        caption: 'Frais aujourd\'hui',
+        hashtags: ['frais'],
+        language: 'FR',
+        mediaUrl: 'https://example.com/p.jpg',
+      })
+      expect((getInit()!.body as FormData).get('title')).toBe(
+        "Frais aujourd'hui\n\nVisuels générés par IA à des fins marketing uniquement. Certains détails peuvent contenir des inexactitudes. #frais",
+      )
     })
 
     it('sends photos[] (not video) as a form field for image_post/blog', async () => {
@@ -228,6 +244,58 @@ describe('UploadPostSocialPublisher (upload-post.com — docs.upload-post.com)',
         status: 'ready',
         perPlatform: [{ platform: 'instagram', success: true, url: 'https://instagram.com/p/abc', error: undefined }],
       })
+    })
+
+    it('reads the array-shaped results the status endpoint really returns (confirmed live 2026-10-06)', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: {
+          status: 'completed',
+          completed: 1,
+          total: 1,
+          results: [{ platform: 'instagram', success: true, post_url: 'https://www.instagram.com/p/x/', error_message: null }],
+        },
+      })
+      const publisher = new UploadPostSocialPublisher('test-key', 'test-profile', fetchImpl)
+      const result = await publisher.poll({ kind: 'request', requestId: 'req-123' })
+      expect(result).toEqual({
+        status: 'ready',
+        perPlatform: [{ platform: 'instagram', success: true, url: 'https://www.instagram.com/p/x/', error: undefined }],
+      })
+    })
+
+    it('reports a real array-shaped failure with the provider error text', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: { completed: 1, total: 1, results: [{ platform: 'instagram', success: false, error_message: 'bad media' }] },
+      })
+      const publisher = new UploadPostSocialPublisher('test-key', 'test-profile', fetchImpl)
+      const result = await publisher.poll({ kind: 'request', requestId: 'req-123' })
+      expect(result).toEqual({
+        status: 'ready',
+        perPlatform: [{ platform: 'instagram', success: false, url: undefined, error: 'bad media' }],
+      })
+    })
+
+    it('stays pending while some platforms are still publishing', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: { completed: 1, total: 2, results: [{ platform: 'instagram', success: true, post_url: 'u' }] },
+      })
+      const publisher = new UploadPostSocialPublisher('test-key', 'test-profile', fetchImpl)
+      expect(await publisher.poll({ kind: 'request', requestId: 'req-123' })).toEqual({ status: 'pending' })
+    })
+
+    it('publish() falls back to polling when a requested platform is missing from sync results', async () => {
+      const fetchImpl = mockFetch({
+        jsonBody: { request_id: 'r1', results: [{ platform: 'instagram', success: true }] },
+      })
+      const publisher = new UploadPostSocialPublisher('test-key', 'test-profile', fetchImpl)
+      const out = await publisher.publish({
+        contentType: 'image_post',
+        platforms: ['instagram', 'facebook'],
+        caption: 'c',
+        hashtags: [],
+        mediaUrl: 'https://example.com/p.jpg',
+      })
+      expect(out).toEqual({ status: 'pending', jobRef: { kind: 'request', requestId: 'r1' } })
     })
 
     it('returns status=failed when the provider reports an error status', async () => {

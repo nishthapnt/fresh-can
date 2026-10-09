@@ -72,6 +72,7 @@ async function submitOnePlatform(
       platforms: [platform],
       caption: post.caption,
       hashtags: post.hashtags,
+      language: post.language,
       mediaUrl,
     })
 

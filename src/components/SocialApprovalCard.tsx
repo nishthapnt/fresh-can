@@ -1,5 +1,6 @@
 'use client'
 
+import { aiDisclaimer } from '@/lib/disclaimer'
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ interface SocialApprovalCardProps {
     platforms: PlatformType[],
   ) => Promise<void>
   connectionStatus?: PlatformConnectionMap | null
+  language?: string
 }
 
 export default function SocialApprovalCard({
@@ -33,6 +35,7 @@ export default function SocialApprovalCard({
   contentType,
   onApprove,
   connectionStatus,
+  language,
 }: SocialApprovalCardProps) {
   const [caption, setCaption] = useState(socialPost?.caption ?? '')
   const [hashtagInput, setHashtagInput] = useState('')
@@ -126,6 +129,10 @@ export default function SocialApprovalCard({
                 rows={4}
                 disabled={isPosted}
               />
+              <p className="mt-1.5 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                {aiDisclaimer(language)}{' '}
+                <span className="text-gray-400">(added automatically after the caption)</span>
+              </p>
             </div>
 
             <div>

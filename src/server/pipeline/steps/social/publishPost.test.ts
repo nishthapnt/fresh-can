@@ -135,6 +135,7 @@ describe('runSubmitSocialPosts', () => {
       platforms: ['instagram'],
       caption: 'Fresh produce today!',
       hashtags: ['fresh', 'local'],
+      language: 'EN',
       mediaUrl: 'https://example.com/photo.png',
     })
     expect(publisher.publish).toHaveBeenNthCalledWith(2, {
@@ -142,6 +143,7 @@ describe('runSubmitSocialPosts', () => {
       platforms: ['facebook'],
       caption: 'Fresh produce today!',
       hashtags: ['fresh', 'local'],
+      language: 'EN',
       mediaUrl: 'https://example.com/photo.png',
     })
 
