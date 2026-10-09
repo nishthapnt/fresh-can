@@ -1,3 +1,4 @@
+import { hashtagsToAppend } from '@/lib/hashtags'
 import {
   ProviderCallError,
   type PlatformConnectionStatus,
@@ -88,7 +89,7 @@ export class UploadPostSocialPublisher implements SocialPublisher {
     for (const platform of input.platforms) {
       form.append('platform[]', platform)
     }
-    const caption = [input.caption, ...input.hashtags.map((h) => `#${h}`)].join(' ')
+    const caption = [input.caption, ...hashtagsToAppend(input.caption, input.hashtags)].join(' ')
     form.set('title', caption)
     if (isVideo) {
       form.set('video', input.mediaUrl)

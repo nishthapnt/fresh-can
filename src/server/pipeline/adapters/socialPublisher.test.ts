@@ -91,6 +91,19 @@ describe('UploadPostSocialPublisher (upload-post.com — docs.upload-post.com)',
       expect(body.getAll('photos[]')).toEqual([])
     })
 
+    it('does not repeat hashtags already in the caption or double the #', async () => {
+      const { fetchImpl, getInit } = capturingFetch()
+      const publisher = new UploadPostSocialPublisher('test-key', 'fc-profile', fetchImpl)
+      await publisher.publish({
+        contentType: 'image_post',
+        platforms: ['instagram'],
+        caption: 'Fresh today #fresh',
+        hashtags: ['#fresh', 'local'],
+        mediaUrl: 'https://example.com/p.jpg',
+      })
+      expect((getInit()!.body as FormData).get('title')).toBe('Fresh today #fresh #local')
+    })
+
     it('sends photos[] (not video) as a form field for image_post/blog', async () => {
       const { fetchImpl, getInit } = capturingFetch()
       const publisher = new UploadPostSocialPublisher('test-key', 'fc-profile', fetchImpl)

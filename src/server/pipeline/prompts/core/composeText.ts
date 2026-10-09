@@ -392,7 +392,8 @@ export function composeCaptionSystemPrompt(brand: BrandProfile, opts: CaptionSys
       : '') +
     `You are a social media copywriter. Write an Instagram-style caption in ${opts.language} ` +
     'for a social image post. Respond with strictly valid JSON matching this exact shape: ' +
-    '{ "caption": string, "hashtags": string[] (5-8 tags, no "#" prefix), ' +
+    '{ "caption": string (plain text only — NO hashtags in the caption, they go only in "hashtags"), ' +
+    '"hashtags": string[] (5-8 tags, no "#" prefix), ' +
     '"alt_text": string (a plain factual description of the photo\'s likely content, for accessibility) }.'
   )
 }

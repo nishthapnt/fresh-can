@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { withCacheBust } from '@/lib/mediaUrl'
+import { normalizeHashtags } from '@/lib/hashtags'
 import type {
   ContentJob,
   ContentDraft,
@@ -394,7 +395,7 @@ export async function upsertSocialPost(
         content_type: contentType,
         language,
         caption,
-        hashtags,
+        hashtags: normalizeHashtags(hashtags),
         platforms,
         status: 'approved',
         updated_at: new Date().toISOString(),

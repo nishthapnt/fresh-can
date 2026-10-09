@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeHashtags, stripTrailingHashtags } from '@/lib/hashtags'
 import {
   claimTrack,
   hasSucceededStep,
@@ -68,9 +69,9 @@ export async function runFinalizeImageContent(
   const visualAssets = await getVisualAssets(client, pipeline.id, pipeline.current_generation)
   const photo = visualAssets.find((a) => a.asset_type === 'photo')
 
-  const hashtags = Array.isArray(captionOutput?.hashtags)
-    ? (captionOutput!.hashtags as unknown[]).map(String)
-    : []
+  const hashtags = normalizeHashtags(
+    Array.isArray(captionOutput?.hashtags) ? (captionOutput!.hashtags as unknown[]).map(String) : [],
+  )
 
   let headlineText: string | null = null
   let subtitleText: string | null = null
@@ -92,7 +93,7 @@ export async function runFinalizeImageContent(
     contentPipelineId: pipeline.id,
     contentLanguageTrackId: track.id,
     photoUrl: photo?.file_url ?? '',
-    caption: typeof captionOutput?.caption === 'string' ? captionOutput.caption : '',
+    caption: typeof captionOutput?.caption === 'string' ? stripTrailingHashtags(captionOutput.caption) : '',
     hashtags,
     altText: typeof captionOutput?.alt_text === 'string' ? captionOutput.alt_text : '',
     topic: jobMeta.topic,
